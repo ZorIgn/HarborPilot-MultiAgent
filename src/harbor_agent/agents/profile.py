@@ -40,7 +40,7 @@ DISCIPLINE_KEYWORDS = {
         "统计",
     ],
     "business": ["business", "finance", "management", "marketing", "accounting", "商科", "金融", "管理"],
-    "engineering": ["engineering", "mechanical", "electrical", "civil", "工程"],
+    "engineering": ["engineering", "mechanical", "electrical", "civil", "机械", "电气", "电子工程", "土木"],
     "social_science": ["policy", "psychology", "sociology", "social", "公共政策", "心理", "社会"],
     "communication": ["media", "communication", "journalism", "传媒", "传播", "新闻"],
     "law_policy": ["law", "legal", "policy", "法律", "法学", "政策"],

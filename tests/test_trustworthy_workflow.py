@@ -196,3 +196,65 @@ def test_writing_interview_and_schema_do_not_collect_sensitive_fields() -> None:
     dumped_questions = json.dumps(response.json(), ensure_ascii=False).lower()
     for blocked in ["passport", "family address", "birth", "护照", "家庭住址", "出生日期"]:
         assert blocked not in dumped_questions
+
+def test_985_ielts_65_cs_plan_keeps_core_tech_mix() -> None:
+    payload = _sample()
+    payload.education.school = "华南理工大学"
+    payload.education.school_tier = "985"
+    payload.education.gpa = 85
+    payload.education.gpa_scale = "100"
+    payload.education.ranking_percentile = 20
+    payload.education.major = "计算机科学与技术"
+    payload.language.test = "IELTS"
+    payload.language.overall = 6.5
+    payload.language.writing = 6.0
+    payload.language.speaking = 6.0
+    payload.language.reading = 6.5
+    payload.language.listening = 6.5
+    payload.discipline_interests = ["computer_science", "artificial_intelligence", "data_science"]
+    payload.raw_interest_text = "CS AI machine learning 数据科学 数据结构 算法 数据库 机器学习"
+
+    result = WorkflowOrchestrator(MockLLMProvider()).run_program_plan_stage(payload)
+
+    assert result.intent_profile
+    assert result.intent_profile.strict_intent is True
+    assert result.consultant_plan is not None
+    assert result.consultant_plan.band_counts["冲刺"] <= 4
+    assert len(result.application_mix) == 10
+    assert all(item.match_category == "core" for item in result.application_mix)
+    assert not any("商业分析" in (item.program.name_zh or "") for item in result.application_mix[:8])
+    assert all(item.formal_recommendation is False for item in result.application_mix)
+
+
+def test_regular_business_analytics_plan_is_conservative_and_on_direction() -> None:
+    payload = _sample()
+    payload.education.school = "广东工业大学"
+    payload.education.school_tier = "regular"
+    payload.education.gpa = 82
+    payload.education.gpa_scale = "100"
+    payload.education.ranking_percentile = 25
+    payload.education.major = "金融工程"
+    payload.language.test = "IELTS"
+    payload.language.overall = 6.5
+    payload.language.writing = 6.0
+    payload.language.speaking = 6.0
+    payload.language.reading = 6.5
+    payload.language.listening = 6.5
+    payload.discipline_interests = ["business analytics", "data_science"]
+    payload.raw_interest_text = "business analytics data analytics statistics SQL Python"
+    payload.budget_hkd = 330000
+
+    result = WorkflowOrchestrator(MockLLMProvider()).run_program_plan_stage(payload)
+
+    assert result.intent_profile
+    assert result.intent_profile.strict_intent is False
+    assert "business_analytics" in result.intent_profile.primary_intents
+    assert result.consultant_plan is not None
+    assert result.consultant_plan.band_counts["冲刺"] == 0
+    assert 6 <= len(result.application_mix) <= 10
+    assert all(item.match_category == "core" for item in result.application_mix)
+    names = " ".join(item.program.name.lower() for item in result.application_mix)
+    assert "business analytics" in names or "business and data analytics" in names
+    blocked_terms = ["marketing", "economics", "applied accounting", "communication management"]
+    assert not any(term in names for term in blocked_terms)
+    assert all(item.formal_recommendation is False for item in result.application_mix)

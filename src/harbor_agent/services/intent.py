@@ -101,6 +101,23 @@ PROGRAM_CORE_KEYWORDS = [
     "网络安全",
 ]
 
+PROGRAM_BA_CORE_KEYWORDS = [
+    "business analytics",
+    "business and data analytics",
+    "data analytics",
+    "business statistics",
+    "information systems",
+    "it in business",
+    "information technology management",
+    "statistics",
+    "statistical",
+    "商业分析",
+    "商务及数据分析",
+    "商业统计",
+    "信息系统",
+    "统计",
+]
+
 PROGRAM_RELATED_TECH_BUSINESS_KEYWORDS = [
     "business analytics",
     "business and data analytics",
@@ -181,7 +198,8 @@ def build_intent_profile(profile: NormalizedProfile) -> ProgramIntentProfile:
         if tag == "education_language":
             _append_unique(primary, "education_language")
 
-    strict = bool(TECH_STRICT_INTENTS & set(primary))
+    explicit_cross_business = bool({"business_analytics", "fintech", "finance"} & set(primary))
+    strict = bool(TECH_STRICT_INTENTS & set(primary)) and not explicit_cross_business
     if strict:
         primary = [
             item
@@ -221,6 +239,7 @@ def classify_program_intent(
 
     core_hit = _matched_keywords(title_text, PROGRAM_CORE_KEYWORDS)
     related_hit = _matched_keywords(title_text, PROGRAM_RELATED_TECH_BUSINESS_KEYWORDS)
+    ba_core_hit = _matched_keywords(title_text, PROGRAM_BA_CORE_KEYWORDS)
     blocked_hit = _matched_keywords(title_text, PROGRAM_BLOCKED_FOR_TECH_KEYWORDS)
 
     if intent_profile.strict_intent:
@@ -260,11 +279,21 @@ def classify_program_intent(
             reasons=["项目名称和标签均未显示与 AI/CS/Data 目标相关。"],
         )
 
-    if "business_analytics" in profile_intents and related_hit:
+    if "business_analytics" in profile_intents and ba_core_hit:
         return IntentClassification(
             category="core",
-            alignment=min(90, 74 + overlap * 4 + len(related_hit) * 3),
-            reasons=[f"项目命中商业分析/信息系统相关关键词：{', '.join(related_hit[:3])}"],
+            alignment=min(90, 74 + overlap * 4 + len(ba_core_hit) * 3),
+            reasons=[f"项目命中商业分析/信息系统相关关键词：{', '.join(ba_core_hit[:3])}"],
+        )
+    if (
+        "business_analytics" in profile_intents
+        and not (profile_intents & {"finance", "management"})
+        and blocked_hit
+    ):
+        return IntentClassification(
+            category="blocked",
+            alignment=24,
+            reasons=[f"项目偏泛商科/金融/管理，不是商业分析核心方向：{', '.join(blocked_hit[:3])}"],
         )
     if profile_intents & {"finance", "fintech"} and (
         _contains_any(full_text, ["fintech", "financial technology", "quantitative finance", "financial engineering", "金融科技", "定量金融", "金融工程"])
@@ -275,6 +304,12 @@ def classify_program_intent(
             reasons=["项目与金融科技/量化金融方向匹配。"],
         )
     if overlap:
+        if "business_analytics" in profile_intents and not (profile_intents & {"finance", "management"}):
+            return IntentClassification(
+                category="general",
+                alignment=46,
+                reasons=["项目只有泛商科标签重合，尚不能证明属于商业分析核心方向。"],
+            )
         return IntentClassification(
             category="core",
             alignment=min(86, 66 + overlap * 8),

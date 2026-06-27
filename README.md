@@ -232,6 +232,13 @@ set PYTHONPATH=src
 python scripts\run_demo_workflow.py
 ```
 
+典型画像自审：
+
+```cmd
+cd /d E:\multi_agent
+python scripts\run_scenario_audit.py
+```
+
 ## 常见错误
 
 ### 文件名、目录名或卷标语法不正确

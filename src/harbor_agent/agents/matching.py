@@ -318,14 +318,56 @@ def _strategy_band(
         return "blocked"
     challenge = _institution_challenge(profile, program)
     if challenge >= 0.35:
-        return "reach"
+        return _conservative_reach_band(profile, program, fit, match_category)
     if challenge >= -0.75:
+        if _should_downgrade_target(profile, program, fit, match_category):
+            return "safe"
         return "target"
     if challenge >= -1.9:
         return "safe"
     if fit >= 58:
         return "candidate"
     return "candidate"
+
+
+def _conservative_reach_band(
+    profile: NormalizedProfile,
+    program: Program,
+    fit: int,
+    match_category: str,
+) -> str:
+    profile_level = _profile_competitiveness(profile)
+    institution_level = _institution_level(program)
+    language = profile.language.overall or 0
+
+    if match_category != "core":
+        return "target" if fit >= 76 else "safe"
+    if profile.education.school_tier == "regular":
+        if institution_level >= 4.0:
+            return "target" if fit >= 80 else "safe"
+        return "safe" if fit >= 70 else "candidate"
+    if profile.education.school_tier in {"211", "double_first_class"} and institution_level >= 5.0:
+        return "reach"
+    if profile.education.school_tier == "985" and institution_level >= 5.0:
+        return "reach"
+    if profile.education.school_tier in {"C9", "overseas"} and institution_level >= 5.0:
+        return "reach"
+    return "target"
+
+
+def _should_downgrade_target(
+    profile: NormalizedProfile,
+    program: Program,
+    fit: int,
+    match_category: str,
+) -> bool:
+    if match_category != "core":
+        return fit < 78
+    if profile.education.school_tier == "regular":
+        if _institution_level(program) < 4.0:
+            return True
+        return fit < 80
+    return False
 
 
 def _consultant_note(

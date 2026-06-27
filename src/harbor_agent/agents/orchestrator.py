@@ -343,15 +343,15 @@ def _layer_program_matches(
 
 def _balanced_application_mix(core, related, viable):
     selected = []
-    selected.extend(_pick_diverse([item for item in core if item.strategy_band == "reach"], 5))
-    selected.extend(_pick_diverse([item for item in core if item.strategy_band == "target"], 3))
-    selected.extend(_pick_diverse([item for item in core if item.strategy_band == "safe"], 2))
-    if len(selected) < 10:
-        selected.extend([item for item in related if item.strategy_band in {"target", "safe"}][: 10 - len(selected)])
-    if len(selected) < 10:
-        selected.extend(core[: 10 - len(selected)])
-    if len(selected) < 10:
-        selected.extend(viable[: 10 - len(selected)])
+    selected.extend(_pick_diverse([item for item in core if item.strategy_band == "reach"], 4))
+    selected.extend(_pick_diverse([item for item in core if item.strategy_band == "target"], 4))
+    selected.extend(_pick_diverse([item for item in core if item.strategy_band == "safe"], 3))
+    if len(selected) < 8:
+        selected.extend([item for item in core if item not in selected][: 8 - len(selected)])
+    if len(selected) < 6:
+        selected.extend([item for item in related if item.strategy_band in {"target", "safe"}][: 6 - len(selected)])
+    if len(selected) < 6:
+        selected.extend([item for item in viable if item not in selected][: 6 - len(selected)])
 
     deduped = []
     seen = set()
@@ -362,7 +362,13 @@ def _balanced_application_mix(core, related, viable):
         seen.add(item.program.id)
         if len(deduped) == 10:
             break
-    return deduped
+    return sorted(deduped, key=_application_mix_sort_key)
+
+
+def _application_mix_sort_key(item):
+    band_order = {"reach": 0, "target": 1, "safe": 2, "candidate": 3, "blocked": 4}
+    category_order = {"core": 0, "related": 1, "general": 2, "blocked": 3}
+    return (band_order.get(item.strategy_band, 9), category_order.get(item.match_category, 9), -item.fit_score)
 
 
 def _pick_diverse(items, limit: int):
