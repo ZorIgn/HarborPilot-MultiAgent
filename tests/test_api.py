@@ -216,6 +216,39 @@ def test_program_catalog_exposes_field_level_trust_detail() -> None:
     assert detail.json()["field_records"] == trust["field_records"]
 
 
+def test_program_data_package_exposes_official_and_community_acquisition_plan() -> None:
+    client = TestClient(app)
+    program_id = "hku-master-of-science-in-computer-science-2027"
+
+    detail = client.get(f"/api/programs/{program_id}/data-package")
+    assert detail.status_code == 200
+    package = detail.json()
+
+    assert package["program_id"] == program_id
+    assert package["official_requirements"]
+    assert package["content_sections"]
+    assert package["timeline_fields"]
+    assert package["community_experiences"]
+    assert package["acquisition_plan"]
+    assert package["human_review_required"] is True
+    assert all(item["review_required"] is True for item in package["official_requirements"])
+    assert any(plan["channel"] == "official_requirement" for plan in package["acquisition_plan"])
+    assert any(plan["channel"] == "community_experience" for plan in package["acquisition_plan"])
+    assert all("社区经验" in item["use_boundary"] for item in package["community_experiences"])
+
+    report = client.post(
+        "/api/workflows/data-acquisition",
+        json={"selected_program_ids": [program_id], "dry_run": True, "include_community": True},
+    )
+    assert report.status_code == 200
+    data = report.json()
+    assert data["mode"] == "dry_run"
+    assert data["packages"][0]["program_id"] == program_id
+    assert "OfficialCrawlerAgent" in data["agent_chain"]
+    assert "CommunitySignalAgent" in data["agent_chain"]
+    assert any("社区经验" in action for action in data["next_actions"])
+
+
 def test_qs_master_applications_import_is_available_and_review_gated() -> None:
     client = TestClient(app)
 

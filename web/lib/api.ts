@@ -1,7 +1,9 @@
 import type {
   ApplicantPayload,
   CatalogProgram,
+  DataAcquisitionReport,
   DataRefreshReport,
+  ProgramDataPackage,
   EvidenceGraphSummary,
   LLMConfigResponse,
   ApplicationPlanResult,
@@ -186,6 +188,30 @@ export async function getPrograms(filters?: Record<string, string | number | boo
   return response.json();
 }
 
+export async function getProgramDataPackage(programId: string): Promise<ProgramDataPackage> {
+  const response = await fetch(`${API_BASE}/api/programs/${programId}/data-package`, {cache: "no-store"});
+  if (!response.ok) {
+    throw new Error(`Program data package API returned ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function runDataAcquisition(payload: {
+  selected_program_ids?: string[];
+  include_community?: boolean;
+  dry_run?: boolean;
+  max_sources_per_program?: number;
+}): Promise<DataAcquisitionReport> {
+  const response = await fetch(`${API_BASE}/api/workflows/data-acquisition`, {
+    method: "POST",
+    headers: {"content-type": "application/json"},
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    throw new Error(`Data acquisition API returned ${response.status}`);
+  }
+  return response.json();
+}
 export async function getSourceRegistry(): Promise<SourceRegistry> {
   const response = await fetch(`${API_BASE}/api/source-registry`, {cache: "no-store"});
   if (!response.ok) {

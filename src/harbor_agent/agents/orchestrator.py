@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from harbor_agent.agents.evaluation import EvaluationAgent
 from harbor_agent.agents.data_refresh import DataRefreshAgent
+from harbor_agent.agents.data_acquisition import ProgramDataAcquisitionAgent
 from harbor_agent.agents.evidence import EvidenceAgent
 from harbor_agent.agents.matching import SchoolMatchingAgent
 from harbor_agent.agents.profile import ProfileAgent
@@ -22,6 +23,8 @@ from harbor_agent.models import (
     ConsultantPlanItem,
     ConsultantSchoolPlan,
     BackgroundStageResult,
+    DataAcquisitionReport,
+    DataAcquisitionRequest,
     DataRefreshReport,
     DataRefreshRequest,
     ProgramPlanResult,
@@ -39,6 +42,7 @@ class WorkflowOrchestrator:
         self.llm = llm
         self.profile_agent = ProfileAgent()
         self.data_refresh_agent = DataRefreshAgent(llm)
+        self.data_acquisition_agent = ProgramDataAcquisitionAgent()
         self.evidence_agent = EvidenceAgent()
         self.evaluation_agent = EvaluationAgent(llm)
         self.program_agent = ProgramIntelligenceAgent()
@@ -153,6 +157,9 @@ class WorkflowOrchestrator:
 
     def run_data_refresh_stage(self, request: DataRefreshRequest) -> DataRefreshReport:
         return self.data_refresh_agent.run(request)
+
+    def run_data_acquisition_stage(self, request: DataAcquisitionRequest) -> DataAcquisitionReport:
+        return self.data_acquisition_agent.run(request)
 
     def run_writing_plan_stage(
         self,

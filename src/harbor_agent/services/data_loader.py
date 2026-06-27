@@ -49,3 +49,7 @@ def load_community_sources() -> dict[str, Any]:
 @lru_cache(maxsize=1)
 def load_source_registry() -> SourceRegistry:
     return SourceRegistry.model_validate(load_json("source_registry.json"))
+
+@lru_cache(maxsize=1)
+def load_acquisition_sources() -> dict[str, Any]:
+    return load_json("acquisition_sources.json")

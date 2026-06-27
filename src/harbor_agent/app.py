@@ -10,6 +10,9 @@ from harbor_agent.core.llm import MockLLMProvider, OpenAICompatibleLLMProvider, 
 from harbor_agent.models import (
     ApplicantProfileInput,
     ApplicationPlanResult,
+    DataAcquisitionReport,
+    DataAcquisitionRequest,
+    ProgramDataPackage,
     BackgroundStageResult,
     DataRefreshReport,
     DataRefreshRequest,
@@ -281,6 +284,23 @@ def programs(
             == interview
         ]
     return [_program_catalog_item(program) for program in items[:limit]]
+
+
+@app.get("/api/programs/{program_id}/data-package", response_model=ProgramDataPackage)
+def program_data_package(program_id: str) -> ProgramDataPackage:
+    orchestrator = WorkflowOrchestrator(llm_provider)
+    report = orchestrator.run_data_acquisition_stage(
+        DataAcquisitionRequest(selected_program_ids=[program_id], dry_run=True, include_community=True)
+    )
+    if not report.packages:
+        raise HTTPException(status_code=404, detail="项目不存在。")
+    return report.packages[0]
+
+
+@app.post("/api/workflows/data-acquisition", response_model=DataAcquisitionReport)
+def run_data_acquisition_stage(payload: DataAcquisitionRequest) -> DataAcquisitionReport:
+    orchestrator = WorkflowOrchestrator(llm_provider)
+    return orchestrator.run_data_acquisition_stage(payload)
 
 
 @app.get("/api/programs/{program_id}/trust", response_model=ProgramTrustDetail)

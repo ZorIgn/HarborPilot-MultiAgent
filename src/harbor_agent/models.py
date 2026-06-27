@@ -304,6 +304,79 @@ class ProgramTrustDetail(BaseModel):
     field_records: list[FieldEvidenceRecord] = Field(default_factory=list)
 
 
+class AcquisitionSourcePlan(BaseModel):
+    source_id: str
+    name: str
+    url: HttpUrl | str
+    channel: Literal["official_requirement", "official_content", "community_experience", "directory_signal", "methodology"]
+    trust_level: SourceTrustLevel
+    allowed_fields: list[str] = Field(default_factory=list)
+    crawler_method: str
+    rate_limit: str = "manual_or_low_rate"
+    robots_policy: str = "check_robots_and_terms_before_live_fetch"
+    requires_human_review: bool = True
+    next_actions: list[str] = Field(default_factory=list)
+
+
+class ProgramContentSection(BaseModel):
+    section_id: str
+    title: str
+    summary: str
+    source_status: FieldVerificationStatus = FieldVerificationStatus.official_previous_cycle
+    source_url: HttpUrl | str | None = None
+    evidence_snippet: str | None = None
+    review_required: bool = True
+
+
+class ProgramExperienceSignal(BaseModel):
+    signal_type: Literal["interview", "written_test", "essay_prompt", "admission_case", "timeline", "general_experience", "search_plan"]
+    title: str
+    summary: str
+    source_name: str
+    source_url: HttpUrl | str | None = None
+    captured_at: datetime | None = None
+    confidence: Literal["low", "medium", "high"] = "low"
+    official_verification_required: bool = True
+    use_boundary: str = "社区经验只用于准备参考，不能替代学校官方要求。"
+
+
+class ProgramDataPackage(BaseModel):
+    program_id: str
+    institution: str
+    program_name: str
+    cycle: str
+    official_url: HttpUrl | str | None = None
+    application_url: HttpUrl | str | None = None
+    production_ready: bool = False
+    freshness_warning: str
+    official_requirements: list[FieldEvidenceRecord] = Field(default_factory=list)
+    content_sections: list[ProgramContentSection] = Field(default_factory=list)
+    essay_prompts: list[FieldEvidenceRecord] = Field(default_factory=list)
+    timeline_fields: list[FieldEvidenceRecord] = Field(default_factory=list)
+    community_experiences: list[ProgramExperienceSignal] = Field(default_factory=list)
+    acquisition_plan: list[AcquisitionSourcePlan] = Field(default_factory=list)
+    human_review_required: bool = True
+
+
+class DataAcquisitionRequest(BaseModel):
+    selected_program_ids: list[str] = Field(default_factory=list)
+    include_community: bool = True
+    dry_run: bool = True
+    max_sources_per_program: int = Field(default=8, ge=1, le=30)
+
+
+class DataAcquisitionReport(BaseModel):
+    run_id: str
+    mode: Literal["dry_run", "live_fetch"]
+    checked_at: datetime
+    selected_program_ids: list[str] = Field(default_factory=list)
+    packages: list[ProgramDataPackage] = Field(default_factory=list)
+    source_plan: list[AcquisitionSourcePlan] = Field(default_factory=list)
+    summary: str
+    next_actions: list[str] = Field(default_factory=list)
+    agent_chain: list[str] = Field(default_factory=list)
+
+
 class DataRefreshRequest(BaseModel):
     region: Literal["HK", "SG", "ALL"] = "ALL"
     institution: str | None = None

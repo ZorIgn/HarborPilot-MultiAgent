@@ -1,0 +1,54 @@
+{
+  "version": "acquisition-sources-2026-06-27",
+  "updated_at": "2026-06-27T00:00:00Z",
+  "official_channels": [
+    {
+      "channel_id": "official_program_pages",
+      "allowed_fields": ["program_overview", "curriculum", "deadline", "tuition_hkd", "language_requirement", "materials", "essay_prompts", "application_url"],
+      "crawler_method": "source_registry seed -> link discovery -> html/pdf snapshot -> field extraction -> human publish gate",
+      "rate_limit": "1 request per source every 8-15 seconds during live fetch",
+      "policy": "Only public school pages, PDFs, FAQs, and application-system landing pages. Check robots.txt and terms before live fetch."
+    },
+    {
+      "channel_id": "official_pdf_faq",
+      "allowed_fields": ["materials", "language_requirement", "essay_prompts", "interview_policy", "application_rounds"],
+      "crawler_method": "PDF/FAQ detector -> text extraction -> citation snippets -> reviewer confirmation",
+      "rate_limit": "manual or queued low-rate fetch",
+      "policy": "Use official PDF/FAQ only; never infer current-cycle requirements from old PDFs without status label."
+    }
+  ],
+  "community_channels": [
+    {
+      "source_id": "github_global_cs_watercs",
+      "name": "Public GitHub CS application repositories",
+      "url": "https://github.com/",
+      "allowed_fields": ["program_alias", "application_timeline_experience", "interview_or_written_test_keywords", "preparation_advice"],
+      "crawler_method": "repository allowlist -> markdown snapshot -> keyword extraction -> community reference only",
+      "rate_limit": "GitHub API or raw page low-rate, cache snapshots",
+      "policy": "Only public repositories. Keep source attribution. Do not copy long passages."
+    },
+    {
+      "source_id": "thegradcafe_public_search",
+      "name": "TheGradCafe public results and discussions",
+      "url": "https://www.thegradcafe.com/",
+      "allowed_fields": ["admission_case", "timeline_experience", "decision_date_signal"],
+      "crawler_method": "manual search URL or user-provided public excerpt -> normalized signal -> no official overwrite",
+      "rate_limit": "manual review preferred",
+      "policy": "Community self-reports only; never use as admission probability or official requirement."
+    },
+    {
+      "source_id": "public_forum_search",
+      "name": "Public forum and social-web search",
+      "url": "https://www.google.com/search",
+      "allowed_fields": ["interview", "written_test", "essay_prompt_experience", "timeline_experience", "preparation_advice"],
+      "crawler_method": "search query plan -> human opens public pages -> short excerpt capture -> reviewer labels confidence",
+      "rate_limit": "manual or search-api compliant usage only",
+      "policy": "Only public pages that do not require login/paywall. Respect robots and platform terms. Store short snippets, source URL, and boundary label."
+    }
+  ],
+  "field_boundaries": {
+    "official_only": ["deadline", "tuition_hkd", "language_requirement", "materials", "application_url", "essay_prompts"],
+    "community_reference_only": ["interview", "written_test", "admission_case", "timeline_experience", "preparation_advice"],
+    "never_infer": ["admission_probability", "guaranteed_offer", "official_waiver", "internal_referral"]
+  }
+}

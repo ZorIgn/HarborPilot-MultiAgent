@@ -154,6 +154,8 @@ data/source_registry.json
 ```text
 GET /api/evidence-graph/summary
 GET /api/programs/{program_id}/trust
+GET /api/programs/{program_id}/data-package
+POST /api/workflows/data-acquisition
 ```
 
 `/api/programs` 会在每个项目对象中返回 `trust_detail`。它把 deadline、tuition、language、materials、application_url 等关键字段拆成字段级证据，展示来源 URL、申请季、抓取时间、人工确认时间、证据状态和发布闸门。只有 `production_ready=true` 且字段状态为 `OFFICIAL_VERIFIED_CURRENT` 的信息，才适合作为正式申请计划依据；其他字段只进入准备建议和待确认清单。
@@ -314,3 +316,5 @@ docs/
 tests/
   API 与工作流测试
 ```
+
+更多数据获取与公开信息聚合设计见：docs/data-acquisition-agent.md。

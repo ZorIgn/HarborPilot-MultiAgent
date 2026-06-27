@@ -114,6 +114,72 @@ export type SourceExtractionResult = {
   agent_chain: string[];
 };
 
+export type AcquisitionSourcePlan = {
+  source_id: string;
+  name: string;
+  url: string;
+  channel: "official_requirement" | "official_content" | "community_experience" | "directory_signal" | "methodology";
+  trust_level: SourceTrustLevel;
+  allowed_fields: string[];
+  crawler_method: string;
+  rate_limit: string;
+  robots_policy: string;
+  requires_human_review: boolean;
+  next_actions: string[];
+};
+
+export type ProgramContentSection = {
+  section_id: string;
+  title: string;
+  summary: string;
+  source_status: FieldVerificationStatus;
+  source_url: string | null;
+  evidence_snippet: string | null;
+  review_required: boolean;
+};
+
+export type ProgramExperienceSignal = {
+  signal_type: "interview" | "written_test" | "essay_prompt" | "admission_case" | "timeline" | "general_experience" | "search_plan";
+  title: string;
+  summary: string;
+  source_name: string;
+  source_url: string | null;
+  captured_at: string | null;
+  confidence: "low" | "medium" | "high";
+  official_verification_required: boolean;
+  use_boundary: string;
+};
+
+export type ProgramDataPackage = {
+  program_id: string;
+  institution: string;
+  program_name: string;
+  cycle: string;
+  official_url: string | null;
+  application_url: string | null;
+  production_ready: boolean;
+  freshness_warning: string;
+  official_requirements: FieldEvidenceRecord[];
+  content_sections: ProgramContentSection[];
+  essay_prompts: FieldEvidenceRecord[];
+  timeline_fields: FieldEvidenceRecord[];
+  community_experiences: ProgramExperienceSignal[];
+  acquisition_plan: AcquisitionSourcePlan[];
+  human_review_required: boolean;
+};
+
+export type DataAcquisitionReport = {
+  run_id: string;
+  mode: "dry_run" | "live_fetch";
+  checked_at: string;
+  selected_program_ids: string[];
+  packages: ProgramDataPackage[];
+  source_plan: AcquisitionSourcePlan[];
+  summary: string;
+  next_actions: string[];
+  agent_chain: string[];
+};
+
 export type DataRefreshReport = {
   run_id: string;
   mode: "dry_run" | "live_fetch";
