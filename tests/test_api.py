@@ -191,6 +191,8 @@ def test_source_registry_and_data_refresh() -> None:
     assert data["parser_plan"]
     assert data["human_review_required"] is True
     assert all(check["status"] == "SKIPPED_DRY_RUN" for check in data["source_checks"])
+    assert all(check["robots_status"] == "SKIPPED_DRY_RUN" for check in data["source_checks"])
+    assert all("robots_txt_url" in check for check in data["source_checks"])
 
 
 def test_program_catalog_exposes_field_level_trust_detail() -> None:
@@ -234,6 +236,7 @@ def test_program_data_package_exposes_official_and_community_acquisition_plan() 
     assert all(item["review_required"] is True for item in package["official_requirements"])
     assert any(plan["channel"] == "official_requirement" for plan in package["acquisition_plan"])
     assert any(plan["channel"] == "community_experience" for plan in package["acquisition_plan"])
+    assert any(plan["source_id"] == "public_chinese_admission_forums" for plan in package["acquisition_plan"])
     assert all("社区经验" in item["use_boundary"] for item in package["community_experiences"])
 
     report = client.post(

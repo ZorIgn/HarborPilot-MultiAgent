@@ -211,8 +211,21 @@ class SourceCheckResult(BaseModel):
     status: Literal["SKIPPED_DRY_RUN", "FETCH_OK", "FETCH_FAILED", "REVIEW_REQUIRED"]
     checked_at: datetime
     http_status: int | None = None
+    robots_txt_url: HttpUrl | str | None = None
+    robots_allowed: bool | None = None
+    robots_status: Literal[
+        "NOT_CHECKED",
+        "SKIPPED_DRY_RUN",
+        "ALLOWED",
+        "DISALLOWED",
+        "ROBOTS_NOT_FOUND",
+        "ROBOTS_UNAVAILABLE",
+    ] = "NOT_CHECKED"
     page_hash: str | None = None
+    previous_page_hash: str | None = None
+    content_changed: bool | None = None
     snapshot_path: str | None = None
+    snapshot_mime: str | None = None
     content_bytes: int = 0
     summary: str
     changed_fields: list[str] = Field(default_factory=list)

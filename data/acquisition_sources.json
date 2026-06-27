@@ -44,6 +44,33 @@
       "crawler_method": "search query plan -> human opens public pages -> short excerpt capture -> reviewer labels confidence",
       "rate_limit": "manual or search-api compliant usage only",
       "policy": "Only public pages that do not require login/paywall. Respect robots and platform terms. Store short snippets, source URL, and boundary label."
+    },
+    {
+      "source_id": "public_chinese_admission_forums",
+      "name": "Public Chinese admissions forum pages",
+      "url": "https://www.google.com/search",
+      "allowed_fields": ["interview", "written_test", "essay_prompt_experience", "timeline_experience", "preparation_advice", "program_alias"],
+      "crawler_method": "compliant search API/manual search -> public thread URL allowlist -> short excerpt -> reviewer labels programme/year/source boundary",
+      "rate_limit": "manual review or compliant search API; no login-wall or private group crawling",
+      "policy": "Use public web pages only. Do not mirror competitor databases or copy long passages. Community claims never become official requirements."
+    },
+    {
+      "source_id": "official_student_story_pages",
+      "name": "Official student stories and programme news",
+      "url": "https://www.google.com/search",
+      "allowed_fields": ["program_content_context", "student_story", "career_outcome_context", "preparation_advice"],
+      "crawler_method": "school-domain search -> official story/news page snapshot -> short contextual signal -> reviewer confirms boundary",
+      "rate_limit": "queued low-rate fetch with robots check",
+      "policy": "Official school storytelling pages can provide context only unless the page states a formal requirement."
+    },
+    {
+      "source_id": "public_video_note_search",
+      "name": "Public video/note experience search",
+      "url": "https://www.google.com/search",
+      "allowed_fields": ["interview", "written_test", "essay_prompt_experience", "timeline_experience", "preparation_advice"],
+      "crawler_method": "public search result -> metadata/snippet capture -> human opens original public page -> no private comments or account-only content",
+      "rate_limit": "manual review preferred; obey platform robots and terms",
+      "policy": "Only public metadata and short excerpts. Do not collect private profiles, comments, IDs, or paywalled content."
     }
   ],
   "field_boundaries": {

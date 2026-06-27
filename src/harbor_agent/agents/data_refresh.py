@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import re
+from urllib import robotparser
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse, urlunparse
 from urllib.request import Request, urlopen
 
 from harbor_agent.core.llm import LLMProvider
@@ -27,6 +29,9 @@ from harbor_agent.models import (
 from harbor_agent.services.evidence_graph import build_field_evidence_records
 from harbor_agent.services.data_loader import DATA_DIR, load_programs, load_source_registry
 from harbor_agent.services.external_candidates import qs_import_summary_for_programs
+
+
+FETCH_USER_AGENT = "HarborPilotAI/0.1 public admissions source checker (+manual review)"
 
 
 class DataRefreshAgent:
@@ -121,10 +126,36 @@ class DataRefreshAgent:
                 trust_level=source.trust_level,
                 status="SKIPPED_DRY_RUN",
                 checked_at=checked_at,
+                robots_txt_url=_robots_txt_url(str(source.url)),
+                robots_allowed=None,
+                robots_status="SKIPPED_DRY_RUN",
                 summary=f"Dry-run：登记刷新策略为 {source.refresh_cadence}，本次不联网抓取。",
                 next_actions=[
                     "正式刷新时先检查 robots/服务条款，再抓取官方索引或项目页。",
                     "抽取后只生成变化报告，不自动覆盖学校信息。",
+                ],
+            )
+
+        robots = _robots_decision(str(source.url))
+        if robots["allowed"] is not True:
+            return SourceCheckResult(
+                source_id=source.source_id,
+                name=source.name,
+                url=source.url,
+                category=source.category,
+                trust_level=source.trust_level,
+                status="REVIEW_REQUIRED",
+                checked_at=checked_at,
+                robots_txt_url=robots["robots_url"],
+                robots_allowed=robots["allowed"],
+                robots_status=robots["status"],
+                summary=(
+                    "Live fetch was paused because robots.txt did not explicitly allow this crawler. "
+                    "Keep this source in the human review queue and use manual verification or an approved API."
+                ),
+                next_actions=[
+                    "Check the school/source terms and robots.txt before fetching this URL again.",
+                    "If access is allowed, rerun live fetch or add an approved source-specific adapter.",
                 ],
             )
 
@@ -133,15 +164,18 @@ class DataRefreshAgent:
                 str(source.url),
                 method="GET",
                 headers={
-                    "User-Agent": "HarborPilotAI/0.1 source freshness checker (manual review)",
+                    "User-Agent": FETCH_USER_AGENT,
                 },
             )
             with urlopen(request, timeout=12) as response:
                 http_status = int(response.status)
                 body = response.read(512_000)
             page_hash = f"sha256:{hashlib.sha256(body).hexdigest()}"
+            previous_page_hash = _latest_previous_hash(source)
+            content_changed = not page_hash.startswith(previous_page_hash) if previous_page_hash else None
             snapshot_path = _save_snapshot(source, body, checked_at, page_hash)
             sample = body[:4096].decode("utf-8", errors="ignore")
+            field_hints = _field_hints_from_sample(sample)
             return SourceCheckResult(
                 source_id=source.source_id,
                 name=source.name,
@@ -151,10 +185,16 @@ class DataRefreshAgent:
                 status="FETCH_OK" if http_status < 400 else "REVIEW_REQUIRED",
                 checked_at=checked_at,
                 http_status=http_status,
+                robots_txt_url=robots["robots_url"],
+                robots_allowed=robots["allowed"],
+                robots_status=robots["status"],
                 page_hash=page_hash,
+                previous_page_hash=previous_page_hash,
+                content_changed=content_changed,
                 snapshot_path=snapshot_path,
+                snapshot_mime=_guess_snapshot_mime(source, body),
                 content_bytes=len(body),
-                changed_fields=_field_hints_from_sample(sample),
+                changed_fields=field_hints if content_changed is not False else [],
                 summary=(
                     f"已获取源页面 {len(body)} bytes，保存快照并生成 {page_hash[:19]}...；"
                     "下一步应提取候选信息、对比页面变化，并由人工确认后发布。"
@@ -174,6 +214,9 @@ class DataRefreshAgent:
                 status="FETCH_FAILED",
                 checked_at=checked_at,
                 http_status=getattr(exc, "code", None),
+                robots_txt_url=robots["robots_url"],
+                robots_allowed=robots["allowed"],
+                robots_status=robots["status"],
                 summary=f"联网检查失败：{type(exc).__name__}。保留为待确认项。",
                 next_actions=[
                     "打开官方页面人工确认是否改版、限流或需要 JS 渲染。",
@@ -607,12 +650,92 @@ def _field_hints_from_sample(sample: str) -> list[str]:
     return hints
 
 
+def _robots_txt_url(url: str) -> str | None:
+    parsed = urlparse(url)
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    return urlunparse((parsed.scheme, parsed.netloc, "/robots.txt", "", "", ""))
+
+
+def _robots_decision(url: str) -> dict[str, str | bool | None]:
+    robots_url = _robots_txt_url(url)
+    if robots_url is None:
+        return {"robots_url": None, "allowed": None, "status": "ROBOTS_UNAVAILABLE"}
+    try:
+        request = Request(robots_url, headers={"User-Agent": FETCH_USER_AGENT})
+        with urlopen(request, timeout=6) as response:
+            status = int(response.status)
+            raw = response.read(256_000)
+        if status == 404:
+            return {"robots_url": robots_url, "allowed": True, "status": "ROBOTS_NOT_FOUND"}
+        if status >= 400:
+            return {"robots_url": robots_url, "allowed": None, "status": "ROBOTS_UNAVAILABLE"}
+        parser = robotparser.RobotFileParser()
+        parser.set_url(robots_url)
+        parser.parse(raw.decode("utf-8", errors="ignore").splitlines())
+        allowed = parser.can_fetch(FETCH_USER_AGENT, url)
+        return {
+            "robots_url": robots_url,
+            "allowed": allowed,
+            "status": "ALLOWED" if allowed else "DISALLOWED",
+        }
+    except HTTPError as exc:
+        if getattr(exc, "code", None) == 404:
+            return {"robots_url": robots_url, "allowed": True, "status": "ROBOTS_NOT_FOUND"}
+        return {"robots_url": robots_url, "allowed": None, "status": "ROBOTS_UNAVAILABLE"}
+    except (URLError, TimeoutError, OSError):
+        return {"robots_url": robots_url, "allowed": None, "status": "ROBOTS_UNAVAILABLE"}
+
+
+def _latest_previous_hash(source: SourcePolicy) -> str | None:
+    snapshot_root = DATA_DIR / "snapshots"
+    safe_id = _safe_source_id(source.source_id)
+    if not snapshot_root.exists():
+        return None
+    candidates = sorted(
+        snapshot_root.glob(f"*/{safe_id}_*.*"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for path in candidates:
+        stem = path.stem
+        prefix = f"{safe_id}_"
+        if not stem.startswith(prefix):
+            continue
+        digest = stem[len(prefix):]
+        if digest:
+            return f"sha256:{digest}"
+    return None
+
+
+def _safe_source_id(source_id: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9_.-]+", "_", source_id)[:80]
+
+
+def _snapshot_suffix(source: SourcePolicy, body: bytes) -> str:
+    url = str(source.url).lower()
+    if body[:8].startswith(b"%PDF") or url.endswith(".pdf"):
+        return ".pdf"
+    if _looks_like_html(body):
+        return ".html"
+    return ".bin"
+
+
+def _guess_snapshot_mime(source: SourcePolicy, body: bytes) -> str:
+    suffix = _snapshot_suffix(source, body)
+    if suffix == ".pdf":
+        return "application/pdf"
+    if suffix == ".html":
+        return "text/html"
+    return "application/octet-stream"
+
+
 def _save_snapshot(source: SourcePolicy, body: bytes, checked_at: datetime, page_hash: str) -> str:
     snapshot_dir = DATA_DIR / "snapshots" / checked_at.strftime("%Y%m%d")
     snapshot_dir.mkdir(parents=True, exist_ok=True)
-    safe_id = re.sub(r"[^a-zA-Z0-9_.-]+", "_", source.source_id)[:80]
+    safe_id = _safe_source_id(source.source_id)
     digest = page_hash.split(":", 1)[-1][:16]
-    suffix = ".html" if _looks_like_html(body) else ".bin"
+    suffix = _snapshot_suffix(source, body)
     path = snapshot_dir / f"{safe_id}_{digest}{suffix}"
     path.write_bytes(body)
     return str(Path("data") / "snapshots" / checked_at.strftime("%Y%m%d") / path.name)
