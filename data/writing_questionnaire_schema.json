@@ -1,0 +1,53 @@
+{
+  "version": "questionnaire-writing-hk-sg-master-v2",
+  "source_templates": [
+    "个人陈述调查问卷.docx",
+    "推荐信调查表（学校）.docx"
+  ],
+  "sections": [
+    {
+      "id": "target_prompt",
+      "title": "目标项目与题目",
+      "description": "用于读取学校文书题目、字数和项目定制要求。请粘贴官方页面或网申系统中的原文。",
+      "fields": [
+        {"id": "target_program", "label": "目标学校和项目", "type": "text", "required": true},
+        {"id": "prompt_original", "label": "文书题目、字数限制和上传格式", "type": "textarea", "required": false},
+        {"id": "why_program_binding", "label": "你想绑定的课程、培养目标、方向或就业路径（仅写官网看到的内容）", "type": "textarea", "required": false}
+      ]
+    },
+    {
+      "id": "education_courses",
+      "title": "教育背景与课程",
+      "description": "用于判断课程匹配和文书学术段落，不收集联系方式、护照、地址等与文书无关信息。",
+      "fields": [
+        {"id": "school_tier", "label": "学校层级", "type": "select", "options": ["C9", "985", "211", "双一流", "双非/普通本科", "海外本科"], "required": true},
+        {"id": "major_degree", "label": "专业与学位", "type": "text", "required": true},
+        {"id": "gpa_rank", "label": "均分/GPA/排名", "type": "textarea", "required": true},
+        {"id": "core_courses", "label": "与申请方向相关的核心课程、成绩和工具", "type": "textarea", "required": false}
+      ]
+    },
+    {
+      "id": "statement_motivation",
+      "title": "故事访谈",
+      "description": "先收集真实故事，再生成故事卡、大纲和草稿。",
+      "fields": [
+        {"id": "best_story_problem", "label": "最想写进文书的一段经历：当时要解决的具体问题是什么？", "type": "textarea", "required": true},
+        {"id": "role_actions", "label": "你在这段经历中具体负责什么？做了哪些动作、使用了哪些方法或工具？", "type": "textarea", "required": false},
+        {"id": "result_validation", "label": "结果是什么？有没有数字、作品、报告、反馈、排名或其他可验证证据？", "type": "textarea", "required": false},
+        {"id": "discipline_bridge", "label": "这段经历如何体现你目标专业需要的能力？请用目标专业语言解释。", "type": "textarea", "required": false},
+        {"id": "career_transfer", "label": "这段经历如何连接目标项目和三到五年职业目标？", "type": "textarea", "required": false}
+      ]
+    },
+    {
+      "id": "recommender_material",
+      "title": "推荐信素材",
+      "description": "只整理推荐人能观察到的事实，不要求填写推荐人邮箱等联系方式。",
+      "repeatable": true,
+      "fields": [
+        {"id": "relationship", "label": "推荐人与申请者的关系及认识场景", "type": "textarea", "required": false},
+        {"id": "course_or_project", "label": "课程、presentation、小组活动或研究项目细节", "type": "textarea", "required": false},
+        {"id": "impression_examples", "label": "推荐人能观察到的具体能力和事件", "type": "textarea", "required": false}
+      ]
+    }
+  ]
+}

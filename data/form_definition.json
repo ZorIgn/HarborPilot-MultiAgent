@@ -1,0 +1,38 @@
+{
+  "version": "profile-form-2027-fall-v1",
+  "steps": [
+    {
+      "id": "target",
+      "title": "申请目标",
+      "fields": ["target_regions", "target_cycle", "discipline_interests", "raw_interest_text"]
+    },
+    {
+      "id": "education",
+      "title": "教育背景",
+      "fields": ["school", "degree", "major", "gpa", "ranking_percentile"]
+    },
+    {
+      "id": "language",
+      "title": "语言与标化",
+      "fields": ["language_test", "language_overall", "language_writing", "planned_test_date"]
+    },
+    {
+      "id": "experience",
+      "title": "经历与证据",
+      "fields": ["experiences"]
+    },
+    {
+      "id": "preference",
+      "title": "偏好与风险",
+      "fields": ["budget_hkd", "career_goal", "risk_flags"]
+    }
+  ],
+  "dynamic_sections": {
+    "business": ["quantitative_courses", "gmat_gre_status", "commercial_experience"],
+    "computer_science": ["programming_languages", "core_cs_courses", "technical_projects"],
+    "life_health": ["statistics_background", "health_related_experience", "license_status"],
+    "design_built_environment": ["portfolio_status", "design_tools", "studio_projects"],
+    "education_language": ["teaching_experience", "teacher_certificate", "linguistics_background"]
+  }
+}
+

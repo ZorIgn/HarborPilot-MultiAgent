@@ -1,0 +1,18 @@
+{
+  "version": "cv-profile-hk-sg-master-v1",
+  "privacy_note": "这些字段只用于 CV 基础信息或网申材料清单，默认不进入文书生成模型上下文。",
+  "sections": [
+    {
+      "id": "cv_contact",
+      "title": "CV 基础联系信息",
+      "description": "仅在用户明确生成 CV 时使用。",
+      "fields": [
+        {"id": "name", "label": "姓名", "type": "text", "sensitive": true, "required": false},
+        {"id": "email", "label": "邮箱", "type": "text", "sensitive": true, "required": false},
+        {"id": "phone", "label": "手机号", "type": "text", "sensitive": true, "required": false},
+        {"id": "city", "label": "所在城市", "type": "text", "sensitive": false, "required": false}
+      ]
+    }
+  ],
+  "excluded_from_writing_context": ["email", "phone", "passport_status", "family_address", "birth_date"]
+}

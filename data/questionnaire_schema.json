@@ -1,0 +1,81 @@
+{
+  "version": "questionnaire-hk-sg-master-v1",
+  "source_templates": [
+    "个人信息表 硕士.docx",
+    "个人陈述调查问卷.docx",
+    "推荐信调查表（学校）.docx"
+  ],
+  "sections": [
+    {
+      "id": "basic_profile",
+      "title": "个人与网申基础信息",
+      "description": "用于网申表格和材料清单，不直接交给模型生成文书。",
+      "fields": [
+        {"id": "name", "label": "姓名", "type": "text", "sensitive": true, "required": false},
+        {"id": "birth_date", "label": "出生日期", "type": "date", "sensitive": true, "required": false},
+        {"id": "email", "label": "邮箱", "type": "text", "sensitive": true, "required": false},
+        {"id": "phone", "label": "手机号", "type": "text", "sensitive": true, "required": false},
+        {"id": "passport_status", "label": "护照状态", "type": "select", "options": ["已办理", "办理中", "暂无"], "required": false},
+        {"id": "family_address", "label": "家庭住址与邮编", "type": "textarea", "sensitive": true, "required": false}
+      ]
+    },
+    {
+      "id": "education_courses",
+      "title": "教育背景与核心课程",
+      "description": "用于背景评估、课程匹配和文书学术段落。",
+      "fields": [
+        {"id": "school_name", "label": "本科学校", "type": "text", "required": false},
+        {"id": "school_tier", "label": "学校层级", "type": "select", "options": ["C9", "985", "211", "双一流", "双非/普通本科", "海外本科"], "required": true},
+        {"id": "major_degree", "label": "专业与学位", "type": "text", "required": true},
+        {"id": "gpa_rank", "label": "均分/GPA/排名", "type": "textarea", "required": true},
+        {"id": "core_courses", "label": "与申请方向相关的核心课程及分数", "type": "textarea", "required": false},
+        {"id": "exchange", "label": "交换经历", "type": "textarea", "required": false}
+      ]
+    },
+    {
+      "id": "statement_motivation",
+      "title": "个人陈述：动机与方向",
+      "description": "来自个人陈述调查问卷，用于主题规划和缺口追问。",
+      "fields": [
+        {"id": "interest_origin", "label": "选择申请方向的原因或兴趣起源", "type": "textarea", "required": false},
+        {"id": "transition_reason", "label": "如转专业，请说明原因和补足计划", "type": "textarea", "required": false},
+        {"id": "academic_examples", "label": "1-2 个体现学术能力的课程/课题/竞赛例子", "type": "textarea", "required": false},
+        {"id": "practical_examples", "label": "1-2 个实习、项目、科研或活动经历，写清过程、贡献、结果", "type": "textarea", "required": false},
+        {"id": "career_plan", "label": "短期与三到五年职业规划", "type": "textarea", "required": true},
+        {"id": "why_program", "label": "为什么申请该项目/方向", "type": "textarea", "required": false},
+        {"id": "why_school", "label": "为什么申请该学校", "type": "textarea", "required": false},
+        {"id": "extra_info", "label": "论文、志愿、奖项或其他有帮助的信息", "type": "textarea", "required": false}
+      ]
+    },
+    {
+      "id": "experience_bank",
+      "title": "经历素材库",
+      "description": "每段经历会生成 Story Card：Situation、Task、Action、Result、Reflection。",
+      "repeatable": true,
+      "fields": [
+        {"id": "experience_type", "label": "经历类型", "type": "select", "options": ["实习/工作", "科研/论文", "课程项目", "竞赛/奖项", "社团/志愿", "其他"], "required": true},
+        {"id": "experience_time", "label": "起止时间", "type": "text", "required": false},
+        {"id": "experience_org", "label": "单位/项目/组织名称", "type": "text", "required": false},
+        {"id": "experience_role", "label": "你的角色", "type": "text", "required": false},
+        {"id": "experience_process", "label": "任务、行动、困难与解决过程", "type": "textarea", "required": false},
+        {"id": "experience_result", "label": "可量化成果或产出", "type": "textarea", "required": false},
+        {"id": "experience_reflection", "label": "收获、反思和与目标项目的关系", "type": "textarea", "required": false}
+      ]
+    },
+    {
+      "id": "recommenders",
+      "title": "推荐信信息",
+      "description": "用于推荐信素材整理，不自动编造推荐人口吻。",
+      "repeatable": true,
+      "fields": [
+        {"id": "recommender_name", "label": "推荐人姓名", "type": "text", "sensitive": true, "required": false},
+        {"id": "recommender_title", "label": "职称/职务/单位", "type": "text", "required": false},
+        {"id": "recommender_email", "label": "学校官方邮箱", "type": "text", "sensitive": true, "required": false},
+        {"id": "relationship", "label": "推荐人与申请者关系及认识场景", "type": "textarea", "required": false},
+        {"id": "course_or_project", "label": "课程、presentation、小组活动或研究项目细节", "type": "textarea", "required": false},
+        {"id": "impression_examples", "label": "推荐人能观察到的具体能力和事件", "type": "textarea", "required": false},
+        {"id": "other_observations", "label": "成绩、荣誉、困难克服或其他推荐素材", "type": "textarea", "required": false}
+      ]
+    }
+  ]
+}

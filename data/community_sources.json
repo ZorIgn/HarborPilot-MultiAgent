@@ -1,0 +1,50 @@
+{
+  "version": "community-discovery-2026-06-13",
+  "policy": "社区资料只用于发现项目、别名、经验入口和分类线索；正式申请字段必须回到学校官方来源验证。",
+  "sources": [
+    {
+      "source_name": "Global CS：欧港新留学CS项目指北",
+      "repository": "https://github.com/Global-CS-application/global-cs-application.github.io",
+      "site": "https://global-cs-application.github.io/",
+      "license_note": "用于学习信息组织方式和项目发现线索，不复制其主观评价作为官方字段。",
+      "signals": [
+        {"program_alias": "HKU CS MSc", "region": "HK", "discipline_tags": ["computer_science"], "signal_type": "program_alias"},
+        {"program_alias": "HKUST BDT", "region": "HK", "discipline_tags": ["computer_science"], "signal_type": "program_alias"},
+        {"program_alias": "CUHK CS MSc", "region": "HK", "discipline_tags": ["computer_science"], "signal_type": "program_alias"},
+        {"program_alias": "NUS MComp", "region": "SG", "discipline_tags": ["computer_science"], "signal_type": "program_alias"},
+        {"program_alias": "NTU MSAI", "region": "SG", "discipline_tags": ["computer_science"], "signal_type": "program_alias"}
+      ]
+    },
+    {
+      "source_name": "WaterCS",
+      "repository": "https://github.com/Water-CS-Application/WaterCS",
+      "site": "https://water-cs-application.github.io/WaterCS/",
+      "license_note": "用于学习英港新 CS 项目的分类、Pros/Cons 和录取样本组织方式。",
+      "signals": [
+        {"program_alias": "BDT@HKUST", "region": "HK", "discipline_tags": ["computer_science"], "signal_type": "community_review"},
+        {"program_alias": "CS@CUHK", "region": "HK", "discipline_tags": ["computer_science"], "signal_type": "community_review"},
+        {"program_alias": "DS@HKU", "region": "HK", "discipline_tags": ["computer_science"], "signal_type": "community_review"},
+        {"program_alias": "Mcomp@NUS", "region": "SG", "discipline_tags": ["computer_science"], "signal_type": "community_review"},
+        {"program_alias": "AI@NTU", "region": "SG", "discipline_tags": ["computer_science"], "signal_type": "community_review"}
+      ]
+    },
+    {
+      "source_name": "GIS-Info 院校指南",
+      "repository": "https://github.com/GIS-Info/GIS-Info.github.io",
+      "site": "https://gisphere.info/school",
+      "license_note": "用于学习大规模院校指南的目录、作者协作和迁移/更新时间提示。",
+      "signals": [
+        {"program_alias": "GIS / Geomatics programme directory", "region": "GLOBAL", "discipline_tags": ["design_built_environment", "computer_science"], "signal_type": "taxonomy_hint"}
+      ]
+    },
+    {
+      "source_name": "EmbedRoadAndCSInEU",
+      "repository": "https://github.com/OSHEIG/EmbedRoadAndCSInEU",
+      "site": "https://github.com/OSHEIG/EmbedRoadAndCSInEU",
+      "license_note": "用于学习职业路线、课程匹配和方向选择，不作为项目官方字段。",
+      "signals": [
+        {"program_alias": "Embedded systems / systems CS roadmap", "region": "EU", "discipline_tags": ["computer_science", "engineering"], "signal_type": "taxonomy_hint"}
+      ]
+    }
+  ]
+}

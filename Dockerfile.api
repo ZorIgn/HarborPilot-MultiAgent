@@ -1,0 +1,15 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+ENV PYTHONPATH=/app/src
+
+COPY requirements.txt pyproject.toml ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY src ./src
+COPY data ./data
+COPY examples ./examples
+
+EXPOSE 8000
+CMD ["uvicorn", "harbor_agent.app:app", "--host", "0.0.0.0", "--port", "8000"]
+

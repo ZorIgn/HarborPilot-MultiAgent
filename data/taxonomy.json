@@ -1,0 +1,66 @@
+{
+  "version": "2027-fall-demo-v1",
+  "discipline_groups": [
+    {
+      "code": "business",
+      "name_zh": "商科、经济与管理",
+      "name_en": "Business, Economics and Management",
+      "fields": ["finance", "management", "marketing", "business analytics", "accounting"]
+    },
+    {
+      "code": "computer_science",
+      "name_zh": "计算机、数据与信息系统",
+      "name_en": "Computer Science, Data and Information Systems",
+      "fields": ["computer science", "data science", "ai", "information systems", "software engineering"]
+    },
+    {
+      "code": "engineering",
+      "name_zh": "工程与制造",
+      "name_en": "Engineering and Manufacturing",
+      "fields": ["civil engineering", "electrical engineering", "mechanical engineering", "industrial engineering"]
+    },
+    {
+      "code": "social_science",
+      "name_zh": "社会科学",
+      "name_en": "Social Sciences",
+      "fields": ["psychology", "sociology", "international relations", "public policy"]
+    },
+    {
+      "code": "communication",
+      "name_zh": "传媒、传播与文化产业",
+      "name_en": "Media, Communication and Cultural Industries",
+      "fields": ["journalism", "communication", "creative industries", "digital media"]
+    },
+    {
+      "code": "law_policy",
+      "name_zh": "法律、公共政策与国际事务",
+      "name_en": "Law, Public Policy and International Affairs",
+      "fields": ["law", "public policy", "global affairs", "governance"]
+    },
+    {
+      "code": "life_health",
+      "name_zh": "生命科学、医药与公共健康",
+      "name_en": "Life Sciences, Medicine and Public Health",
+      "fields": ["public health", "biomedical science", "biostatistics", "health management"]
+    },
+    {
+      "code": "design_built_environment",
+      "name_zh": "建筑、城市规划、设计与建造环境",
+      "name_en": "Architecture, Design and Built Environment",
+      "fields": ["architecture", "urban planning", "design", "built environment"]
+    },
+    {
+      "code": "education_language",
+      "name_zh": "教育与语言",
+      "name_en": "Education and Language",
+      "fields": ["education", "tesol", "applied linguistics", "learning science"]
+    },
+    {
+      "code": "interdisciplinary",
+      "name_zh": "跨学科与自定义方向",
+      "name_en": "Interdisciplinary and Custom Direction",
+      "fields": ["interdisciplinary", "custom"]
+    }
+  ]
+}
+
