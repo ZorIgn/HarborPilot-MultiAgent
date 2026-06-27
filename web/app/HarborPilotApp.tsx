@@ -35,6 +35,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   configureLLM,
   getEvidenceGraphSummary,
+  getProgramDataPackage,
   getHealth,
   getPrograms,
   getQuestionnaireSchema,
@@ -58,6 +59,7 @@ import type {
   EvidenceGraphSummary,
   FieldEvidenceRecord,
   LayeredProgramPlanResult,
+  ProgramDataPackage,
   ProgramMatch,
   QuestionnaireResponse,
   QuestionnaireSchema,
@@ -70,7 +72,7 @@ import type {
 } from "@/lib/types";
 
 type ViewMode = "home" | "assessment" | "programs" | "timeline" | "writing" | "agent" | "settings";
-type StageLoading = "background" | "programs" | "timeline" | "writing" | "interview" | "data" | "llm" | null;
+type StageLoading = "background" | "programs" | "timeline" | "writing" | "interview" | "data" | "package" | "llm" | null;
 type Provider = "mock" | "deepseek" | "openai" | "compatible";
 type DocumentType = "PS" | "SOP" | "CV" | "ESSAY" | "REFERENCE_PACKAGE";
 type QuestionnaireValues = Record<string, string>;
@@ -190,6 +192,8 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
   const [loading, setLoading] = useState<StageLoading>(null);
   const [error, setError] = useState<string | null>(null);
   const [activityOpen, setActivityOpen] = useState(false);
+  const [programPackage, setProgramPackage] = useState<ProgramDataPackage | null>(null);
+  const [packageOpen, setPackageOpen] = useState(false);
   const [filters, setFilters] = useState({ q: "", region: "", discipline: "", verification_status: "", deadline_status: "" });
   const [provider, setProvider] = useState<Provider>("deepseek");
   const [model, setModel] = useState("deepseek-chat");
@@ -304,6 +308,19 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
     }
   }
 
+  async function openProgramPackage(programId: string) {
+    setLoading("package");
+    setError(null);
+    try {
+      const response = await getProgramDataPackage(programId);
+      setProgramPackage(response);
+      setPackageOpen(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "项目详情数据包加载失败");
+    } finally {
+      setLoading(null);
+    }
+  }
   async function refreshSources(liveFetch = false) {
     setLoading("data");
     setError(null);
@@ -491,6 +508,7 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
               setFilters={setFilters}
               selectedProgramIds={selectedProgramIds}
               onToggle={toggleProgram}
+              onInspect={openProgramPackage}
               onRun={() => runPrograms()}
               loading={loading}
             />
@@ -545,6 +563,7 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
         </section>
 
         <ActivityDrawer open={activityOpen} onClose={() => setActivityOpen(false)} result={result} evidenceGraph={evidenceGraph} sourceRefresh={result?.source_refresh ?? null} />
+        <ProgramPackageDrawer open={packageOpen} onClose={() => setPackageOpen(false)} dataPackage={programPackage} />
       </main>
       <Footer type="sea" />
     </Cursor>
@@ -608,6 +627,7 @@ function KeySetupCard(props: {
 }
 
 function GlobalProgress({ stage }: { stage: StageLoading }) {
+  if (!stage) return null;
   const detail = {
     background: {
       title: "正在生成背景诊断",
@@ -633,12 +653,15 @@ function GlobalProgress({ stage }: { stage: StageLoading }) {
       title: "正在检查学校官网信息",
       steps: ["匹配学校官网入口", "查找项目详情页", "区分官网和经验来源", "输出可确认的信息清单"],
     },
+    package: {
+      title: "正在加载项目数据包",
+      steps: ["读取官方字段证据", "整理项目内容", "生成公开社区经验线索", "准备采集计划"],
+    },
     llm: {
       title: "正在连接模型",
       steps: ["提交到本地后端", "验证模型配置", "准备 Agent 调用"],
     },
-  }[stage ?? "background"];
-  if (!stage) return null;
+  }[stage];
   return (
     <IslandCard className="progress-card" color="app-teal">
       <div className="progress-head">
@@ -812,16 +835,17 @@ function ProgramsView(props: {
   selectedProgramIds: string[];
   onToggle: (id: string) => void;
   onRun: () => void;
+  onInspect: (id: string) => void;
   loading: StageLoading;
 }) {
   const core = props.result?.core_candidates ?? props.focusList.filter((item) => item.match_category === "core");
   const related = props.result?.related_candidates ?? props.focusList.filter((item) => item.match_category !== "core");
   const blocked = props.result?.blocked_candidates ?? [];
   const tabs = [
-    { key: "core", label: `核心匹配 ${core.length}`, children: <ProgramRows matches={core.slice(0, 15)} selectedIds={props.selectedProgramIds} onToggle={props.onToggle} /> },
-    { key: "related", label: `相关候选 ${related.length}`, children: <ProgramRows matches={related.slice(0, 30)} selectedIds={props.selectedProgramIds} onToggle={props.onToggle} /> },
-    { key: "mix", label: `建议组合 ${props.applicationMix.length}`, children: <ProgramRows matches={props.applicationMix} selectedIds={props.selectedProgramIds} onToggle={props.onToggle} /> },
-    { key: "blocked", label: `暂不推荐 ${blocked.length}`, children: <ProgramRows matches={blocked.slice(0, 20)} selectedIds={props.selectedProgramIds} onToggle={props.onToggle} muted /> },
+    { key: "core", label: `核心匹配 ${core.length}`, children: <ProgramRows matches={core.slice(0, 15)} selectedIds={props.selectedProgramIds} onToggle={props.onToggle} onInspect={props.onInspect} loading={props.loading} /> },
+    { key: "related", label: `相关候选 ${related.length}`, children: <ProgramRows matches={related.slice(0, 30)} selectedIds={props.selectedProgramIds} onToggle={props.onToggle} onInspect={props.onInspect} loading={props.loading} /> },
+    { key: "mix", label: `建议组合 ${props.applicationMix.length}`, children: <ProgramRows matches={props.applicationMix} selectedIds={props.selectedProgramIds} onToggle={props.onToggle} onInspect={props.onInspect} loading={props.loading} /> },
+    { key: "blocked", label: `暂不推荐 ${blocked.length}`, children: <ProgramRows matches={blocked.slice(0, 20)} selectedIds={props.selectedProgramIds} onToggle={props.onToggle} onInspect={props.onInspect} loading={props.loading} muted /> },
   ];
   return (
     <div className="page-stack">
@@ -855,7 +879,7 @@ function ProgramsView(props: {
           <label>信息状态<select value={props.filters.verification_status} onChange={(event) => props.setFilters({ ...props.filters, verification_status: event.target.value })}><option value="">全部状态</option><option value="OFFICIAL_VERIFIED_CURRENT">学校已确认</option><option value="EXTRACTED">待学校确认</option><option value="NOT_PUBLISHED">本季未发布</option><option value="COMMUNITY_ONLY">仅经验参考</option></select></label>
           <label>截止状态<select value={props.filters.deadline_status} onChange={(event) => props.setFilters({ ...props.filters, deadline_status: event.target.value })}><option value="">全部</option><option value="published">已有日期</option><option value="not_published">未发布 / 待确认</option></select></label>
         </div>
-        <CatalogRows programs={props.catalog.slice(0, 50)} selectedIds={props.selectedProgramIds} onToggle={props.onToggle} />
+        <CatalogRows programs={props.catalog.slice(0, 50)} selectedIds={props.selectedProgramIds} onToggle={props.onToggle} onInspect={props.onInspect} loading={props.loading} />
       </IslandCard>
 
       <IslandTabs className="animal-tabs" items={tabs} defaultActiveKey="core" />
@@ -1142,7 +1166,7 @@ function ProgramPlanOverview({ plan, matches, selectedIds, onToggle }: { plan: C
   );
 }
 
-function ProgramRows({ matches, selectedIds, onToggle, muted = false }: { matches: ProgramMatch[]; selectedIds: string[]; onToggle: (id: string) => void; muted?: boolean }) {
+function ProgramRows({ matches, selectedIds, onToggle, onInspect, loading, muted = false }: { matches: ProgramMatch[]; selectedIds: string[]; onToggle: (id: string) => void; onInspect: (id: string) => void; loading: StageLoading; muted?: boolean }) {
   if (!matches.length) return <EmptyState text="暂无匹配结果。请先补充背景并重新推荐。" />;
   return (
     <div className="program-list">
@@ -1173,6 +1197,7 @@ function ProgramRows({ matches, selectedIds, onToggle, muted = false }: { matche
             <IslandButton type={selectedIds.includes(item.program.id) ? "default" : "primary"} size="small" onClick={() => onToggle(item.program.id)}>
               {selectedIds.includes(item.program.id) ? "已加入方案" : "加入方案"}
             </IslandButton>
+            <IslandButton type="default" size="small" loading={loading === "package"} onClick={() => onInspect(item.program.id)}>项目详情</IslandButton>
             <ProgramLinks program={item.program} />
           </div>
         </article>
@@ -1181,7 +1206,7 @@ function ProgramRows({ matches, selectedIds, onToggle, muted = false }: { matche
   );
 }
 
-function CatalogRows({ programs, selectedIds, onToggle }: { programs: CatalogProgram[]; selectedIds: string[]; onToggle: (id: string) => void }) {
+function CatalogRows({ programs, selectedIds, onToggle, onInspect, loading }: { programs: CatalogProgram[]; selectedIds: string[]; onToggle: (id: string) => void; onInspect: (id: string) => void; loading: StageLoading }) {
   if (!programs.length) return <EmptyState text="没有找到项目。请放宽筛选条件。" />;
   return (
     <div className="catalog-list">
@@ -1202,6 +1227,7 @@ function CatalogRows({ programs, selectedIds, onToggle }: { programs: CatalogPro
           </div>
           <div className="program-actions">
             <IslandButton type={selectedIds.includes(program.id) ? "default" : "primary"} size="small" onClick={() => onToggle(program.id)}>{selectedIds.includes(program.id) ? "已加入" : "加入方案"}</IslandButton>
+            <IslandButton type="default" size="small" loading={loading === "package"} onClick={() => onInspect(program.id)}>项目详情</IslandButton>
             <ProgramLinks program={program} />
           </div>
         </article>
@@ -1541,6 +1567,80 @@ function ExtractionResultList({ report }: { report: DataRefreshReport | null }) 
   );
 }
 
+function ProgramPackageDrawer({ open, onClose, dataPackage }: { open: boolean; onClose: () => void; dataPackage: ProgramDataPackage | null }) {
+  if (!open) return null;
+  return (
+    <div className="drawer-backdrop" role="presentation" onClick={onClose}>
+      <aside className="decision-drawer program-package-drawer" role="dialog" aria-label="项目详情数据包" onClick={(event) => event.stopPropagation()}>
+        <div className="drawer-head">
+          <div>
+            <span className="eyebrow">项目数据包</span>
+            <h2>{dataPackage ? `${dataPackage.institution} · ${dataPackage.program_name}` : "项目详情"}</h2>
+          </div>
+          <button className="icon-button" type="button" onClick={onClose} aria-label="关闭"><X size={18} aria-hidden /></button>
+        </div>
+        {!dataPackage ? <EmptyState text="项目数据包还在加载。" /> : (
+          <div className="package-stack">
+            <section className="status-grid two">
+              <Metric label="当前状态" value={dataPackage.production_ready ? "可正式使用" : "待官网确认"} detail={dataPackage.human_review_required ? "关键字段需人工审核" : "已通过发布闸门"} />
+              <Metric label="采集计划" value={`${dataPackage.acquisition_plan.length}`} detail="官方与公开社区来源" />
+            </section>
+            <p className="form-note">{dataPackage.freshness_warning}</p>
+            <IslandCard className="panel-card">
+              <PanelTitle icon={<ShieldCheck size={18} aria-hidden />} title="官方要求" />
+              <EvidenceRecordList records={dataPackage.official_requirements} />
+            </IslandCard>
+            <IslandCard className="panel-card">
+              <PanelTitle icon={<BookOpenCheck size={18} aria-hidden />} title="项目内容" />
+              <div className="package-section-list">
+                {dataPackage.content_sections.map((section) => (
+                  <article key={section.section_id}>
+                    <div className="program-title-row"><strong>{section.title}</strong><DataBadge status={section.source_status} /></div>
+                    <p>{section.summary}</p>
+                    {section.evidence_snippet ? <small>{section.evidence_snippet}</small> : null}
+                    {section.source_url ? <a className="text-link" href={section.source_url} target="_blank" rel="noreferrer">查看来源</a> : null}
+                  </article>
+                ))}
+              </div>
+            </IslandCard>
+            <IslandCard className="panel-card">
+              <PanelTitle icon={<CalendarDays size={18} aria-hidden />} title="文书与时间线字段" />
+              <EvidenceRecordList records={[...dataPackage.essay_prompts, ...dataPackage.timeline_fields]} />
+            </IslandCard>
+            <IslandCard className="panel-card">
+              <PanelTitle icon={<Sparkles size={18} aria-hidden />} title="公开社区经验" />
+              <div className="package-section-list">
+                {dataPackage.community_experiences.map((signal, index) => (
+                  <article key={`${signal.signal_type}-${index}`}>
+                    <div className="program-title-row"><strong>{experienceTypeLabel(signal.signal_type)} · {signal.title}</strong><span className="tier-pill">{signal.confidence}</span></div>
+                    <p>{signal.summary}</p>
+                    <small>{signal.use_boundary}</small>
+                    {signal.source_url ? <a className="text-link" href={signal.source_url} target="_blank" rel="noreferrer">查看公开来源</a> : null}
+                  </article>
+                ))}
+              </div>
+            </IslandCard>
+            <IslandCard className="panel-card">
+              <PanelTitle icon={<Database size={18} aria-hidden />} title="采集计划" />
+              <div className="package-section-list compact">
+                {dataPackage.acquisition_plan.map((plan) => (
+                  <article key={plan.source_id}>
+                    <div className="program-title-row"><strong>{plan.name}</strong><span className="tier-pill">{acquisitionChannelLabel(plan.channel)}</span></div>
+                    <p>{plan.crawler_method}</p>
+                    <small>{plan.robots_policy}</small>
+                    <div className="material-chips">{plan.allowed_fields.slice(0, 8).map((field) => <span key={field}>{fieldLabels[field] ?? field}</span>)}</div>
+                    <a className="text-link" href={plan.url} target="_blank" rel="noreferrer">打开来源</a>
+                  </article>
+                ))}
+              </div>
+            </IslandCard>
+          </div>
+        )}
+      </aside>
+    </div>
+  );
+}
+
 function ActivityDrawer({ open, onClose, result, evidenceGraph, sourceRefresh }: { open: boolean; onClose: () => void; result: AppState | null; evidenceGraph: EvidenceGraphSummary | null; sourceRefresh: DataRefreshReport | null }) {
   if (!open) return null;
   const first = result?.focus_list?.[0] ?? result?.recommendations?.[0] ?? null;
@@ -1807,6 +1907,27 @@ function formatDateTime(value?: string | null) {
   return date.toISOString().slice(0, 10);
 }
 
+function experienceTypeLabel(value: string) {
+  return {
+    interview: "面试经验",
+    written_test: "笔试经验",
+    essay_prompt: "文书题目",
+    admission_case: "录取案例",
+    timeline: "申请时间线",
+    general_experience: "经验参考",
+    search_plan: "待采集线索",
+  }[value] ?? value;
+}
+
+function acquisitionChannelLabel(value: string) {
+  return {
+    official_requirement: "官方要求",
+    official_content: "官方内容",
+    community_experience: "社区经验",
+    directory_signal: "目录线索",
+    methodology: "方法参考",
+  }[value] ?? value;
+}
 function dateBasisLabel(value?: string | null) {
   if (!value) return "内部准备建议";
   if (String(value).includes("官方")) return "官方倒推";

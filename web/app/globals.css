@@ -1417,3 +1417,41 @@ a:focus-visible {
     position: static;
   }
 }
+
+.program-package-drawer {
+  width: min(980px, calc(100vw - 28px));
+}
+
+.package-stack {
+  display: grid;
+  gap: 14px;
+}
+
+.package-section-list {
+  display: grid;
+  gap: 10px;
+}
+
+.package-section-list article {
+  padding: 12px;
+  border: 2px solid rgba(122, 90, 55, 0.14);
+  border-radius: 18px;
+  background: rgba(255, 253, 243, 0.82);
+}
+
+.package-section-list.compact article {
+  padding: 10px;
+}
+
+.package-section-list p {
+  margin: 7px 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.package-section-list small {
+  display: block;
+  color: var(--muted);
+  font-weight: 850;
+  line-height: 1.45;
+}
