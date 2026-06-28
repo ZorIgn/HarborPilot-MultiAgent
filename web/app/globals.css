@@ -1455,3 +1455,40 @@ a:focus-visible {
   font-weight: 850;
   line-height: 1.45;
 }
+.agent-contract-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.agent-contract-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+.agent-contract-grid article {
+  min-height: 220px;
+  padding: 14px;
+  border: 2px solid rgba(122, 90, 55, 0.16);
+  border-radius: 18px;
+  background: rgba(255, 253, 243, 0.88);
+}
+
+.agent-contract-grid p {
+  margin: 8px 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.agent-contract-grid small {
+  display: block;
+  margin-top: 8px;
+  color: var(--wood);
+  font-weight: 850;
+  line-height: 1.45;
+}
+
+.material-chips.vertical {
+  display: grid;
+  grid-template-columns: 1fr;
+}

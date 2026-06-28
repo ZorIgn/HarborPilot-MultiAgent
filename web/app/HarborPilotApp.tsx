@@ -34,6 +34,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import {
   configureLLM,
+  getAgentSystemReport,
   getEvidenceGraphSummary,
   getProgramDataPackage,
   getHealth,
@@ -50,6 +51,7 @@ import {
 } from "@/lib/api";
 import { demoPayload } from "@/lib/demoPayload";
 import type {
+  AgentSystemReport,
   AgentTrace,
   ApplicantPayload,
   CatalogProgram,
@@ -183,6 +185,7 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
   const [catalog, setCatalog] = useState<CatalogProgram[]>([]);
   const [sourceRegistry, setSourceRegistry] = useState<SourceRegistry | null>(null);
   const [evidenceGraph, setEvidenceGraph] = useState<EvidenceGraphSummary | null>(null);
+  const [agentSystem, setAgentSystem] = useState<AgentSystemReport | null>(null);
   const [questionnaireSchema, setQuestionnaireSchema] = useState<QuestionnaireSchema | null>(null);
   const [questionnaireValues, setQuestionnaireValues] = useState<QuestionnaireValues>({});
   const [selectedProgramIds, setSelectedProgramIds] = useState<string[]>([]);
@@ -212,6 +215,7 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
     getPrograms({ limit: 180 }).then(setCatalog).catch(() => setCatalog([]));
     getSourceRegistry().then(setSourceRegistry).catch(() => setSourceRegistry(null));
     getEvidenceGraphSummary().then(setEvidenceGraph).catch(() => setEvidenceGraph(null));
+    getAgentSystemReport().then(setAgentSystem).catch(() => setAgentSystem(null));
     getQuestionnaireSchema().then(setQuestionnaireSchema).catch(() => setQuestionnaireSchema(null));
   }, []);
 
@@ -540,7 +544,7 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
           ) : null}
 
           {view === "agent" ? (
-            <DataCenterView evidenceGraph={evidenceGraph} sourceRegistry={sourceRegistry} sourceRefresh={result?.source_refresh ?? null} onRefresh={() => refreshSources(false)} onLiveRefresh={() => refreshSources(true)} loading={loading} />
+            <DataCenterView evidenceGraph={evidenceGraph} agentSystem={agentSystem} sourceRegistry={sourceRegistry} sourceRefresh={result?.source_refresh ?? null} onRefresh={() => refreshSources(false)} onLiveRefresh={() => refreshSources(true)} loading={loading} />
           ) : null}
 
           {view === "settings" ? (
@@ -1001,7 +1005,7 @@ function WritingView({
   );
 }
 
-function DataCenterView({ evidenceGraph, sourceRegistry, sourceRefresh, onRefresh, onLiveRefresh, loading }: { evidenceGraph: EvidenceGraphSummary | null; sourceRegistry: SourceRegistry | null; sourceRefresh: DataRefreshReport | null; onRefresh: () => void; onLiveRefresh: () => void; loading: StageLoading }) {
+function DataCenterView({ evidenceGraph, agentSystem, sourceRegistry, sourceRefresh, onRefresh, onLiveRefresh, loading }: { evidenceGraph: EvidenceGraphSummary | null; agentSystem: AgentSystemReport | null; sourceRegistry: SourceRegistry | null; sourceRefresh: DataRefreshReport | null; onRefresh: () => void; onLiveRefresh: () => void; loading: StageLoading }) {
   return (
     <div className="page-stack">
       <IslandCard className="panel-card" color="app-yellow">
@@ -1022,6 +1026,7 @@ function DataCenterView({ evidenceGraph, sourceRegistry, sourceRefresh, onRefres
         <Metric label="信息记录" value={`${evidenceGraph?.field_record_count ?? 0}`} detail="逐项绑定来源" />
         <Metric label="本季已确认" value={`${evidenceGraph?.verified_field_count ?? 0}`} detail="正式推荐依赖此指标" />
         <Metric label="待确认信息" value={`${evidenceGraph?.pending_review_field_count ?? 0}`} detail="需要查看学校原文" />
+        <Metric label="Agent 契约" value={`${agentSystem?.agents.length ?? 0}`} detail={`${agentSystem?.workflows.length ?? 0} 条工作流`} />
       </section>
       <section className="two-column">
         <IslandCard className="panel-card">
@@ -1037,6 +1042,7 @@ function DataCenterView({ evidenceGraph, sourceRegistry, sourceRefresh, onRefres
         className="animal-tabs"
         defaultActiveKey="records"
         items={[
+          { key: "agents", label: "Agent 契约", children: <AgentContractPanel report={agentSystem} /> },
           { key: "records", label: "来源证据", children: <EvidenceRecordList records={evidenceGraph?.sample_records ?? []} /> },
           { key: "sources", label: "来源注册表", children: <SourceRegistryList registry={sourceRegistry} /> },
           { key: "refresh", label: "本次检查", children: <SourceRefreshSummary report={sourceRefresh} evidenceGraph={evidenceGraph} /> },
@@ -1443,6 +1449,60 @@ function ProgramMiniList({ matches }: { matches: ProgramMatch[] }) {
   );
 }
 
+function AgentContractPanel({ report }: { report: AgentSystemReport | null }) {
+  if (!report) return <EmptyState text="Agent 契约正在读取，或后端尚未返回契约报告。" />;
+  const failedChecks = report.checks.filter((check) => !check.passed);
+  return (
+    <div className="agent-contract-panel">
+      <section className="status-grid">
+        <Metric label="Agent 数" value={`${report.agents.length}`} detail="每个节点有职责和输入输出" />
+        <Metric label="工作流" value={`${report.workflows.length}`} detail="按业务阶段编排" />
+        <Metric label="人工门禁" value={`${report.human_gates.length}`} detail="不让未确认信息自动发布" />
+        <Metric label="契约检查" value={failedChecks.length ? `${failedChecks.length} 未通过` : "全部通过"} detail="注册表自检" />
+      </section>
+      {failedChecks.length ? <AdviceList title="需要修复" items={failedChecks.map((check) => `${check.check_id}: ${check.detail}`)} /> : null}
+      <section className="two-column">
+        <IslandCard className="panel-card">
+          <PanelTitle icon={<ListChecks size={18} aria-hidden />} title="工作流契约" />
+          <div className="workflow-list">
+            {report.workflows.map((workflow) => (
+              <article key={workflow.workflow_name}>
+                <strong>{workflow.workflow_name}</strong>
+                <p>{workflow.required_agents.join(" -> ")}</p>
+                <div className="task-meta">
+                  <span>终点：{workflow.terminal_agent ?? "待确认"}</span>
+                  <span>{workflow.human_gate_required ? "需要人工门禁" : "无需人工门禁"}</span>
+                </div>
+              </article>
+            ))}
+          </div>
+        </IslandCard>
+        <IslandCard className="panel-card" type="dashed">
+          <PanelTitle icon={<ShieldCheck size={18} aria-hidden />} title="确定性护栏" />
+          <div className="material-chips vertical">
+            {report.deterministic_guardrails.slice(0, 12).map((guardrail) => <span key={guardrail}>{guardrail}</span>)}
+          </div>
+        </IslandCard>
+      </section>
+      <div className="agent-contract-grid">
+        {report.agents.map((agent) => (
+          <article key={agent.agent_name}>
+            <div className="program-title-row"><strong>{agentLabel(agent.agent_name)}</strong><span className="tier-pill">{agent.agent_name}</span></div>
+            <p>{agent.responsibility}</p>
+            <div className="task-meta">
+              {agent.inputs.slice(0, 3).map((input) => <span key={input}>输入：{input}</span>)}
+              {agent.outputs.slice(0, 2).map((output) => <span key={output}>输出：{output}</span>)}
+            </div>
+            {agent.human_gate ? <small>{agent.human_gate}</small> : null}
+            <div className="material-chips">
+              {agent.tools.slice(0, 5).map((tool) => <span key={tool}>{tool}</span>)}
+            </div>
+          </article>
+        ))}
+      </div>
+    </div>
+  );
+}
 function SourceRefreshSummary({ report, evidenceGraph }: { report: DataRefreshReport | null; evidenceGraph?: EvidenceGraphSummary | null }) {
   if (!report) {
     return (
