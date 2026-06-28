@@ -37,6 +37,7 @@ import {
   getAgentSystemReport,
   getEvidenceGraphSummary,
   getProgramDataPackage,
+  getReviewQueue,
   getHealth,
   getPrograms,
   getQuestionnaireSchema,
@@ -45,6 +46,7 @@ import {
   runBackgroundStage,
   runCrawlQueue,
   runDataRefresh,
+  publishReviewItem,
   runProgramPlan,
   runWritingInterview,
   runWritingPlan,
@@ -67,6 +69,8 @@ import type {
   ProgramMatch,
   QuestionnaireResponse,
   QuestionnaireSchema,
+  ReviewPublishResponse,
+  ReviewQueueSummary,
   SourceRegistry,
   StoryCard,
   TimelineTask,
@@ -76,7 +80,7 @@ import type {
 } from "@/lib/types";
 
 type ViewMode = "home" | "assessment" | "programs" | "timeline" | "writing" | "agent" | "settings";
-type StageLoading = "background" | "programs" | "timeline" | "writing" | "interview" | "data" | "crawl" | "package" | "llm" | null;
+type StageLoading = "background" | "programs" | "timeline" | "writing" | "interview" | "data" | "crawl" | "review" | "package" | "llm" | null;
 type Provider = "mock" | "deepseek" | "openai" | "compatible";
 type DocumentType = "PS" | "SOP" | "CV" | "ESSAY" | "REFERENCE_PACKAGE";
 type QuestionnaireValues = Record<string, string>;
@@ -187,6 +191,8 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
   const [catalog, setCatalog] = useState<CatalogProgram[]>([]);
   const [sourceRegistry, setSourceRegistry] = useState<SourceRegistry | null>(null);
   const [crawlQueue, setCrawlQueue] = useState<CrawlQueueReport | null>(null);
+  const [reviewQueue, setReviewQueue] = useState<ReviewQueueSummary | null>(null);
+  const [reviewPublishResult, setReviewPublishResult] = useState<ReviewPublishResponse | null>(null);
   const [evidenceGraph, setEvidenceGraph] = useState<EvidenceGraphSummary | null>(null);
   const [agentSystem, setAgentSystem] = useState<AgentSystemReport | null>(null);
   const [questionnaireSchema, setQuestionnaireSchema] = useState<QuestionnaireSchema | null>(null);
@@ -360,6 +366,46 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
       setCrawlQueue(response);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Crawl queue generation failed");
+    } finally {
+      setLoading(null);
+    }
+  }
+
+
+  async function loadReviewQueue() {
+    setLoading("review");
+    setError(null);
+    try {
+      const response = await getReviewQueue({
+        limit: 80,
+      });
+      setReviewQueue(response);
+      setReviewPublishResult(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Review queue loading failed");
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function previewReviewDecision(reviewId: string, decision: "approve" | "reject") {
+    setLoading("review");
+    setError(null);
+    try {
+      const response = await publishReviewItem({
+        review_id: reviewId,
+        decision,
+        reviewer_id: "local_reviewer",
+        reviewer_note: decision === "approve" ? "Preview approval after checking the public official source." : "Preview rejection from review console.",
+        persist: false,
+      });
+      setReviewPublishResult(response);
+      setReviewQueue((previous) => previous ? {
+        ...previous,
+        items: previous.items.map((item) => item.review_id === response.item.review_id ? response.item : item),
+      } : previous);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Review decision preview failed");
     } finally {
       setLoading(null);
     }
@@ -571,10 +617,14 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
               sourceRegistry={sourceRegistry}
               sourceRefresh={result?.source_refresh ?? null}
               crawlQueue={crawlQueue}
+              reviewQueue={reviewQueue}
+              reviewPublishResult={reviewPublishResult}
               selectedProgramCount={selectedProgramIds.length}
               onRefresh={() => refreshSources(false)}
               onLiveRefresh={() => refreshSources(true)}
               onBuildCrawlQueue={buildCrawlQueue}
+              onLoadReviewQueue={loadReviewQueue}
+              onPreviewReviewDecision={previewReviewDecision}
               loading={loading}
             />
           ) : null}
@@ -692,6 +742,10 @@ function GlobalProgress({ stage }: { stage: StageLoading }) {
     crawl: {
       title: "Building public crawl queue",
       steps: ["Group official and community sources", "Apply robots and snapshot gates", "Mark parser and review requirements", "Keep community data reference-only"],
+    },
+    review: {
+      title: "Loading human review gate",
+      steps: ["Read candidate official fields", "Check source URL and page hash", "Separate publishable from blocked items", "Preview reviewer decision without persistence"],
     },
     package: {
       title: "正在加载项目数据包",
@@ -1042,7 +1096,7 @@ function WritingView({
   );
 }
 
-function DataCenterView({ evidenceGraph, agentSystem, sourceRegistry, sourceRefresh, crawlQueue, selectedProgramCount, onRefresh, onLiveRefresh, onBuildCrawlQueue, loading }: { evidenceGraph: EvidenceGraphSummary | null; agentSystem: AgentSystemReport | null; sourceRegistry: SourceRegistry | null; sourceRefresh: DataRefreshReport | null; crawlQueue: CrawlQueueReport | null; selectedProgramCount: number; onRefresh: () => void; onLiveRefresh: () => void; onBuildCrawlQueue: () => void; loading: StageLoading }) {
+function DataCenterView({ evidenceGraph, agentSystem, sourceRegistry, sourceRefresh, crawlQueue, reviewQueue, reviewPublishResult, selectedProgramCount, onRefresh, onLiveRefresh, onBuildCrawlQueue, onLoadReviewQueue, onPreviewReviewDecision, loading }: { evidenceGraph: EvidenceGraphSummary | null; agentSystem: AgentSystemReport | null; sourceRegistry: SourceRegistry | null; sourceRefresh: DataRefreshReport | null; crawlQueue: CrawlQueueReport | null; reviewQueue: ReviewQueueSummary | null; reviewPublishResult: ReviewPublishResponse | null; selectedProgramCount: number; onRefresh: () => void; onLiveRefresh: () => void; onBuildCrawlQueue: () => void; onLoadReviewQueue: () => void; onPreviewReviewDecision: (reviewId: string, decision: "approve" | "reject") => void; loading: StageLoading }) {
   return (
     <div className="page-stack">
       <IslandCard className="panel-card" color="app-yellow">
@@ -1054,6 +1108,7 @@ function DataCenterView({ evidenceGraph, agentSystem, sourceRegistry, sourceRefr
           </div>
           <div className="card-actions">
             <IslandButton type="default" loading={loading === "crawl"} onClick={onBuildCrawlQueue}>Build crawl queue</IslandButton>
+            <IslandButton type="default" loading={loading === "review"} onClick={onLoadReviewQueue}>Load review queue</IslandButton>
             <IslandButton type="default" loading={loading === "data"} onClick={onRefresh}>Check school sources</IslandButton>
             <IslandButton type="primary" loading={loading === "data"} onClick={onLiveRefresh}>{loading === "data" ? "Fetching" : "Fetch official snapshots"}</IslandButton>
           </div>
@@ -1066,6 +1121,7 @@ function DataCenterView({ evidenceGraph, agentSystem, sourceRegistry, sourceRefr
         <Metric label="待确认信息" value={`${evidenceGraph?.pending_review_field_count ?? 0}`} detail="需要查看学校原文" />
         <Metric label="Agent 契约" value={`${agentSystem?.agents.length ?? 0}`} detail={`${agentSystem?.workflows.length ?? 0} 条工作流`} />
         <Metric label="Crawl queue" value={`${crawlQueue?.job_count ?? 0}`} detail={crawlQueue ? `${crawlQueue.official_job_count} official / ${crawlQueue.community_job_count} community` : `${selectedProgramCount} selected programs`} />
+        <Metric label="Review queue" value={`${reviewQueue?.pending_count ?? 0}`} detail={reviewQueue ? `${reviewQueue.publishable_count} publishable candidates` : "human gate not loaded"} />
       </section>
       <section className="two-column">
         <IslandCard className="panel-card">
@@ -1087,6 +1143,7 @@ function DataCenterView({ evidenceGraph, agentSystem, sourceRegistry, sourceRefr
           { key: "refresh", label: "本次检查", children: <SourceRefreshSummary report={sourceRefresh} evidenceGraph={evidenceGraph} /> },
           { key: "extract", label: "抽取结果", children: <ExtractionResultList report={sourceRefresh} /> },
           { key: "crawl", label: "Crawl queue", children: <CrawlQueuePanel report={crawlQueue} /> },
+          { key: "review", label: "Review queue", children: <ReviewQueuePanel report={reviewQueue} publishResult={reviewPublishResult} loading={loading === "review"} onLoad={onLoadReviewQueue} onDecision={onPreviewReviewDecision} /> },
         ]}
       />
     </div>
@@ -1543,6 +1600,67 @@ function AgentContractPanel({ report }: { report: AgentSystemReport | null }) {
     </div>
   );
 }
+function ReviewQueuePanel({ report, publishResult, loading, onLoad, onDecision }: { report: ReviewQueueSummary | null; publishResult: ReviewPublishResponse | null; loading: boolean; onLoad: () => void; onDecision: (reviewId: string, decision: "approve" | "reject") => void }) {
+  if (!report) {
+    return (
+      <div className="source-report review-queue-panel">
+        <p>The human review queue is not loaded yet. Load it to inspect official-source candidate fields before any requirement can become OFFICIAL_VERIFIED_CURRENT.</p>
+        <IslandButton type="default" loading={loading} onClick={onLoad}>Load review queue</IslandButton>
+      </div>
+    );
+  }
+  return (
+    <div className="source-report review-queue-panel">
+      <section className="status-grid three">
+        <Metric label="Pending" value={`${report.pending_count}`} detail="candidate fields waiting for review" />
+        <Metric label="Publishable" value={`${report.publishable_count}`} detail="official source, snippet, and page hash present" />
+        <Metric label="Loaded" value={`${report.items.length}`} detail="items shown in this console" />
+      </section>
+      {publishResult ? (
+        <div className={`review-result ${publishResult.ok ? "ok" : "blocked"}`}>
+          <strong>{publishResult.item.status}</strong>
+          <p>{publishResult.message}</p>
+          {publishResult.published_record ? <span>Preview status: {publishResult.published_record.status}</span> : null}
+        </div>
+      ) : null}
+      <div className="review-queue-list">
+        {report.items.slice(0, 24).map((item) => (
+          <article className={`review-queue-item ${item.publishable ? "publishable" : "blocked"}`} key={item.review_id}>
+            <div className="program-title-row">
+              <strong>{fieldLabels[item.field_name] ?? item.field_name}</strong>
+              <span className="tier-pill">{item.publishable ? "publishable" : "blocked"}</span>
+            </div>
+            <p>{item.boundary}</p>
+            <div className="task-meta">
+              <span>{item.program_id}</span>
+              <span>{item.source_type}</span>
+              <span>{item.confidence}</span>
+              <span>priority {item.source_priority}</span>
+              <span>{item.page_hash ? "page hash present" : "missing page hash"}</span>
+            </div>
+            <div className="field-grid compact">
+              <div>
+                <strong>Proposed value</strong>
+                <p>{item.proposed_value ?? "No value proposed"}</p>
+              </div>
+              <div>
+                <strong>Evidence snippet</strong>
+                <p>{item.evidence_snippet ?? "No snippet captured"}</p>
+              </div>
+            </div>
+            <div className="review-actions">
+              {item.source_url ? <a className="text-link" href={item.source_url} target="_blank" rel="noreferrer">Open official source</a> : <span>No source URL</span>}
+              {item.snapshot_url ? <a className="text-link" href={item.snapshot_url} target="_blank" rel="noreferrer">Open snapshot</a> : null}
+              <IslandButton type="default" size="small" loading={loading} onClick={() => onDecision(item.review_id, "reject")}>Preview reject</IslandButton>
+              <IslandButton type="primary" size="small" loading={loading} disabled={!item.publishable} onClick={() => onDecision(item.review_id, "approve")}>Preview approve</IslandButton>
+            </div>
+          </article>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function CrawlQueuePanel({ report }: { report: CrawlQueueReport | null }) {
   if (!report) {
     return (
