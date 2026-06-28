@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from harbor_agent.services.agent_registry import validate_trace
+
 from scripts.run_scenario_audit import run_audit
 
 
@@ -18,3 +20,6 @@ def test_scenario_audit_quality_gates_pass() -> None:
             assert program_id in recommendation_ids
             assert program_id in package_ids
             assert result.review_queues[program_id].pending_count >= 1
+        trace_checks = validate_trace("scenario_audit", result.audit_trace)
+        assert all(check.passed for check in trace_checks), [check.model_dump() for check in trace_checks]
+        assert result.audit_trace[-1].node == "ScenarioAuditAgent"
