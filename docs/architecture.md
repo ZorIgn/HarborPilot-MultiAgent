@@ -26,7 +26,7 @@ flowchart LR
   Orchestrator --> Profile["Profile Agent"]
   Orchestrator --> Evidence["Evidence Agent"]
   Orchestrator --> Eval["Evaluation Agent"]
-  Orchestrator --> Research["Program Research Agent"]
+  Orchestrator --> Research["Program Intelligence Agent"]
   Orchestrator --> Match["School Matching Agent"]
   Orchestrator --> Timeline["Timeline Agent"]
   Orchestrator --> Writing["Writing Agent"]
@@ -45,11 +45,11 @@ Each Agent has a narrow responsibility:
 - `ProfileAgent`: standardizes form input and maps discipline tags.
 - `EvidenceAgent`: computes confirmed/verified fact readiness and upload recommendations.
 - `EvaluationAgent`: explains deterministic assessment results; it does not invent hard rules.
-- `ProgramResearchAgent`: recalls current-cycle HK/SG programs with official-source links and field coverage metadata.
+- `ProgramIntelligenceAgent`: recalls current-cycle HK/SG programs with official-source links and field coverage metadata.
 - `SchoolMatchingAgent`: ranks programs after eligibility checks.
 - `TimelineAgent`: generates deadline-based tasks.
 - `WritingAgent`: creates an outline and draft strategy from available facts.
-- `ReviewAgent`: blocks hard-rule violations and surfaces human gates.
+- `ReviewAgent`: blocks hard-rule violations and surfaces human gates.\n- `DataRefreshAgent`: checks official-source freshness, robots policy, snapshots, hashes, and field review queues.\n- `ProgramDataAcquisitionAgent`: builds reviewable programme data packages from official/public community sources.
 
 ## Data Boundary
 

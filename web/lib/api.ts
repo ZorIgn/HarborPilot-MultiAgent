@@ -1,4 +1,5 @@
 import type {
+  AgentSystemReport,
   ApplicantPayload,
   CatalogProgram,
   DataAcquisitionReport,
@@ -264,6 +265,13 @@ export async function publishReviewItem(payload: {
   });
   if (!response.ok) {
     throw new Error(`Review publish API returned ${response.status}`);
+  }
+  return response.json();
+}
+export async function getAgentSystemReport(): Promise<AgentSystemReport> {
+  const response = await fetch(`${API_BASE}/api/agent-system`, {cache: "no-store"});
+  if (!response.ok) {
+    throw new Error(`Agent system API returned ${response.status}`);
   }
   return response.json();
 }

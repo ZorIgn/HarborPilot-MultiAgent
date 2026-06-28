@@ -726,6 +726,37 @@ class StoryCard(BaseModel):
     completeness: int = Field(ge=0, le=100, default=0)
 
 
+class AgentContract(BaseModel):
+    agent_name: str
+    responsibility: str
+    inputs: list[str] = Field(default_factory=list)
+    outputs: list[str] = Field(default_factory=list)
+    tools: list[str] = Field(default_factory=list)
+    upstream_agents: list[str] = Field(default_factory=list)
+    human_gate: str | None = None
+    deterministic_guardrails: list[str] = Field(default_factory=list)
+
+
+class AgentWorkflowContract(BaseModel):
+    workflow_name: str
+    required_agents: list[str] = Field(default_factory=list)
+    terminal_agent: str | None = None
+    human_gate_required: bool = False
+
+
+class AgentContractCheck(BaseModel):
+    check_id: str
+    passed: bool
+    detail: str
+
+
+class AgentSystemReport(BaseModel):
+    generated_at: datetime
+    agents: list[AgentContract] = Field(default_factory=list)
+    workflows: list[AgentWorkflowContract] = Field(default_factory=list)
+    checks: list[AgentContractCheck] = Field(default_factory=list)
+    human_gates: list[str] = Field(default_factory=list)
+    deterministic_guardrails: list[str] = Field(default_factory=list)
 class AgentTraceEvent(BaseModel):
     node: str
     status: AgentStatus

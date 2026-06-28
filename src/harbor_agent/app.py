@@ -8,6 +8,7 @@ from harbor_agent.agents.orchestrator import WorkflowOrchestrator
 from harbor_agent.config import get_settings
 from harbor_agent.core.llm import MockLLMProvider, OpenAICompatibleLLMProvider, build_llm_provider
 from harbor_agent.models import (
+    AgentSystemReport,
     ApplicantProfileInput,
     ApplicationPlanResult,
     DataAcquisitionReport,
@@ -34,6 +35,7 @@ from harbor_agent.models import (
 from harbor_agent.services.evidence_graph import build_evidence_graph_summary, build_program_trust_detail
 from harbor_agent.services.external_candidates import load_qs_master_applications_import
 from harbor_agent.services.review_gate import build_review_queue, publish_review_item
+from harbor_agent.services.agent_registry import build_agent_system_report
 from harbor_agent.services.data_loader import (
     load_community_sources,
     load_form_definition,
@@ -205,6 +207,10 @@ def qs_master_applications_candidates() -> dict:
 @app.get("/api/evidence-graph/summary", response_model=EvidenceGraphSummary)
 def evidence_graph_summary() -> EvidenceGraphSummary:
     return build_evidence_graph_summary()
+
+@app.get("/api/agent-system", response_model=AgentSystemReport)
+def agent_system_report() -> AgentSystemReport:
+    return build_agent_system_report()
 
 
 @app.get("/api/programs")

@@ -308,7 +308,7 @@ class WorkflowOrchestrator:
         with trace.span(
             "SchoolMatchingAgent",
             f"{len(candidates)} candidates",
-            tool_calls=["rules.check_program_eligibility", "matching_score_service"],
+            tool_calls=["rules.check_program_eligibility", "matching_score_service", "unverified_data_gate"],
         ) as span:
             matches = self.matching_agent.run(profile, assessment, candidates)
             span["output_summary"] = (

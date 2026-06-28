@@ -48,3 +48,7 @@ python scripts/run_real_agent_smoke.py
 ```
 
 The web UI can also configure DeepSeek, OpenAI, or another OpenAI-compatible endpoint after startup. The LLM is only used for explanation and drafting. GPA, language requirements, prerequisites, and unpublished-field gates are deterministic.
+
+## Agent Contract Health
+
+GET /api/agent-system returns the registered agent contracts, workflow contracts, deterministic guardrails, and contract checks. Tests validate that runtime traces satisfy the registered workflow order and human-gate requirements.

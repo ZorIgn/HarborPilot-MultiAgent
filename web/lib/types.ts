@@ -1,3 +1,35 @@
+export type AgentContract = {
+  agent_name: string;
+  responsibility: string;
+  inputs: string[];
+  outputs: string[];
+  tools: string[];
+  upstream_agents: string[];
+  human_gate: string | null;
+  deterministic_guardrails: string[];
+};
+
+export type AgentWorkflowContract = {
+  workflow_name: string;
+  required_agents: string[];
+  terminal_agent: string | null;
+  human_gate_required: boolean;
+};
+
+export type AgentContractCheck = {
+  check_id: string;
+  passed: boolean;
+  detail: string;
+};
+
+export type AgentSystemReport = {
+  generated_at: string;
+  agents: AgentContract[];
+  workflows: AgentWorkflowContract[];
+  checks: AgentContractCheck[];
+  human_gates: string[];
+  deterministic_guardrails: string[];
+};
 export type EvidenceLevel =
   | "SELF_REPORTED"
   | "USER_CONFIRMED"
