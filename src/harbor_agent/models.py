@@ -353,6 +353,17 @@ class ProgramExperienceSignal(BaseModel):
     use_boundary: str = "社区经验只用于准备参考，不能替代学校官方要求。"
 
 
+class ProgramDataCoverageItem(BaseModel):
+    field_name: str
+    required_source: Literal["official", "community_reference"] = "official"
+    status: FieldVerificationStatus = FieldVerificationStatus.model_inferred
+    has_value: bool = False
+    source_url: HttpUrl | str | None = None
+    source_type: str | None = None
+    review_required: bool = True
+    blocks_formal_use: bool = True
+    next_action: str
+
 class ProgramDataPackage(BaseModel):
     program_id: str
     institution: str
@@ -363,6 +374,7 @@ class ProgramDataPackage(BaseModel):
     production_ready: bool = False
     freshness_warning: str
     official_requirements: list[FieldEvidenceRecord] = Field(default_factory=list)
+    coverage_items: list[ProgramDataCoverageItem] = Field(default_factory=list)
     content_sections: list[ProgramContentSection] = Field(default_factory=list)
     essay_prompts: list[FieldEvidenceRecord] = Field(default_factory=list)
     timeline_fields: list[FieldEvidenceRecord] = Field(default_factory=list)

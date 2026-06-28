@@ -228,6 +228,12 @@ def test_program_data_package_exposes_official_and_community_acquisition_plan() 
 
     assert package["program_id"] == program_id
     assert package["official_requirements"]
+    assert package["coverage_items"]
+    coverage_by_field = {item["field_name"]: item for item in package["coverage_items"]}
+    assert {"deadline", "tuition_hkd", "language_requirement", "materials", "application_url", "essay_prompts"} <= set(coverage_by_field)
+    assert all(item["required_source"] == "official" for item in package["coverage_items"])
+    assert any(item["blocks_formal_use"] is True for item in package["coverage_items"])
+    assert all(item["next_action"] for item in package["coverage_items"])
     assert package["content_sections"]
     assert package["timeline_fields"]
     assert package["community_experiences"]

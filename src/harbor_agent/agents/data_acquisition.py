@@ -11,6 +11,7 @@ from harbor_agent.models import (
     FieldVerificationStatus,
     Program,
     ProgramContentSection,
+    ProgramDataCoverageItem,
     ProgramDataPackage,
     ProgramExperienceSignal,
     SourcePolicy,
@@ -21,14 +22,15 @@ from harbor_agent.services.evidence_graph import build_program_trust_detail
 from harbor_agent.agents.data_refresh import _source_ids_for_programs
 
 
-OFFICIAL_REQUIREMENT_FIELDS = {
+OFFICIAL_REQUIREMENT_FIELD_ORDER = [
     "deadline",
     "tuition_hkd",
     "language_requirement",
     "materials",
     "application_url",
     "essay_prompts",
-}
+]
+OFFICIAL_REQUIREMENT_FIELDS = set(OFFICIAL_REQUIREMENT_FIELD_ORDER)
 TIMELINE_FIELDS = {"deadline", "application_url", "essay_prompts"}
 
 
@@ -116,6 +118,7 @@ def _build_package(
         production_ready=trust.production_ready,
         freshness_warning=trust.source_warning,
         official_requirements=official_requirements,
+        coverage_items=_coverage_items(records),
         content_sections=_content_sections(program, records),
         essay_prompts=essay_prompts,
         timeline_fields=timeline_fields,
@@ -123,6 +126,51 @@ def _build_package(
         acquisition_plan=acquisition_plan,
         human_review_required=True,
     )
+
+
+def _coverage_items(records: list[FieldEvidenceRecord]) -> list[ProgramDataCoverageItem]:
+    by_field = {record.field_name: record for record in records}
+    items: list[ProgramDataCoverageItem] = []
+    for field_name in OFFICIAL_REQUIREMENT_FIELD_ORDER:
+        record = by_field.get(field_name)
+        status = record.status if record else FieldVerificationStatus.not_published
+        has_value = bool(record and record.value and record.value != "NOT_PUBLISHED")
+        verified = status == FieldVerificationStatus.official_verified_current and bool(record) and not record.review_required
+        items.append(
+            ProgramDataCoverageItem(
+                field_name=field_name,
+                required_source="official",
+                status=status,
+                has_value=has_value,
+                source_url=record.source_url if record else None,
+                source_type=record.source_type if record else None,
+                review_required=True if record is None else record.review_required,
+                blocks_formal_use=not verified,
+                next_action=_coverage_next_action(field_name, record, verified),
+            )
+        )
+    return items
+
+
+def _coverage_next_action(field_name: str, record: FieldEvidenceRecord | None, verified: bool) -> str:
+    labels = {
+        "deadline": "deadline",
+        "tuition_hkd": "tuition",
+        "language_requirement": "language requirement",
+        "materials": "materials list",
+        "application_url": "application URL",
+        "essay_prompts": "essay prompts",
+    }
+    label = labels.get(field_name, field_name)
+    if verified:
+        return f"Use the reviewed official {label} as current-cycle evidence."
+    if record is None or not record.value or record.value == "NOT_PUBLISHED":
+        return f"Find the current-cycle official {label} on the school programme page, PDF/FAQ, or application system."
+    if record.status == FieldVerificationStatus.official_previous_cycle:
+        return f"Treat the current {label} as previous-cycle/reference evidence until a reviewer checks the original school source."
+    if record.status == FieldVerificationStatus.conflicted:
+        return f"Resolve conflicting {label} evidence against the official school source before student-facing use."
+    return f"Review the original official source before using the {label} in formal planning."
 
 
 def _official_source_plans(program: Program, registry_sources: list[SourcePolicy]) -> list[AcquisitionSourcePlan]:
