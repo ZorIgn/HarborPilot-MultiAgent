@@ -10,7 +10,13 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from harbor_agent.agents.orchestrator import WorkflowOrchestrator
 from harbor_agent.core.llm import MockLLMProvider
-from harbor_agent.models import ApplicantProfileInput, ApplicationPlanResult, ProgramPlanResult
+from harbor_agent.models import (
+    ApplicantProfileInput,
+    ApplicationPlanResult,
+    CrawlQueueReport,
+    CrawlQueueRequest,
+    ProgramPlanResult,
+)
 
 
 BASE_PROFILE = ROOT / "examples" / "sample_profile.json"
@@ -49,6 +55,7 @@ class ScenarioAuditResult:
     case: ScenarioCase
     plan: ProgramPlanResult
     application: ApplicationPlanResult
+    crawl_queue: CrawlQueueReport
     failures: list[str]
 
 
@@ -124,14 +131,24 @@ def audit_case(orchestrator: WorkflowOrchestrator, case: ScenarioCase) -> Scenar
     plan = orchestrator.run_program_plan_stage(payload)
     selected_ids = [item.program.id for item in plan.application_mix[:2]]
     application = orchestrator.run_application_plan_stage(payload, selected_ids)
-    failures = _quality_failures(case, plan, application)
-    return ScenarioAuditResult(case=case, plan=plan, application=application, failures=failures)
+    crawl_queue = orchestrator.run_crawl_queue_stage(
+        CrawlQueueRequest(selected_program_ids=selected_ids, include_community=True, max_sources_per_program=8)
+    )
+    failures = _quality_failures(case, plan, application, crawl_queue)
+    return ScenarioAuditResult(
+        case=case,
+        plan=plan,
+        application=application,
+        crawl_queue=crawl_queue,
+        failures=failures,
+    )
 
 
 def _quality_failures(
     case: ScenarioCase,
     plan: ProgramPlanResult,
     application: ApplicationPlanResult,
+    crawl_queue: CrawlQueueReport,
 ) -> list[str]:
     failures: list[str] = []
     if plan.intent_profile is None:
@@ -190,6 +207,27 @@ def _quality_failures(
     if trace_nodes[: len(required_trace)] != required_trace:
         failures.append(f"unexpected plan agent trace: {trace_nodes}")
 
+    if crawl_queue.job_count == 0:
+        failures.append("crawl queue is empty for selected programs")
+    if crawl_queue.official_job_count == 0:
+        failures.append("crawl queue has no official-source jobs")
+    if crawl_queue.community_job_count == 0:
+        failures.append("crawl queue has no community-reference jobs")
+    if not all(item.snapshot_required and item.human_review_required for item in crawl_queue.items):
+        failures.append("crawl queue contains jobs without snapshot or human-review gates")
+
+    official_only = {"deadline", "tuition_hkd", "language_requirement", "materials", "application_url", "essay_prompts"}
+    community_leaks = [
+        item.source_id
+        for item in crawl_queue.items
+        if item.trust_level == "community" and official_only & set(item.allowed_fields)
+    ]
+    if community_leaks:
+        failures.append(f"community crawl jobs can emit official fields: {community_leaks}")
+
+    if "SourceCrawlQueueAgent" not in crawl_queue.agent_chain:
+        failures.append(f"crawl queue agent chain missing SourceCrawlQueueAgent: {crawl_queue.agent_chain}")
+
     return failures
 
 
@@ -224,6 +262,12 @@ def print_result(result: ScenarioAuditResult) -> None:
         f"tasks={len(application.timeline)}; "
         f"official_backplan={len(official_backplan)}; "
         f"review_passed={application.review.get('passed')}"
+    )
+    print(
+        "crawl_queue: "
+        f"jobs={result.crawl_queue.job_count}; "
+        f"official={result.crawl_queue.official_job_count}; "
+        f"community={result.crawl_queue.community_job_count}"
     )
     print("agents: " + " -> ".join(event.node for event in plan.trace))
     if result.failures:
