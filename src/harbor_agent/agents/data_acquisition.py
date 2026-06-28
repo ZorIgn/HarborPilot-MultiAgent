@@ -61,14 +61,14 @@ class ProgramDataAcquisitionAgent:
             packages=packages,
             source_plan=source_plan,
             summary=(
-                f"生成 {len(packages)} 个项目数据包，包含 {missing_official} 条官方字段证据/待审核字段，"
+                f"生成 {len(packages)} 个项目数据包，包含 {missing_official} 条官方字段证据或待审核字段，"
                 f"{community_count} 条公开社区经验或搜索计划。"
             ),
             next_actions=[
-                "先按 source_plan 抓取官方项目页、PDF/FAQ 和申请系统入口，保存快照与 hash。",
-                "官方字段经人工审核后才能发布为 OFFICIAL_VERIFIED_CURRENT。",
-                "社区经验只保留短摘录、链接和经验标签，不覆盖 deadline、学费、语言或材料要求。",
-                "对每个项目详情页展示字段来源、申请季、抓取时间、审核状态和社区经验边界。",
+                "先按 source_plan 抓取官方项目页、PDF/FAQ 和申请系统入口，保存快照与 page hash。",
+                "官方字段经人工审核后，才能发布为 OFFICIAL_VERIFIED_CURRENT。",
+                "社区经验只保留短摘要、链接、发布时间、抓取时间和经验标签，不能覆盖 deadline、学费、语言或材料要求。",
+                "每个项目详情页都要展示字段来源、申请季、抓取时间、审核状态和社区经验边界。",
             ],
             agent_chain=[
                 "SourceDiscoveryAgent",
@@ -152,7 +152,7 @@ def _official_source_plans(program: Program, registry_sources: list[SourcePolicy
                 rate_limit="queued_low_rate_fetch_with_snapshot_cache",
                 requires_human_review=True,
                 next_actions=[
-                    "抓取官方项目页/目录页并保存 HTML/PDF 快照。",
+                    "抓取官方项目页或目录页，并保存 HTML/PDF 快照。",
                     "抽取字段后逐项绑定原文片段、申请季和 page_hash。",
                 ],
             )
@@ -167,7 +167,7 @@ def _official_source_plans(program: Program, registry_sources: list[SourcePolicy
                 trust_level=SourceTrustLevel.official,
                 allowed_fields=["deadline", "tuition_hkd", "language_requirement", "materials", "essay_prompts", "application_url"],
                 crawler_method="direct programme page snapshot and field parser",
-                next_actions=["打开项目页确认是否为当前申请季。"],
+                next_actions=["打开项目页，确认是否已经发布当前申请季要求。"],
             )
         )
     return plans
@@ -190,7 +190,7 @@ def _community_source_plans(config: dict, program: Program) -> list[AcquisitionS
                 requires_human_review=True,
                 next_actions=[
                     f"搜索：{_community_query(program, source.get('source_id'))}",
-                    "只保存公开短摘录、URL、发布时间/抓取时间和经验标签。",
+                    "只保存公开短摘要、URL、发布时间、抓取时间和经验标签。",
                 ],
             )
         )
@@ -205,12 +205,12 @@ def _content_sections(program: Program, records: list[FieldEvidenceRecord]) -> l
             section_id="overview",
             title="项目概览",
             summary=(
-                f"{program.institution_zh or program.institution} {program.name_zh or program.name}，"
+                f"{program.institution_zh or program.institution} {program.name_zh or program.name}："
                 f"学制约 {program.duration_months} 个月，方向标签：{', '.join(program.discipline_tags[:5]) or '待确认'}。"
             ),
             source_status=status,
             source_url=source_url,
-            evidence_snippet="项目名称、院校和学制来自项目库；正式展示需绑定学校官网当前申请季页面。",
+            evidence_snippet="项目名称、院校和学制来自项目库；正式展示需要绑定学校官网当前申请季页面。",
         ),
         ProgramContentSection(
             section_id="requirements_background",
