@@ -27,9 +27,11 @@ def test_agent_system_registry_contracts_are_complete() -> None:
     assert "ProgramIntelligenceAgent" in agent_names
     assert "ProgramDataAcquisitionAgent" in agent_names
     assert "SourceCrawlQueueAgent" in agent_names
+    assert "ScenarioAuditAgent" in agent_names
     assert "ProgramResearchAgent" not in agent_names
     assert any(workflow.workflow_name == "assessment" for workflow in report.workflows)
     assert any(workflow.workflow_name == "crawl_queue" for workflow in report.workflows)
+    assert any(workflow.workflow_name == "scenario_audit" for workflow in report.workflows)
     assert any("Unverified" in guardrail or "unverified" in guardrail for guardrail in report.deterministic_guardrails)
     assert len(report.human_gates) >= 5
 
@@ -44,6 +46,7 @@ def test_agent_system_api_exposes_contracts() -> None:
     assert data["workflows"]
     assert all(check["passed"] for check in data["checks"])
     assert any(agent["agent_name"] == "ReviewAgent" for agent in data["agents"])
+    assert any(agent["agent_name"] == "ScenarioAuditAgent" for agent in data["agents"])
 
 
 def test_runtime_traces_satisfy_registered_workflow_contracts() -> None:

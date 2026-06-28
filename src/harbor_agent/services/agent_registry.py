@@ -115,6 +115,21 @@ AGENT_CONTRACTS: list[AgentContract] = [
         human_gate="Sentence-level fact verification before export",
         deterministic_guardrails=["Unsupported claims become review flags"],
     ),
+
+    AgentContract(
+        agent_name="ScenarioAuditAgent",
+        responsibility="Run simulated applicant and target-program drilldown audits that fail on unreasonable recommendations, missing evidence gates, or source-boundary leaks.",
+        inputs=["ProgramPlanResult", "ApplicationPlanResult", "CrawlQueueReport", "DataAcquisitionReport", "ReviewQueueSummary"],
+        outputs=["ScenarioAuditReport"],
+        tools=["scenario_matrix", "target_program_drilldown", "data_trust_gate", "agent_trace_gate"],
+        upstream_agents=["SchoolMatchingAgent", "ProgramDataAcquisitionAgent", "SourceCrawlQueueAgent", "ReviewAgent"],
+        human_gate="Failed audit findings must be reviewed before demo claims are treated as product behavior.",
+        deterministic_guardrails=[
+            "Target-program drilldowns must include data packages and review queues",
+            "Scenario audits fail when unverified fields become formal recommendations",
+            "Community sources cannot leak official requirement fields",
+        ],
+    ),
     AgentContract(
         agent_name="ReviewAgent",
         responsibility="Final gate for hard-rule violations, unverified programme data, timeline gates, and writing risks.",
@@ -187,6 +202,23 @@ WORKFLOW_CONTRACTS: list[AgentWorkflowContract] = [
         human_gate_required=True,
     ),
 
+
+    AgentWorkflowContract(
+        workflow_name="scenario_audit",
+        required_agents=[
+            "ProfileAgent",
+            "EvidenceAgent",
+            "EvaluationAgent",
+            "ProgramIntelligenceAgent",
+            "SchoolMatchingAgent",
+            "ProgramDataAcquisitionAgent",
+            "SourceCrawlQueueAgent",
+            "ReviewAgent",
+            "ScenarioAuditAgent",
+        ],
+        terminal_agent="ScenarioAuditAgent",
+        human_gate_required=True,
+    ),
     AgentWorkflowContract(
         workflow_name="crawl_queue",
         required_agents=["ProgramDataAcquisitionAgent", "SourceCrawlQueueAgent"],
@@ -265,6 +297,7 @@ def _contract_checks() -> list[AgentContractCheck]:
         "StoryCardAgent": "story_card.py",
         "WritingAgent": "writing.py",
         "ReviewAgent": "review.py",
+        "ScenarioAuditAgent": "scenario_audit.py",
     }
     checks = [
         AgentContractCheck(
