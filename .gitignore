@@ -20,3 +20,5 @@ web/.env.local
 Thumbs.db
 *.log
 web_min_build/
+
+data/reviewed_field_evidence.local.json

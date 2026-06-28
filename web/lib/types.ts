@@ -71,8 +71,14 @@ export type SourceCheckResult = {
   status: "SKIPPED_DRY_RUN" | "FETCH_OK" | "FETCH_FAILED" | "REVIEW_REQUIRED";
   checked_at: string;
   http_status: number | null;
+  robots_txt_url?: string | null;
+  robots_allowed?: boolean | null;
+  robots_status?: "NOT_CHECKED" | "SKIPPED_DRY_RUN" | "ALLOWED" | "DISALLOWED" | "ROBOTS_NOT_FOUND" | "ROBOTS_UNAVAILABLE";
   page_hash?: string | null;
+  previous_page_hash?: string | null;
+  content_changed?: boolean | null;
   snapshot_path?: string | null;
+  snapshot_mime?: string | null;
   content_bytes?: number;
   summary: string;
   changed_fields: string[];
@@ -180,6 +186,42 @@ export type DataAcquisitionReport = {
   agent_chain: string[];
 };
 
+export type ReviewQueueItem = {
+  review_id: string;
+  program_id: string;
+  field_name: string;
+  proposed_value: string | null;
+  cycle: string | null;
+  source_url: string | null;
+  source_type: string;
+  evidence_snippet: string | null;
+  page_hash: string | null;
+  snapshot_url?: string | null;
+  extracted_at: string | null;
+  confidence: "low" | "medium" | "high";
+  source_priority: number;
+  status: "PENDING" | "APPROVED" | "REJECTED";
+  reviewer_id: string | null;
+  reviewer_note: string | null;
+  reviewed_at: string | null;
+  publishable: boolean;
+  boundary: string;
+  agent_chain: string[];
+};
+
+export type ReviewQueueSummary = {
+  generated_at: string;
+  pending_count: number;
+  publishable_count: number;
+  items: ReviewQueueItem[];
+};
+
+export type ReviewPublishResponse = {
+  ok: boolean;
+  item: ReviewQueueItem;
+  published_record: FieldEvidenceRecord | null;
+  message: string;
+};
 export type DataRefreshReport = {
   run_id: string;
   mode: "dry_run" | "live_fetch";

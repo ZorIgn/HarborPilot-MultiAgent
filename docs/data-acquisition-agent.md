@@ -61,6 +61,8 @@
 GET  /api/programs/{program_id}/data-package
 POST /api/workflows/data-acquisition
 POST /api/workflows/data-refresh
+GET  /api/admin/review-queue
+POST /api/admin/review-queue/publish
 ```
 
 `ProgramDataPackage` 包含：
@@ -85,6 +87,17 @@ POST /api/workflows/data-refresh
 - `snapshot_path`
 - `snapshot_mime`
 
+
+## 人工发布门禁
+
+`GET /api/admin/review-queue` 会从字段级证据图生成待审核项。队列只接收官方公开来源候选，不把社区经验、模型推断或冲突字段列为可发布项。
+
+`POST /api/admin/review-queue/publish` 支持两种决策：
+
+- `decision="reject"`：记录审核拒绝，不生成官方字段。
+- `decision="approve"`：生成 `OFFICIAL_VERIFIED_CURRENT` 字段记录，记录 reviewer、审核时间、原文片段、快照和 agent chain。
+
+默认 `persist=false`，只返回预览发布记录，适合测试和后台审核预览。只有显式 `persist=true` 时，系统才写入 `data/reviewed_field_evidence.local.json`。该文件被 gitignore，避免把本地人工审核状态提交到代码仓库。
 ## 运行方式
 
 ```cmd

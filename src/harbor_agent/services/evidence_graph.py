@@ -5,6 +5,7 @@ from collections import Counter
 
 from harbor_agent.models import DataStatus, EvidenceGraphSummary, FieldEvidenceRecord, FieldVerificationStatus, Program, ProgramTrustDetail
 from harbor_agent.services.data_loader import load_programs, load_source_registry
+from harbor_agent.services.review_store import load_published_field_records
 
 
 PRODUCTION_FIELDS = [
@@ -69,10 +70,15 @@ def build_evidence_graph_summary(limit: int = 12) -> EvidenceGraphSummary:
 
 def build_field_evidence_records(programs: list[Program] | None = None) -> list[FieldEvidenceRecord]:
     programs = programs or load_programs()
+    program_ids = {program.id for program in programs}
     records: list[FieldEvidenceRecord] = []
     for program in programs:
         records.extend(_records_from_existing_evidence(program))
         records.extend(_synthetic_review_records(program))
+    records.extend(
+        record for record in load_published_field_records()
+        if record.program_id in program_ids
+    )
     return records
 
 

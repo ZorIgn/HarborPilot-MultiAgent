@@ -11,6 +11,8 @@ import type {
   LayeredProgramPlanResult,
   QuestionnaireResponse,
   QuestionnaireSchema,
+  ReviewPublishResponse,
+  ReviewQueueSummary,
   SourceRegistry,
   WorkflowResult,
   WritingDraft,
@@ -232,6 +234,36 @@ export async function getQuestionnaireSchema(): Promise<QuestionnaireSchema> {
   const response = await fetch(`${API_BASE}/api/questionnaire-schema`, {cache: "no-store"});
   if (!response.ok) {
     throw new Error(`Questionnaire API returned ${response.status}`);
+  }
+  return response.json();
+}
+export async function getReviewQueue(filters?: { program_id?: string; limit?: number }): Promise<ReviewQueueSummary> {
+  const query = new URLSearchParams();
+  if (filters?.program_id) query.set("program_id", filters.program_id);
+  if (filters?.limit) query.set("limit", String(filters.limit));
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  const response = await fetch(`${API_BASE}/api/admin/review-queue${suffix}`, {cache: "no-store"});
+  if (!response.ok) {
+    throw new Error(`Review queue API returned ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function publishReviewItem(payload: {
+  review_id: string;
+  decision: "approve" | "reject";
+  reviewer_id?: string;
+  reviewer_note?: string | null;
+  confirmed_value?: string | null;
+  persist?: boolean;
+}): Promise<ReviewPublishResponse> {
+  const response = await fetch(`${API_BASE}/api/admin/review-queue/publish`, {
+    method: "POST",
+    headers: {"content-type": "application/json"},
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    throw new Error(`Review publish API returned ${response.status}`);
   }
   return response.json();
 }

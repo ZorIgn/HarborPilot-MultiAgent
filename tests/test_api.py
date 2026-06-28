@@ -252,6 +252,55 @@ def test_program_data_package_exposes_official_and_community_acquisition_plan() 
     assert any("社区经验" in action for action in data["next_actions"])
 
 
+def test_review_queue_publish_gate_requires_human_approval() -> None:
+    client = TestClient(app)
+    program_id = "hku-master-of-science-in-computer-science-2027"
+
+    queue_response = client.get(f"/api/admin/review-queue?program_id={program_id}&limit=20")
+    assert queue_response.status_code == 200
+    queue = queue_response.json()
+    assert queue["pending_count"] >= 1
+    assert queue["publishable_count"] >= 1
+    publishable = next(item for item in queue["items"] if item["publishable"])
+    assert publishable["source_type"].startswith("official")
+    assert publishable["page_hash"]
+    assert "official" in publishable["boundary"].lower()
+
+    reject_response = client.post(
+        "/api/admin/review-queue/publish",
+        json={
+            "review_id": publishable["review_id"],
+            "decision": "reject",
+            "reviewer_id": "qa_reviewer",
+            "reviewer_note": "source did not match the current application cycle",
+        },
+    )
+    assert reject_response.status_code == 200
+    rejected = reject_response.json()
+    assert rejected["ok"] is True
+    assert rejected["item"]["status"] == "REJECTED"
+    assert rejected["published_record"] is None
+
+    approve_response = client.post(
+        "/api/admin/review-queue/publish",
+        json={
+            "review_id": publishable["review_id"],
+            "decision": "approve",
+            "reviewer_id": "qa_reviewer",
+            "reviewer_note": "checked the official public source in preview mode",
+            "persist": False,
+        },
+    )
+    assert approve_response.status_code == 200
+    approved = approve_response.json()
+    assert approved["ok"] is True
+    assert approved["item"]["status"] == "APPROVED"
+    assert approved["published_record"]["status"] == "OFFICIAL_VERIFIED_CURRENT"
+    assert approved["published_record"]["review_required"] is False
+    assert approved["published_record"]["reviewer_id"] == "qa_reviewer"
+    assert "HumanReviewGateAgent" in approved["published_record"]["agent_chain"]
+
+
 def test_qs_master_applications_import_is_available_and_review_gated() -> None:
     client = TestClient(app)
 

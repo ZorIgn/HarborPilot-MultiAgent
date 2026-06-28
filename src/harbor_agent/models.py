@@ -390,6 +390,50 @@ class DataAcquisitionReport(BaseModel):
     agent_chain: list[str] = Field(default_factory=list)
 
 
+class ReviewQueueItem(BaseModel):
+    review_id: str
+    program_id: str
+    field_name: str
+    proposed_value: str | None = None
+    cycle: str | None = None
+    source_url: HttpUrl | str | None = None
+    source_type: str
+    evidence_snippet: str | None = None
+    page_hash: str | None = None
+    snapshot_url: HttpUrl | str | None = None
+    extracted_at: datetime | None = None
+    confidence: Literal["low", "medium", "high"] = "low"
+    source_priority: int = 99
+    status: Literal["PENDING", "APPROVED", "REJECTED"] = "PENDING"
+    reviewer_id: str | None = None
+    reviewer_note: str | None = None
+    reviewed_at: datetime | None = None
+    publishable: bool = False
+    boundary: str = "Only official public sources can be published as current requirements after human review."
+    agent_chain: list[str] = Field(default_factory=list)
+
+
+class ReviewQueueSummary(BaseModel):
+    generated_at: datetime
+    pending_count: int
+    publishable_count: int
+    items: list[ReviewQueueItem] = Field(default_factory=list)
+
+
+class ReviewPublishRequest(BaseModel):
+    review_id: str
+    decision: Literal["approve", "reject"]
+    reviewer_id: str = "local_reviewer"
+    reviewer_note: str | None = None
+    confirmed_value: str | None = None
+    persist: bool = False
+
+
+class ReviewPublishResponse(BaseModel):
+    ok: bool
+    item: ReviewQueueItem
+    published_record: FieldEvidenceRecord | None = None
+    message: str
 class DataRefreshRequest(BaseModel):
     region: Literal["HK", "SG", "ALL"] = "ALL"
     institution: str | None = None

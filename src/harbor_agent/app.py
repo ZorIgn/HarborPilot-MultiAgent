@@ -13,6 +13,9 @@ from harbor_agent.models import (
     DataAcquisitionReport,
     DataAcquisitionRequest,
     ProgramDataPackage,
+    ReviewPublishRequest,
+    ReviewPublishResponse,
+    ReviewQueueSummary,
     BackgroundStageResult,
     DataRefreshReport,
     DataRefreshRequest,
@@ -30,6 +33,7 @@ from harbor_agent.models import (
 )
 from harbor_agent.services.evidence_graph import build_evidence_graph_summary, build_program_trust_detail
 from harbor_agent.services.external_candidates import load_qs_master_applications_import
+from harbor_agent.services.review_gate import build_review_queue, publish_review_item
 from harbor_agent.services.data_loader import (
     load_community_sources,
     load_form_definition,
@@ -309,6 +313,18 @@ def program_trust_detail(program_id: str) -> ProgramTrustDetail:
     if program is None:
         raise HTTPException(status_code=404, detail="项目不存在。")
     return build_program_trust_detail(program)
+
+@app.get("/api/admin/review-queue", response_model=ReviewQueueSummary)
+def admin_review_queue(
+    program_id: str | None = None,
+    limit: int = Query(default=80, ge=1, le=500),
+) -> ReviewQueueSummary:
+    return build_review_queue(program_id=program_id, limit=limit)
+
+
+@app.post("/api/admin/review-queue/publish", response_model=ReviewPublishResponse)
+def admin_publish_review_item(payload: ReviewPublishRequest) -> ReviewPublishResponse:
+    return publish_review_item(payload)
 
 
 def _program_catalog_item(program) -> dict:
