@@ -1,19 +1,26 @@
-# HarborPilot AI 港新多 Agent 留学申请辅助平台
+# HarborPilot MultiAgent
 
-HarborPilot AI 是一个面向香港、新加坡授课型硕士申请的信息辅助与多 Agent 协作项目。它不是静态前端，而是 Next.js 多页面产品工作台 + FastAPI 后端 + 项目数据目录 + 来源证据图 + 规则引擎 + LLM Adapter 的完整项目。
+HarborPilot 是一个面向港新授课型硕士申请的信息辅助平台。项目目标不是用 Agent 包装不确定结论，而是把学生背景、项目库、学校官网来源、公开社区经验、文书素材和人工审核门禁串成一条可追踪的申请准备链路。
 
-项目覆盖学生视角的快速评估入口、择校定具体项目、选定项目后的时间线与材料、文书问卷素材整理，以及“决策依据”式 Agent 审计。项目数据优先来自学校官方入口；GitHub 和社区资料只作为项目发现、别名、分类和经验线索，不能替代官方要求。
+当前版本定位为：可信申请信息辅助原型。它可以用于项目发现、初步选校、材料规划、文书素材整理和数据可信度审计；还不能替代正式顾问或学校官网最终确认。
 
-## 功能模块
+## 核心原则
 
-- 背景评估：输入学校层级、GPA、语言、方向、预算和职业目标，生成初步评估与资料缺口。
-- 择校定项目：内置港新主流授课硕士项目库，按冲刺、主申、相对稳妥、信息不足、暂不建议分档。
-- 时间线与材料：支持多选目标项目，生成学校官网确认、语言送分、奖学金检查、推荐信、文书和最终递交任务。
-- 数据刷新 Agent：内置可信源注册表，优先检查学校官方入口，社区/目录来源只保留为线索和方法参考；输出待确认信息清单。
-- 来源证据图：把截止日期、学费、材料、语言要求、申请入口等信息拆开记录状态、来源、hash 和证据片段。
-- 文书材料生产：按个人信息表、个人陈述问卷、推荐信调查表拆成在线问卷，支持指定学校/项目，选择 PS、SOP、CV、Essay 或推荐信素材包，并生成中文稿、英文稿、CV bullet、推荐信素材包、项目定制点和提交前风控项。
-- 决策依据页：把 Agent Trace 转成用户能理解的推荐原因、风险、官网依据、社区线索和人工闸门；技术 Trace 作为审计信息保留。
-- 模型连接：设置页支持 DeepSeek、OpenAI、OpenAI-compatible API 和 Mock Provider。
+- 官方字段优先：截止日期、学费、语言要求、材料清单、申请入口、文书题目必须来自学校公开页面、官方 PDF/FAQ 或公开申请系统入口。
+- 社区信息分层：GitHub、GradCafe、论坛、公开视频/笔记等只用于经验参考、项目别名、笔试面试线索和准备建议，不能覆盖官方要求。
+- 字段级证据：每个关键字段都保留来源 URL、申请季、抓取时间、page hash、证据片段、状态和人工审核标记。
+- Review-first：未经过人工审核的字段不会成为 `OFFICIAL_VERIFIED_CURRENT`，也不会被包装成正式推荐或正式时间线。
+- Multi-agent 可审计：每个 Agent 有职责、输入、输出、工具、上游依赖和人工门禁，可通过 `/api/agent-system` 查看。
+
+## 主要功能
+
+- 背景评估：读取学校层级、GPA 标尺、语言成绩、方向、预算、经历和职业目标，输出低承诺的背景诊断和资料缺口。
+- 项目推荐：基于港新项目库、方向识别、硬规则和数据可信度，生成冲刺、主申、保底、候选和暂不建议项目。
+- 项目数据包：项目详情中展示官方要求、项目内容、文书与时间线字段、公开社区经验和采集计划。
+- 数据获取 Agent：支持官方来源计划、robots 检查、快照 hash、字段候选、公开社区经验信号和人工发布队列。
+- 审核发布门禁：`/api/admin/review-queue` 生成字段审核队列，`/api/admin/review-queue/publish` 只有在人工确认后才生成官方确认记录。
+- 文书工作台：通过问卷、故事卡、事实绑定和审核量表生成 PS/SOP/CV/Essay/推荐信素材包草稿。
+- 场景自审：`scripts/run_scenario_audit.py` 会用 985 IELTS 6.5、211 AI IELTS 7.0、普通一本 BA+Data IELTS 6.5 等背景跑质量门槛。
 
 ## 页面入口
 
@@ -26,19 +33,17 @@ http://localhost:3000
 主要页面：
 
 ```text
-/assessment   背景评估
-/programs     择校定具体项目
-/timeline     选定项目时间线与材料
-/writing      文书 AI 辅助
-/agent-lab    决策依据与来源确认
-/settings     设置与模型连接
+/assessment   背景资料
+/programs     项目探索
+/timeline     任务与材料
+/writing      文书工作台
+/agent-lab    资料中心 / 来源证据 / Agent 契约
+/settings     模型连接
 ```
 
-## CMD 启动方式
+## 后端启动
 
-如果你使用的是 `cmd.exe`，不要写 `$env:...`，那是 PowerShell 语法。
-
-第一个 CMD 窗口启动后端：
+CMD：
 
 ```cmd
 cd /d E:\multi_agent
@@ -46,7 +51,17 @@ set PYTHONPATH=src
 python -m uvicorn harbor_agent.app:app --reload --host 127.0.0.1 --port 8000
 ```
 
-第二个 CMD 窗口启动前端：
+PowerShell：
+
+```powershell
+cd E:\multi_agent
+$env:PYTHONPATH="src"
+python -m uvicorn harbor_agent.app:app --reload --host 127.0.0.1 --port 8000
+```
+
+## 前端启动
+
+CMD：
 
 ```cmd
 cd /d E:\multi_agent\web
@@ -55,29 +70,7 @@ set NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
 npm.cmd run dev
 ```
 
-也可以使用脚本：
-
-```cmd
-cd /d E:\multi_agent
-scripts\start-api.cmd
-```
-
-另开一个 CMD：
-
-```cmd
-cd /d E:\multi_agent
-scripts\start-web.cmd
-```
-
-## PowerShell 启动方式
-
-```powershell
-cd E:\multi_agent
-$env:PYTHONPATH="src"
-python -m uvicorn harbor_agent.app:app --reload --host 127.0.0.1 --port 8000
-```
-
-另开一个 PowerShell：
+PowerShell：
 
 ```powershell
 cd E:\multi_agent\web
@@ -85,129 +78,32 @@ $env:NEXT_PUBLIC_API_BASE_URL="http://127.0.0.1:8000"
 npm.cmd run dev
 ```
 
-## 是否需要 API Key
+## 模型配置
 
-不一定需要。默认可以选择首页的“使用体验模式”，体验模式走 Mock Provider，不需要 API Key，适合演示完整业务流程。
+默认可以使用 mock 模式体验完整流程，不需要 API Key。
 
-如果要测试真实大模型，需要先安装可选依赖：
+如果要测试真实模型，可以在 `/settings` 中配置 DeepSeek、OpenAI 或 OpenAI-compatible endpoint。LLM 只用于解释润色、文书生成和可选摘要；GPA、语言硬门槛、项目方向、未确认字段门禁等关键逻辑由确定性规则执行。
 
-```cmd
-cd /d E:\multi_agent
-pip install -r requirements-llm.txt
-```
-
-然后重启后端，打开：
+## 关键 API
 
 ```text
-http://localhost:3000/settings
-```
-
-在“模型连接”里填写：
-
-- DeepSeek：后端会使用 `https://api.deepseek.com`，模型名可按账号可用模型填写。
-- OpenAI：使用 OpenAI 官方接口。
-- 兼容 OpenAI 接口：需要额外填写 base URL。
-
-API Key 只提交到后端模型适配器；前端不会写入 localStorage、sessionStorage 或 Agent Trace。当前开源演示版在后端进程内存中保存连接，重启后需要重新输入；生产版可以扩展为加密存储。
-
-## Agent 工作流
-
-顶部“查看工作流”只打开状态抽屉，不会直接运行所有 Agent。Agent 只在用户完成某个业务阶段并点击该阶段按钮后运行。
-
-阶段按钮：
-
-```text
-保存并生成背景评估
-ProfileAgent -> EvidenceAgent -> EvaluationAgent
-
-根据背景生成项目方案
-ProgramIntelligenceAgent -> Eligibility Engine -> SchoolMatchingAgent
-
-确认项目并生成申请计划
-ProgramIntelligenceAgent -> Requirement Verification -> TimelineAgent -> ReviewAgent
-
-整理故事并生成中英文文书
-StoryCardAgent -> WritingAgent -> ReviewAgent
-```
-
-用户看到的不是“有几个 Agent”，而是这些 Agent 带来的实际价值：
-
-- 少查多少信息：来源注册表会把官方源、目录源、社区源分层。
-- 少踩哪些坑：未完成学校官网确认的信息会在项目卡、时间线和审核结果里提示。
-- 结论从哪里来：项目卡和时间线展示官网链接、字段状态和倒推依据。
-- 哪些地方要人工确认：DataRefreshAgent 输出待确认信息清单，关键信息需要查看学校原文后再发布。
-
-## 数据真实性说明
-
-项目目录位于：
-
-```text
-data/programs_2027_fall.json
-data/community_sources.json
-data/source_registry.json
-```
-
-关键信息保存来源状态，学生端会显示为“已找到来源、待学校确认、学校已确认、本季未发布、来源冲突”等。只有学校官网已确认的信息才适合进入正式推荐；其他状态会在界面和审核结果里提示确认。
-
-来源证据结构可以通过接口查看：
-
-```text
-GET /api/evidence-graph/summary
-GET /api/programs/{program_id}/trust
-GET /api/programs/{program_id}/data-package
-POST /api/workflows/data-acquisition
-```
-
-`/api/programs` 会在每个项目对象中返回 `trust_detail`。它把 deadline、tuition、language、materials、application_url 等关键字段拆成字段级证据，展示来源 URL、申请季、抓取时间、人工确认时间、证据状态和发布闸门。只有 `production_ready=true` 且字段状态为 `OFFICIAL_VERIFIED_CURRENT` 的信息，才适合作为正式申请计划依据；其他字段只进入准备建议和待确认清单。
-
-核心记录结构：
-
-```text
-program_id, field_name, value, source_url, source_type,
-extracted_at, verified_at, page_hash, confidence,
-reviewer_id, evidence_snippet, status
-```
-
-官方来源优先级：
-
-```text
-official application system
-> official programme page
-> official PDF/FAQ
-> official programme index
-> directory/ranking
-> community/GitHub/小红书
-```
-
-`data/source_registry.json` 把来源分成几类：
-
-- 官方项目索引/项目页/申请系统/PDF/FAQ：用于项目名称、截止日期、学费、材料、语言要求等正式信息的确认。
-- CollegeBoard、College Navigator、Niche、TopUniversities、Peterson's 等目录/排名：只参考检索、筛选和字段组织方式，不用于港新硕士官方要求。
-- TheGradCafe、College Confidential、GitHub 留学项目：只作为录取经验、项目别名、社区信号和信息组织方法。
-- yuanrenannie selector：只参考选校产品的信息架构和分档方法。
-- 用户提供案例/公开文书样例：只抽象叙事风格，不复制句子、不编造经历。
-
-刷新入口：
-
-```text
+GET  /api/health
+GET  /api/programs
+GET  /api/programs/{program_id}/trust
+GET  /api/programs/{program_id}/data-package
+GET  /api/evidence-graph/summary
 GET  /api/source-registry
+GET  /api/agent-system
+GET  /api/admin/review-queue
+POST /api/admin/review-queue/publish
+POST /api/workflows/background
+POST /api/workflows/program-plan
+POST /api/workflows/application-plan
 POST /api/workflows/data-refresh
+POST /api/workflows/data-acquisition
+POST /api/workflows/writing-plan
+POST /api/workflows/writing-review
 ```
-
-如果需要把 `lione12138/qs-master-applications` 作为项目发现和产品框架参考，先把仓库放到 `.agents/qs-master-applications`，再运行：
-
-```cmd
-cd /d E:\multi_agent
-python scripts\import_qs_master_applications.py
-```
-
-脚本会输出 `data/external_candidates/qs_master_applications_candidates.json`。这些记录只作为项目发现、官网链接候选和日期线索，不会自动写入正式项目库。
-
-`/api/workflows/data-refresh` 默认建议传 `dry_run: true`。它会根据已选项目匹配官方来源，输出待确认信息清单和下一步动作；即使传 `dry_run: false` 做联网可达性检查，也不会自动覆盖 `programs_2027_fall.json`。时间线生成前会自动运行一次 dry-run，并把来源 URL、截止日期依据、材料清单和确认状态写入时间线任务。
-
-当前实现是 MVP 级数据治理：JSON 仍是主数据源，但已经保留 PostgreSQL/pgvector 迁移所需的逐项 evidence schema、确认清单、parser plan 和人工发布闸门。后续生产化建议接入 PostgreSQL、Redis 队列、Playwright crawler、HTML/PDF 快照、hash diff 和人工 reviewer 后台。
-
-参考的开源留学项目用于信息组织和线索发现，例如 Global CS Application、GIS Info、欧港新 CS 留学项目指北、WaterCS、QS Master Applications。正式信息仍必须回到学校官网、学院页面、官方 PDF、FAQ 或申请系统确认。
 
 ## 验证命令
 
@@ -215,8 +111,14 @@ python scripts\import_qs_master_applications.py
 
 ```cmd
 cd /d E:\multi_agent
-set PYTHONPATH=src
 python -m pytest -q
+```
+
+场景自审：
+
+```cmd
+cd /d E:\multi_agent
+python scripts\run_scenario_audit.py
 ```
 
 前端类型检查：
@@ -226,95 +128,25 @@ cd /d E:\multi_agent\web
 npx.cmd tsc --noEmit --incremental false
 ```
 
-Demo workflow：
-
-```cmd
-cd /d E:\multi_agent
-set PYTHONPATH=src
-python scripts\run_demo_workflow.py
-```
-
-典型画像自审：
-
-```cmd
-cd /d E:\multi_agent
-python scripts\run_scenario_audit.py
-```
-
-## 常见错误
-
-### 文件名、目录名或卷标语法不正确
-
-你在 CMD 里用了 PowerShell 写法：
-
-```powershell
-$env:PYTHONPATH="src"
-```
-
-CMD 应该写：
-
-```cmd
-set PYTHONPATH=src
-```
-
-### ModuleNotFoundError: No module named 'harbor_agent'
-
-说明后端没有设置 `PYTHONPATH`：
-
-```cmd
-cd /d E:\multi_agent
-set PYTHONPATH=src
-python -m uvicorn harbor_agent.app:app --reload --host 127.0.0.1 --port 8000
-```
-
-### DeepSeek 或 OpenAI 连接失败
-
-先确认三件事：
-
-- 已执行 `pip install -r requirements-llm.txt`
-- 后端已经重启
-- 在 `/settings` 页面选择了正确供应商，并填写账号可用的模型名
-
-### npm run build 卡住或失败
-
-开发演示不需要先 build，直接运行：
-
-```cmd
-npm.cmd run dev
-```
-
-如果要生产构建，先关闭正在运行的 Next dev 窗口，再执行：
+前端构建：
 
 ```cmd
 cd /d E:\multi_agent\web
 npm.cmd run build
 ```
 
-## 项目结构
+## 当前可信度边界
 
-```text
-src/harbor_agent/
-  agents/          多 Agent：背景、证据、评估、项目情报、匹配、时间线、文书、审核
-  core/            LLM Adapter、规则和 Trace
-  services/        数据加载
-  app.py           FastAPI 入口
+项目已经具备字段级证据、数据包、公开来源采集计划、审核发布门禁、Agent 契约和场景质量门槛。但项目库仍有大量字段处于上一申请季参考、抽取候选或待人工确认状态。
 
-web/
-  app/             Next.js 多页面工作台
-  lib/             API 请求与类型
+正式使用前必须继续补齐：
 
-data/
-  programs_2027_fall.json
-  community_sources.json
-  questionnaire_schema.json
+- 学校官网当前申请季字段的人工发布记录。
+- Playwright/PDF parser 队列化采集。
+- 更完整的项目详情页和审核后台。
+- 用户可见中文文案的全量清洗。
+- 用户档案 API 和加密存储，替代长期 localStorage。
 
-docs/
-  architecture.md
-  agent-workflow.md
-  resume-bullets.md
+## GitHub
 
-tests/
-  API 与工作流测试
-```
-
-更多数据获取与公开信息聚合设计见：docs/data-acquisition-agent.md。
+仓库地址：<https://github.com/ZorIgn/HarborPilot-MultiAgent>
