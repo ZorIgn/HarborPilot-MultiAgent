@@ -37,6 +37,7 @@ from harbor_agent.models import (
 from harbor_agent.services.evidence_graph import build_evidence_graph_summary, build_program_trust_detail
 from harbor_agent.services.external_candidates import load_qs_master_applications_import
 from harbor_agent.services.review_gate import build_review_queue, publish_review_item
+from harbor_agent.services.scenario_audit_runner import scenario_audit_summary
 from harbor_agent.services.agent_registry import build_agent_system_report
 from harbor_agent.services.data_loader import (
     load_community_sources,
@@ -213,6 +214,11 @@ def evidence_graph_summary() -> EvidenceGraphSummary:
 @app.get("/api/agent-system", response_model=AgentSystemReport)
 def agent_system_report() -> AgentSystemReport:
     return build_agent_system_report()
+
+
+@app.get("/api/admin/scenario-audit")
+def admin_scenario_audit() -> dict:
+    return scenario_audit_summary()
 
 
 @app.get("/api/programs")

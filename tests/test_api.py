@@ -144,6 +144,32 @@ def test_questionnaire_schema_and_stage_endpoints() -> None:
     assert writing_data["writing"]["risk_controls"]
 
 
+
+
+def test_admin_scenario_audit_endpoint_exposes_multiagent_self_audit() -> None:
+    client = TestClient(app)
+
+    response = client.get("/api/admin/scenario-audit")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["passed"] is True
+    assert data["case_count"] >= 3
+    assert data["failure_count"] == 0
+    assert data["agent_chain"][-1] == "ScenarioAuditAgent"
+    assert "ProgramDataAcquisitionAgent" in data["agent_chain"]
+    assert "SourceCrawlQueueAgent" in data["agent_chain"]
+    assert "ReviewAgent" in data["agent_chain"]
+
+    first = data["cases"][0]
+    assert first["targets"]
+    assert first["trace_nodes"][-1] == "ScenarioAuditAgent"
+    assert first["crawl_queue"]["official_job_count"] >= 1
+    assert first["crawl_queue"]["community_job_count"] >= 1
+    assert all(target["formal_recommendation"] is False for target in first["targets"])
+    assert all(target["coverage_item_count"] >= 6 for target in first["targets"])
+    assert all(target["review_pending_count"] >= 1 for target in first["targets"])
+
 def test_source_registry_and_data_refresh() -> None:
     client = TestClient(app)
     payload = json.loads(Path("examples/sample_profile.json").read_text(encoding="utf-8"))
