@@ -43,6 +43,7 @@ import {
   getSourceRegistry,
   runApplicationPlan,
   runBackgroundStage,
+  runCrawlQueue,
   runDataRefresh,
   runProgramPlan,
   runWritingInterview,
@@ -56,6 +57,7 @@ import type {
   ApplicantPayload,
   CatalogProgram,
   ConsultantSchoolPlan,
+  CrawlQueueReport,
   DataRefreshReport,
   DimensionFinding,
   EvidenceGraphSummary,
@@ -74,7 +76,7 @@ import type {
 } from "@/lib/types";
 
 type ViewMode = "home" | "assessment" | "programs" | "timeline" | "writing" | "agent" | "settings";
-type StageLoading = "background" | "programs" | "timeline" | "writing" | "interview" | "data" | "package" | "llm" | null;
+type StageLoading = "background" | "programs" | "timeline" | "writing" | "interview" | "data" | "crawl" | "package" | "llm" | null;
 type Provider = "mock" | "deepseek" | "openai" | "compatible";
 type DocumentType = "PS" | "SOP" | "CV" | "ESSAY" | "REFERENCE_PACKAGE";
 type QuestionnaireValues = Record<string, string>;
@@ -184,6 +186,7 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
   const [result, setResult] = useState<AppState | null>(null);
   const [catalog, setCatalog] = useState<CatalogProgram[]>([]);
   const [sourceRegistry, setSourceRegistry] = useState<SourceRegistry | null>(null);
+  const [crawlQueue, setCrawlQueue] = useState<CrawlQueueReport | null>(null);
   const [evidenceGraph, setEvidenceGraph] = useState<EvidenceGraphSummary | null>(null);
   const [agentSystem, setAgentSystem] = useState<AgentSystemReport | null>(null);
   const [questionnaireSchema, setQuestionnaireSchema] = useState<QuestionnaireSchema | null>(null);
@@ -344,6 +347,24 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
       setLoading(null);
     }
   }
+
+  async function buildCrawlQueue() {
+    setLoading("crawl");
+    setError(null);
+    try {
+      const response = await runCrawlQueue({
+        selected_program_ids: selectedProgramIds,
+        include_community: true,
+        max_sources_per_program: 8,
+      });
+      setCrawlQueue(response);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Crawl queue generation failed");
+    } finally {
+      setLoading(null);
+    }
+  }
+
 
   async function runInterview() {
     setLoading("interview");
@@ -544,7 +565,18 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
           ) : null}
 
           {view === "agent" ? (
-            <DataCenterView evidenceGraph={evidenceGraph} agentSystem={agentSystem} sourceRegistry={sourceRegistry} sourceRefresh={result?.source_refresh ?? null} onRefresh={() => refreshSources(false)} onLiveRefresh={() => refreshSources(true)} loading={loading} />
+            <DataCenterView
+              evidenceGraph={evidenceGraph}
+              agentSystem={agentSystem}
+              sourceRegistry={sourceRegistry}
+              sourceRefresh={result?.source_refresh ?? null}
+              crawlQueue={crawlQueue}
+              selectedProgramCount={selectedProgramIds.length}
+              onRefresh={() => refreshSources(false)}
+              onLiveRefresh={() => refreshSources(true)}
+              onBuildCrawlQueue={buildCrawlQueue}
+              loading={loading}
+            />
           ) : null}
 
           {view === "settings" ? (
@@ -632,7 +664,7 @@ function KeySetupCard(props: {
 
 function GlobalProgress({ stage }: { stage: StageLoading }) {
   if (!stage) return null;
-  const detail = {
+  const details: Record<Exclude<StageLoading, null>, { title: string; steps: string[] }> = {
     background: {
       title: "正在生成背景诊断",
       steps: ["读取学生资料", "判断硬门槛", "识别资料缺口", "生成可解释结论"],
@@ -657,6 +689,10 @@ function GlobalProgress({ stage }: { stage: StageLoading }) {
       title: "正在检查学校官网信息",
       steps: ["匹配学校官网入口", "查找项目详情页", "区分官网和经验来源", "输出可确认的信息清单"],
     },
+    crawl: {
+      title: "Building public crawl queue",
+      steps: ["Group official and community sources", "Apply robots and snapshot gates", "Mark parser and review requirements", "Keep community data reference-only"],
+    },
     package: {
       title: "正在加载项目数据包",
       steps: ["读取官方字段证据", "整理项目内容", "生成公开社区经验线索", "准备采集计划"],
@@ -665,7 +701,8 @@ function GlobalProgress({ stage }: { stage: StageLoading }) {
       title: "正在连接模型",
       steps: ["提交到本地后端", "验证模型配置", "准备 Agent 调用"],
     },
-  }[stage];
+  };
+  const detail = details[stage];
   return (
     <IslandCard className="progress-card" color="app-teal">
       <div className="progress-head">
@@ -1005,7 +1042,7 @@ function WritingView({
   );
 }
 
-function DataCenterView({ evidenceGraph, agentSystem, sourceRegistry, sourceRefresh, onRefresh, onLiveRefresh, loading }: { evidenceGraph: EvidenceGraphSummary | null; agentSystem: AgentSystemReport | null; sourceRegistry: SourceRegistry | null; sourceRefresh: DataRefreshReport | null; onRefresh: () => void; onLiveRefresh: () => void; loading: StageLoading }) {
+function DataCenterView({ evidenceGraph, agentSystem, sourceRegistry, sourceRefresh, crawlQueue, selectedProgramCount, onRefresh, onLiveRefresh, onBuildCrawlQueue, loading }: { evidenceGraph: EvidenceGraphSummary | null; agentSystem: AgentSystemReport | null; sourceRegistry: SourceRegistry | null; sourceRefresh: DataRefreshReport | null; crawlQueue: CrawlQueueReport | null; selectedProgramCount: number; onRefresh: () => void; onLiveRefresh: () => void; onBuildCrawlQueue: () => void; loading: StageLoading }) {
   return (
     <div className="page-stack">
       <IslandCard className="panel-card" color="app-yellow">
@@ -1016,8 +1053,9 @@ function DataCenterView({ evidenceGraph, agentSystem, sourceRegistry, sourceRefr
             <p>已有项目可以做发现和初筛，但很多信息仍来自目录页或上一申请季参考。截止日期、学费、语言、材料、申请入口必须逐项绑定学校官网来源。</p>
           </div>
           <div className="card-actions">
-            <IslandButton type="default" loading={loading === "data"} onClick={onRefresh}>检查学校来源</IslandButton>
-            <IslandButton type="primary" loading={loading === "data"} onClick={onLiveRefresh}>{loading === "data" ? "抓取中" : "联网抓取官网快照"}</IslandButton>
+            <IslandButton type="default" loading={loading === "crawl"} onClick={onBuildCrawlQueue}>Build crawl queue</IslandButton>
+            <IslandButton type="default" loading={loading === "data"} onClick={onRefresh}>Check school sources</IslandButton>
+            <IslandButton type="primary" loading={loading === "data"} onClick={onLiveRefresh}>{loading === "data" ? "Fetching" : "Fetch official snapshots"}</IslandButton>
           </div>
         </div>
       </IslandCard>
@@ -1027,6 +1065,7 @@ function DataCenterView({ evidenceGraph, agentSystem, sourceRegistry, sourceRefr
         <Metric label="本季已确认" value={`${evidenceGraph?.verified_field_count ?? 0}`} detail="正式推荐依赖此指标" />
         <Metric label="待确认信息" value={`${evidenceGraph?.pending_review_field_count ?? 0}`} detail="需要查看学校原文" />
         <Metric label="Agent 契约" value={`${agentSystem?.agents.length ?? 0}`} detail={`${agentSystem?.workflows.length ?? 0} 条工作流`} />
+        <Metric label="Crawl queue" value={`${crawlQueue?.job_count ?? 0}`} detail={crawlQueue ? `${crawlQueue.official_job_count} official / ${crawlQueue.community_job_count} community` : `${selectedProgramCount} selected programs`} />
       </section>
       <section className="two-column">
         <IslandCard className="panel-card">
@@ -1047,6 +1086,7 @@ function DataCenterView({ evidenceGraph, agentSystem, sourceRegistry, sourceRefr
           { key: "sources", label: "来源注册表", children: <SourceRegistryList registry={sourceRegistry} /> },
           { key: "refresh", label: "本次检查", children: <SourceRefreshSummary report={sourceRefresh} evidenceGraph={evidenceGraph} /> },
           { key: "extract", label: "抽取结果", children: <ExtractionResultList report={sourceRefresh} /> },
+          { key: "crawl", label: "Crawl queue", children: <CrawlQueuePanel report={crawlQueue} /> },
         ]}
       />
     </div>
@@ -1503,6 +1543,80 @@ function AgentContractPanel({ report }: { report: AgentSystemReport | null }) {
     </div>
   );
 }
+function CrawlQueuePanel({ report }: { report: CrawlQueueReport | null }) {
+  if (!report) {
+    return (
+      <div className="source-report crawl-queue-panel">
+        <p>No public crawl queue has been generated yet. Pick programs and build a queue to separate official sources from public community experience, with fetch methods, review gates, and publishing boundaries.</p>
+        <AdviceList title="Collection boundary" items={[
+          "Official pages, PDFs, and application systems create candidate fields only; human review is required before publication.",
+          "Public community content can summarize written tests, interviews, timelines, and experience signals, but never overwrite school requirements.",
+          "Every live worker must check robots/terms first, then save a snapshot and page hash.",
+        ]} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="source-report crawl-queue-panel">
+      <section className="status-grid three">
+        <Metric label="Total jobs" value={`${report.job_count}`} detail="Deduplicated public collection tasks" />
+        <Metric label="Official jobs" value={`${report.official_job_count}`} detail="Candidates for review-gated fields" />
+        <Metric label="Community jobs" value={`${report.community_job_count}`} detail="Experience signals and leads only" />
+      </section>
+      <p>{report.summary}</p>
+      {report.warnings.length ? <AdviceList title="Publishing gates" items={report.warnings} /> : null}
+      <div className="crawl-queue-list">
+        {report.items.slice(0, 18).map((item) => (
+          <article className={`crawl-queue-item ${item.trust_level}`} key={item.job_id}>
+            <div className="program-title-row">
+              <strong>{item.name}</strong>
+              <span className="tier-pill">{acquisitionChannelLabel(item.channel)}</span>
+            </div>
+            <p>{item.publish_boundary}</p>
+            <div className="task-meta">
+              <span>trust: {item.trust_level}</span>
+              <span>priority: {item.priority}</span>
+              <span>{fetchMethodLabel(item.fetch_method)}</span>
+              <span>{parserLabel(item.parser)}</span>
+              <span>{item.snapshot_required ? "Snapshot required" : "No snapshot"}</span>
+              <span>{item.human_review_required ? "Human review required" : "Automatic publish"}</span>
+            </div>
+            <div className="material-chips">
+              {item.allowed_fields.slice(0, 10).map((field) => <span key={field}>{fieldLabels[field] ?? field}</span>)}
+            </div>
+            <AdviceList title="Next actions" items={item.next_actions} />
+            <div className="crawl-queue-foot">
+              <span>{item.program_ids.length} programs</span>
+              <span>{item.robots_policy}</span>
+              <span>{item.rate_limit}</span>
+              <a className="text-link" href={item.url} target="_blank" rel="noreferrer">Open public source</a>
+            </div>
+          </article>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function fetchMethodLabel(value: string) {
+  return {
+    html_snapshot: "HTML snapshot",
+    pdf_snapshot: "PDF snapshot",
+    repository_snapshot: "Repository snapshot",
+    manual_search: "Manual search",
+  }[value] ?? value;
+}
+
+function parserLabel(value: string) {
+  return {
+    html_field_extraction: "HTML field extraction",
+    pdf_text_extraction: "PDF text extraction",
+    community_signal_extraction: "Community signal extraction",
+    manual_review: "Manual review",
+  }[value] ?? value;
+}
+
 function SourceRefreshSummary({ report, evidenceGraph }: { report: DataRefreshReport | null; evidenceGraph?: EvidenceGraphSummary | null }) {
   if (!report) {
     return (

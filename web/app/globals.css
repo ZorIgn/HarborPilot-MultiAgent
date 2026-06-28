@@ -1521,3 +1521,47 @@ a:focus-visible {
   color: var(--muted);
   line-height: 1.45;
 }
+
+.crawl-queue-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.crawl-queue-list {
+  display: grid;
+  gap: 12px;
+}
+
+.crawl-queue-item {
+  padding: 13px;
+  border: 2px solid rgba(122, 90, 55, 0.14);
+  border-radius: 16px;
+  background: rgba(255, 253, 243, 0.84);
+}
+
+.crawl-queue-item.official {
+  border-color: rgba(57, 134, 116, 0.28);
+  background: rgba(236, 251, 243, 0.72);
+}
+
+.crawl-queue-item.community {
+  border-color: rgba(188, 92, 55, 0.26);
+  background: rgba(255, 246, 226, 0.76);
+}
+
+.crawl-queue-item p {
+  margin: 7px 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.crawl-queue-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  margin-top: 10px;
+  color: var(--wood);
+  font-size: 0.84rem;
+  font-weight: 850;
+}

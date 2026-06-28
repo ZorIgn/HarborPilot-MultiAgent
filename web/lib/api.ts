@@ -2,6 +2,7 @@ import type {
   AgentSystemReport,
   ApplicantPayload,
   CatalogProgram,
+  CrawlQueueReport,
   DataAcquisitionReport,
   DataRefreshReport,
   ProgramDataPackage,
@@ -215,6 +216,22 @@ export async function runDataAcquisition(payload: {
   }
   return response.json();
 }
+export async function runCrawlQueue(payload: {
+  selected_program_ids?: string[];
+  include_community?: boolean;
+  max_sources_per_program?: number;
+}): Promise<CrawlQueueReport> {
+  const response = await fetch(`${API_BASE}/api/admin/crawl-queue`, {
+    method: "POST",
+    headers: {"content-type": "application/json"},
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    throw new Error(`Crawl queue API returned ${response.status}`);
+  }
+  return response.json();
+}
+
 export async function getSourceRegistry(): Promise<SourceRegistry> {
   const response = await fetch(`${API_BASE}/api/source-registry`, {cache: "no-store"});
   if (!response.ok) {

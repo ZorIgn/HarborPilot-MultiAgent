@@ -231,6 +231,39 @@ export type DataAcquisitionReport = {
   agent_chain: string[];
 };
 
+export type CrawlQueueItem = {
+  job_id: string;
+  source_id: string;
+  name: string;
+  url: string;
+  program_ids: string[];
+  channel: "official_requirement" | "official_content" | "community_experience" | "directory_signal" | "methodology";
+  trust_level: SourceTrustLevel;
+  priority: number;
+  allowed_fields: string[];
+  fetch_method: "html_snapshot" | "pdf_snapshot" | "repository_snapshot" | "manual_search";
+  parser: "html_field_extraction" | "pdf_text_extraction" | "community_signal_extraction" | "manual_review";
+  robots_policy: string;
+  rate_limit: string;
+  snapshot_required: boolean;
+  human_review_required: boolean;
+  publish_boundary: string;
+  next_actions: string[];
+  agent_chain: string[];
+};
+
+export type CrawlQueueReport = {
+  generated_at: string;
+  selected_program_ids: string[];
+  job_count: number;
+  official_job_count: number;
+  community_job_count: number;
+  items: CrawlQueueItem[];
+  summary: string;
+  warnings: string[];
+  agent_chain: string[];
+};
+
 export type ReviewQueueItem = {
   review_id: string;
   program_id: string;
