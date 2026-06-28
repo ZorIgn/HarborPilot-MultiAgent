@@ -1492,3 +1492,32 @@ a:focus-visible {
   display: grid;
   grid-template-columns: 1fr;
 }
+
+
+.coverage-list {
+  display: grid;
+  gap: 10px;
+}
+
+.coverage-item {
+  padding: 12px;
+  border: 1px solid rgba(122, 90, 55, 0.14);
+  border-radius: 14px;
+  background: rgba(255, 253, 243, 0.86);
+}
+
+.coverage-item.blocked {
+  border-color: rgba(188, 92, 55, 0.28);
+  background: rgba(255, 242, 224, 0.76);
+}
+
+.coverage-item.ready {
+  border-color: rgba(57, 134, 116, 0.26);
+  background: rgba(236, 251, 243, 0.72);
+}
+
+.coverage-item p {
+  margin: 6px 0 8px;
+  color: var(--muted);
+  line-height: 1.45;
+}

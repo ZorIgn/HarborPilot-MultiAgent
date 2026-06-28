@@ -1627,6 +1627,30 @@ function ExtractionResultList({ report }: { report: DataRefreshReport | null }) 
   );
 }
 
+
+function CoverageAuditList({ items }: { items: ProgramDataPackage["coverage_items"] }) {
+  if (!items.length) return <EmptyState text="字段覆盖审计尚未生成。" />;
+  return (
+    <div className="coverage-list">
+      {items.map((item) => (
+        <article className={item.blocks_formal_use ? "coverage-item blocked" : "coverage-item ready"} key={item.field_name}>
+          <div className="program-title-row">
+            <strong>{fieldLabels[item.field_name] ?? item.field_name}</strong>
+            <DataBadge status={item.status} />
+          </div>
+          <p>{item.next_action}</p>
+          <div className="task-meta">
+            <span>{item.has_value ? "已有候选值" : "缺少当前字段"}</span>
+            <span>{item.blocks_formal_use ? "阻塞正式使用" : "可用于正式规划"}</span>
+            <span>{item.required_source === "official" ? "学校官方来源" : "社区参考"}</span>
+          </div>
+          {item.source_url ? <a className="text-link" href={item.source_url} target="_blank" rel="noreferrer">查看来源</a> : null}
+        </article>
+      ))}
+    </div>
+  );
+}
+
 function ProgramPackageDrawer({ open, onClose, dataPackage }: { open: boolean; onClose: () => void; dataPackage: ProgramDataPackage | null }) {
   if (!open) return null;
   return (
@@ -1646,6 +1670,10 @@ function ProgramPackageDrawer({ open, onClose, dataPackage }: { open: boolean; o
               <Metric label="采集计划" value={`${dataPackage.acquisition_plan.length}`} detail="官方与公开社区来源" />
             </section>
             <p className="form-note">{dataPackage.freshness_warning}</p>
+            <IslandCard className="panel-card">
+              <PanelTitle icon={<ShieldCheck size={18} aria-hidden />} title="字段覆盖审计" />
+              <CoverageAuditList items={dataPackage.coverage_items} />
+            </IslandCard>
             <IslandCard className="panel-card">
               <PanelTitle icon={<ShieldCheck size={18} aria-hidden />} title="官方要求" />
               <EvidenceRecordList records={dataPackage.official_requirements} />

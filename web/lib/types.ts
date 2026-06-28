@@ -188,6 +188,18 @@ export type ProgramExperienceSignal = {
   use_boundary: string;
 };
 
+export type ProgramDataCoverageItem = {
+  field_name: string;
+  required_source: "official" | "community_reference";
+  status: FieldVerificationStatus;
+  has_value: boolean;
+  source_url: string | null;
+  source_type: string | null;
+  review_required: boolean;
+  blocks_formal_use: boolean;
+  next_action: string;
+};
+
 export type ProgramDataPackage = {
   program_id: string;
   institution: string;
@@ -198,6 +210,7 @@ export type ProgramDataPackage = {
   production_ready: boolean;
   freshness_warning: string;
   official_requirements: FieldEvidenceRecord[];
+  coverage_items: ProgramDataCoverageItem[];
   content_sections: ProgramContentSection[];
   essay_prompts: FieldEvidenceRecord[];
   timeline_fields: FieldEvidenceRecord[];
