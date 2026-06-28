@@ -13,6 +13,8 @@ from harbor_agent.models import (
     ApplicationPlanResult,
     DataAcquisitionReport,
     DataAcquisitionRequest,
+    CrawlQueueReport,
+    CrawlQueueRequest,
     ProgramDataPackage,
     ReviewPublishRequest,
     ReviewPublishResponse,
@@ -311,6 +313,12 @@ def program_data_package(program_id: str) -> ProgramDataPackage:
 def run_data_acquisition_stage(payload: DataAcquisitionRequest) -> DataAcquisitionReport:
     orchestrator = WorkflowOrchestrator(llm_provider)
     return orchestrator.run_data_acquisition_stage(payload)
+
+
+@app.post("/api/admin/crawl-queue", response_model=CrawlQueueReport)
+def admin_crawl_queue(payload: CrawlQueueRequest) -> CrawlQueueReport:
+    orchestrator = WorkflowOrchestrator(llm_provider)
+    return orchestrator.run_crawl_queue_stage(payload)
 
 
 @app.get("/api/programs/{program_id}/trust", response_model=ProgramTrustDetail)

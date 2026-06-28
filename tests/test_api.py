@@ -252,6 +252,43 @@ def test_program_data_package_exposes_official_and_community_acquisition_plan() 
     assert any("社区经验" in action for action in data["next_actions"])
 
 
+def test_crawl_queue_separates_official_and_community_jobs() -> None:
+    client = TestClient(app)
+    program_id = "hku-master-of-science-in-computer-science-2027"
+
+    response = client.post(
+        "/api/admin/crawl-queue",
+        json={
+            "selected_program_ids": [program_id],
+            "include_community": True,
+            "max_sources_per_program": 8,
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["job_count"] >= 2
+    assert data["official_job_count"] >= 1
+    assert data["community_job_count"] >= 1
+    assert "SourceCrawlQueueAgent" in data["agent_chain"]
+    assert any("review" in warning.lower() for warning in data["warnings"])
+
+    official_jobs = [item for item in data["items"] if item["trust_level"] == "official"]
+    community_jobs = [item for item in data["items"] if item["trust_level"] == "community"]
+    assert official_jobs
+    assert community_jobs
+    assert all(item["snapshot_required"] is True for item in data["items"])
+    assert all(item["human_review_required"] is True for item in data["items"])
+    assert all(program_id in item["program_ids"] for item in official_jobs)
+    assert any("OFFICIAL_VERIFIED_CURRENT" in item["publish_boundary"] for item in official_jobs)
+
+    official_only = {"deadline", "tuition_hkd", "language_requirement", "materials", "application_url", "essay_prompts"}
+    for item in community_jobs:
+        assert not (official_only & set(item["allowed_fields"]))
+        assert "reference-only" in item["publish_boundary"]
+        assert item["parser"] == "community_signal_extraction"
+
+
 def test_review_queue_publish_gate_requires_human_approval() -> None:
     client = TestClient(app)
     program_id = "hku-master-of-science-in-computer-science-2027"

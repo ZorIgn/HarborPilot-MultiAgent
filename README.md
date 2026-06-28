@@ -95,6 +95,7 @@ GET  /api/evidence-graph/summary
 GET  /api/source-registry
 GET  /api/agent-system
 GET  /api/admin/review-queue
+POST /api/admin/crawl-queue
 POST /api/admin/review-queue/publish
 POST /api/workflows/background
 POST /api/workflows/program-plan

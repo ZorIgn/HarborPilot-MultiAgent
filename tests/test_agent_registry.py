@@ -26,8 +26,10 @@ def test_agent_system_registry_contracts_are_complete() -> None:
     assert "ProfileAgent" in agent_names
     assert "ProgramIntelligenceAgent" in agent_names
     assert "ProgramDataAcquisitionAgent" in agent_names
+    assert "SourceCrawlQueueAgent" in agent_names
     assert "ProgramResearchAgent" not in agent_names
     assert any(workflow.workflow_name == "assessment" for workflow in report.workflows)
+    assert any(workflow.workflow_name == "crawl_queue" for workflow in report.workflows)
     assert any("Unverified" in guardrail or "unverified" in guardrail for guardrail in report.deterministic_guardrails)
     assert len(report.human_gates) >= 5
 

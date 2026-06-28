@@ -76,6 +76,17 @@ AGENT_CONTRACTS: list[AgentContract] = [
         human_gate="Official fields can publish only after review",
         deterministic_guardrails=["Community experience is reference only"],
     ),
+
+    AgentContract(
+        agent_name="SourceCrawlQueueAgent",
+        responsibility="Turn official and public-community acquisition plans into deterministic crawler jobs with robots, snapshot, parser, and human-review boundaries.",
+        inputs=["CrawlQueueRequest", "DataAcquisitionReport"],
+        outputs=["CrawlQueueReport"],
+        tools=["crawl_job_builder", "robots_policy_gate", "snapshot_policy_gate", "community_boundary_gate"],
+        upstream_agents=["ProgramDataAcquisitionAgent"],
+        human_gate="Crawler jobs only produce review candidates; they cannot publish official fields.",
+        deterministic_guardrails=["Official and community jobs are separated", "Community jobs cannot emit official fields"],
+    ),
     AgentContract(
         agent_name="TimelineAgent",
         responsibility="Generate preparation tasks without treating unverified deadlines as official back-planning anchors.",
@@ -175,6 +186,13 @@ WORKFLOW_CONTRACTS: list[AgentWorkflowContract] = [
         terminal_agent="ReviewAgent",
         human_gate_required=True,
     ),
+
+    AgentWorkflowContract(
+        workflow_name="crawl_queue",
+        required_agents=["ProgramDataAcquisitionAgent", "SourceCrawlQueueAgent"],
+        terminal_agent="SourceCrawlQueueAgent",
+        human_gate_required=True,
+    ),
     AgentWorkflowContract(
         workflow_name="data_acquisition",
         required_agents=["ProgramDataAcquisitionAgent"],
@@ -242,6 +260,7 @@ def _contract_checks() -> list[AgentContractCheck]:
         "SchoolMatchingAgent": "matching.py",
         "DataRefreshAgent": "data_refresh.py",
         "ProgramDataAcquisitionAgent": "data_acquisition.py",
+        "SourceCrawlQueueAgent": "source_crawl_queue.py",
         "TimelineAgent": "timeline.py",
         "StoryCardAgent": "story_card.py",
         "WritingAgent": "writing.py",

@@ -390,6 +390,45 @@ class DataAcquisitionReport(BaseModel):
     agent_chain: list[str] = Field(default_factory=list)
 
 
+class CrawlQueueRequest(BaseModel):
+    selected_program_ids: list[str] = Field(default_factory=list)
+    include_community: bool = True
+    max_sources_per_program: int = Field(default=8, ge=1, le=30)
+
+
+class CrawlQueueItem(BaseModel):
+    job_id: str
+    source_id: str
+    name: str
+    url: HttpUrl | str
+    program_ids: list[str] = Field(default_factory=list)
+    channel: Literal["official_requirement", "official_content", "community_experience", "directory_signal", "methodology"]
+    trust_level: SourceTrustLevel
+    priority: int = Field(ge=1, le=100)
+    allowed_fields: list[str] = Field(default_factory=list)
+    fetch_method: Literal["html_snapshot", "pdf_snapshot", "repository_snapshot", "manual_search"]
+    parser: Literal["html_field_extraction", "pdf_text_extraction", "community_signal_extraction", "manual_review"]
+    robots_policy: str
+    rate_limit: str
+    snapshot_required: bool = True
+    human_review_required: bool = True
+    publish_boundary: str
+    next_actions: list[str] = Field(default_factory=list)
+    agent_chain: list[str] = Field(default_factory=list)
+
+
+class CrawlQueueReport(BaseModel):
+    generated_at: datetime
+    selected_program_ids: list[str] = Field(default_factory=list)
+    job_count: int
+    official_job_count: int
+    community_job_count: int
+    items: list[CrawlQueueItem] = Field(default_factory=list)
+    summary: str
+    warnings: list[str] = Field(default_factory=list)
+    agent_chain: list[str] = Field(default_factory=list)
+
+
 class ReviewQueueItem(BaseModel):
     review_id: str
     program_id: str
