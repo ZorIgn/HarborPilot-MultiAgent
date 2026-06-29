@@ -264,6 +264,44 @@ export type CrawlQueueReport = {
   agent_chain: string[];
 };
 
+
+export type ScenarioAuditTarget = {
+  program_id: string;
+  fit_score: number | null;
+  match_category: string | null;
+  formal_recommendation: boolean | null;
+  data_status: string | null;
+  coverage_item_count: number;
+  production_ready: boolean | null;
+  review_pending_count: number | null;
+  publishable_count: number | null;
+};
+
+export type ScenarioAuditCase = {
+  name: string;
+  passed: boolean;
+  failures: string[];
+  strict_intent: boolean | null;
+  application_mix_count: number;
+  review_passed: boolean | null;
+  crawl_queue: {
+    job_count: number;
+    official_job_count: number;
+    community_job_count: number;
+  };
+  targets: ScenarioAuditTarget[];
+  trace_nodes: string[];
+};
+
+export type ScenarioAuditReport = {
+  passed: boolean;
+  case_count: number;
+  failure_count: number;
+  failures: string[];
+  cases: ScenarioAuditCase[];
+  agent_chain: string[];
+};
+
 export type ReviewQueueItem = {
   review_id: string;
   program_id: string;

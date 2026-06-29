@@ -15,6 +15,7 @@ import type {
   QuestionnaireSchema,
   ReviewPublishResponse,
   ReviewQueueSummary,
+  ScenarioAuditReport,
   SourceRegistry,
   WorkflowResult,
   WritingDraft,
@@ -255,6 +256,15 @@ export async function getQuestionnaireSchema(): Promise<QuestionnaireSchema> {
   }
   return response.json();
 }
+
+export async function getScenarioAudit(): Promise<ScenarioAuditReport> {
+  const response = await fetch(`${API_BASE}/api/admin/scenario-audit`, {cache: "no-store"});
+  if (!response.ok) {
+    throw new Error(`Scenario audit API returned ${response.status}`);
+  }
+  return response.json();
+}
+
 export async function getReviewQueue(filters?: { program_id?: string; limit?: number }): Promise<ReviewQueueSummary> {
   const query = new URLSearchParams();
   if (filters?.program_id) query.set("program_id", filters.program_id);

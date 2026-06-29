@@ -38,6 +38,7 @@ import {
   getEvidenceGraphSummary,
   getProgramDataPackage,
   getReviewQueue,
+  getScenarioAudit,
   getHealth,
   getPrograms,
   getQuestionnaireSchema,
@@ -71,6 +72,7 @@ import type {
   QuestionnaireSchema,
   ReviewPublishResponse,
   ReviewQueueSummary,
+  ScenarioAuditReport,
   SourceRegistry,
   StoryCard,
   TimelineTask,
@@ -80,7 +82,7 @@ import type {
 } from "@/lib/types";
 
 type ViewMode = "home" | "assessment" | "programs" | "timeline" | "writing" | "agent" | "settings";
-type StageLoading = "background" | "programs" | "timeline" | "writing" | "interview" | "data" | "crawl" | "review" | "package" | "llm" | null;
+type StageLoading = "background" | "programs" | "timeline" | "writing" | "interview" | "data" | "crawl" | "review" | "scenario" | "package" | "llm" | null;
 type Provider = "mock" | "deepseek" | "openai" | "compatible";
 type DocumentType = "PS" | "SOP" | "CV" | "ESSAY" | "REFERENCE_PACKAGE";
 type QuestionnaireValues = Record<string, string>;
@@ -193,6 +195,7 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
   const [crawlQueue, setCrawlQueue] = useState<CrawlQueueReport | null>(null);
   const [reviewQueue, setReviewQueue] = useState<ReviewQueueSummary | null>(null);
   const [reviewPublishResult, setReviewPublishResult] = useState<ReviewPublishResponse | null>(null);
+  const [scenarioAudit, setScenarioAudit] = useState<ScenarioAuditReport | null>(null);
   const [evidenceGraph, setEvidenceGraph] = useState<EvidenceGraphSummary | null>(null);
   const [agentSystem, setAgentSystem] = useState<AgentSystemReport | null>(null);
   const [questionnaireSchema, setQuestionnaireSchema] = useState<QuestionnaireSchema | null>(null);
@@ -388,6 +391,18 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
     }
   }
 
+  async function loadScenarioAudit() {
+    setLoading("scenario");
+    setError(null);
+    try {
+      const response = await getScenarioAudit();
+      setScenarioAudit(response);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Scenario audit loading failed");
+    } finally {
+      setLoading(null);
+    }
+  }
   async function previewReviewDecision(reviewId: string, decision: "approve" | "reject") {
     setLoading("review");
     setError(null);
@@ -619,11 +634,13 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
               crawlQueue={crawlQueue}
               reviewQueue={reviewQueue}
               reviewPublishResult={reviewPublishResult}
+              scenarioAudit={scenarioAudit}
               selectedProgramCount={selectedProgramIds.length}
               onRefresh={() => refreshSources(false)}
               onLiveRefresh={() => refreshSources(true)}
               onBuildCrawlQueue={buildCrawlQueue}
               onLoadReviewQueue={loadReviewQueue}
+              onLoadScenarioAudit={loadScenarioAudit}
               onPreviewReviewDecision={previewReviewDecision}
               loading={loading}
             />
@@ -746,6 +763,10 @@ function GlobalProgress({ stage }: { stage: StageLoading }) {
     review: {
       title: "Loading human review gate",
       steps: ["Read candidate official fields", "Check source URL and page hash", "Separate publishable from blocked items", "Preview reviewer decision without persistence"],
+    },
+    scenario: {
+      title: "Running scenario self-audit",
+      steps: ["Run simulated applicant profiles", "Inspect target programme drilldowns", "Check trust and freshness gates", "Validate agent trace and source boundaries"],
     },
     package: {
       title: "正在加载项目数据包",
@@ -1096,7 +1117,7 @@ function WritingView({
   );
 }
 
-function DataCenterView({ evidenceGraph, agentSystem, sourceRegistry, sourceRefresh, crawlQueue, reviewQueue, reviewPublishResult, selectedProgramCount, onRefresh, onLiveRefresh, onBuildCrawlQueue, onLoadReviewQueue, onPreviewReviewDecision, loading }: { evidenceGraph: EvidenceGraphSummary | null; agentSystem: AgentSystemReport | null; sourceRegistry: SourceRegistry | null; sourceRefresh: DataRefreshReport | null; crawlQueue: CrawlQueueReport | null; reviewQueue: ReviewQueueSummary | null; reviewPublishResult: ReviewPublishResponse | null; selectedProgramCount: number; onRefresh: () => void; onLiveRefresh: () => void; onBuildCrawlQueue: () => void; onLoadReviewQueue: () => void; onPreviewReviewDecision: (reviewId: string, decision: "approve" | "reject") => void; loading: StageLoading }) {
+function DataCenterView({ evidenceGraph, agentSystem, sourceRegistry, sourceRefresh, crawlQueue, reviewQueue, reviewPublishResult, scenarioAudit, selectedProgramCount, onRefresh, onLiveRefresh, onBuildCrawlQueue, onLoadReviewQueue, onLoadScenarioAudit, onPreviewReviewDecision, loading }: { evidenceGraph: EvidenceGraphSummary | null; agentSystem: AgentSystemReport | null; sourceRegistry: SourceRegistry | null; sourceRefresh: DataRefreshReport | null; crawlQueue: CrawlQueueReport | null; reviewQueue: ReviewQueueSummary | null; reviewPublishResult: ReviewPublishResponse | null; scenarioAudit: ScenarioAuditReport | null; selectedProgramCount: number; onRefresh: () => void; onLiveRefresh: () => void; onBuildCrawlQueue: () => void; onLoadReviewQueue: () => void; onLoadScenarioAudit: () => void; onPreviewReviewDecision: (reviewId: string, decision: "approve" | "reject") => void; loading: StageLoading }) {
   return (
     <div className="page-stack">
       <IslandCard className="panel-card" color="app-yellow">
@@ -1109,6 +1130,7 @@ function DataCenterView({ evidenceGraph, agentSystem, sourceRegistry, sourceRefr
           <div className="card-actions">
             <IslandButton type="default" loading={loading === "crawl"} onClick={onBuildCrawlQueue}>Build crawl queue</IslandButton>
             <IslandButton type="default" loading={loading === "review"} onClick={onLoadReviewQueue}>Load review queue</IslandButton>
+            <IslandButton type="default" loading={loading === "scenario"} onClick={onLoadScenarioAudit}>Run scenario audit</IslandButton>
             <IslandButton type="default" loading={loading === "data"} onClick={onRefresh}>Check school sources</IslandButton>
             <IslandButton type="primary" loading={loading === "data"} onClick={onLiveRefresh}>{loading === "data" ? "Fetching" : "Fetch official snapshots"}</IslandButton>
           </div>
@@ -1122,6 +1144,7 @@ function DataCenterView({ evidenceGraph, agentSystem, sourceRegistry, sourceRefr
         <Metric label="Agent 契约" value={`${agentSystem?.agents.length ?? 0}`} detail={`${agentSystem?.workflows.length ?? 0} 条工作流`} />
         <Metric label="Crawl queue" value={`${crawlQueue?.job_count ?? 0}`} detail={crawlQueue ? `${crawlQueue.official_job_count} official / ${crawlQueue.community_job_count} community` : `${selectedProgramCount} selected programs`} />
         <Metric label="Review queue" value={`${reviewQueue?.pending_count ?? 0}`} detail={reviewQueue ? `${reviewQueue.publishable_count} publishable candidates` : "human gate not loaded"} />
+        <Metric label="Scenario audit" value={scenarioAudit ? (scenarioAudit.passed ? "passed" : "failed") : "not run"} detail={scenarioAudit ? `${scenarioAudit.case_count} cases / ${scenarioAudit.failure_count} failures` : "simulated profiles not checked"} />
       </section>
       <section className="two-column">
         <IslandCard className="panel-card">
@@ -1144,6 +1167,7 @@ function DataCenterView({ evidenceGraph, agentSystem, sourceRegistry, sourceRefr
           { key: "extract", label: "抽取结果", children: <ExtractionResultList report={sourceRefresh} /> },
           { key: "crawl", label: "Crawl queue", children: <CrawlQueuePanel report={crawlQueue} /> },
           { key: "review", label: "Review queue", children: <ReviewQueuePanel report={reviewQueue} publishResult={reviewPublishResult} loading={loading === "review"} onLoad={onLoadReviewQueue} onDecision={onPreviewReviewDecision} /> },
+          { key: "scenario", label: "Scenario audit", children: <ScenarioAuditPanel report={scenarioAudit} loading={loading === "scenario"} onLoad={onLoadScenarioAudit} /> },
         ]}
       />
     </div>
@@ -1593,6 +1617,74 @@ function AgentContractPanel({ report }: { report: AgentSystemReport | null }) {
             {agent.human_gate ? <small>{agent.human_gate}</small> : null}
             <div className="material-chips">
               {agent.tools.slice(0, 5).map((tool) => <span key={tool}>{tool}</span>)}
+            </div>
+          </article>
+        ))}
+      </div>
+    </div>
+  );
+}
+function auditFlag(value: boolean | null | undefined) {
+  if (value === null || value === undefined) return "unknown";
+  return value ? "yes" : "no";
+}
+
+function ScenarioAuditPanel({ report, loading, onLoad }: { report: ScenarioAuditReport | null; loading: boolean; onLoad: () => void }) {
+  if (!report) {
+    return (
+      <div className="source-report scenario-audit-panel">
+        <p>No scenario audit has been run yet. Run it to test simulated applicant profiles against recommendation strictness, public-source crawl boundaries, and human review gates.</p>
+        <IslandButton type="default" loading={loading} onClick={onLoad}>Run scenario audit</IslandButton>
+      </div>
+    );
+  }
+
+  return (
+    <div className="source-report scenario-audit-panel">
+      <section className="status-grid three">
+        <Metric label="Audit status" value={report.passed ? "passed" : "failed"} detail="trust gates and agent trace" />
+        <Metric label="Cases" value={`${report.case_count}`} detail="simulated applicant profiles" />
+        <Metric label="Failures" value={`${report.failure_count}`} detail="must be zero before user-facing trust claims" />
+      </section>
+      {report.failures.length ? <AdviceList title="Global failures" items={report.failures} /> : null}
+      <div className="scenario-agent-chain">
+        {report.agent_chain.map((agent) => <span key={agent}>{agentLabel(agent)}</span>)}
+      </div>
+      <div className="scenario-case-list">
+        {report.cases.map((caseItem) => (
+          <article className={`scenario-case-item ${caseItem.passed ? "passed" : "failed"}`} key={caseItem.name}>
+            <div className="program-title-row">
+              <strong>{caseItem.name}</strong>
+              <span className="tier-pill">{caseItem.passed ? "passed" : "failed"}</span>
+            </div>
+            <div className="task-meta">
+              <span>strict intent: {auditFlag(caseItem.strict_intent)}</span>
+              <span>application mix: {caseItem.application_mix_count}</span>
+              <span>review passed: {auditFlag(caseItem.review_passed)}</span>
+              <span>crawl jobs: {caseItem.crawl_queue.job_count}</span>
+              <span>{caseItem.crawl_queue.official_job_count} official</span>
+              <span>{caseItem.crawl_queue.community_job_count} community</span>
+            </div>
+            {caseItem.failures.length ? <AdviceList title="Case failures" items={caseItem.failures} /> : null}
+            <div className="scenario-target-grid">
+              {caseItem.targets.map((target) => (
+                <div className="scenario-target-item" key={`${caseItem.name}-${target.program_id}`}>
+                  <strong>{target.program_id}</strong>
+                  <div className="task-meta">
+                    <span>fit: {target.fit_score ?? "n/a"}</span>
+                    <span>category: {target.match_category ?? "n/a"}</span>
+                    <span>formal: {auditFlag(target.formal_recommendation)}</span>
+                    <span>status: {target.data_status ?? "unknown"}</span>
+                    <span>coverage: {target.coverage_item_count}</span>
+                    <span>ready: {auditFlag(target.production_ready)}</span>
+                    <span>pending review: {target.review_pending_count ?? "n/a"}</span>
+                    <span>publishable: {target.publishable_count ?? "n/a"}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="scenario-agent-chain compact">
+              {caseItem.trace_nodes.map((agent, index) => <span key={`${caseItem.name}-${agent}-${index}`}>{agentLabel(agent)}</span>)}
             </div>
           </article>
         ))}
