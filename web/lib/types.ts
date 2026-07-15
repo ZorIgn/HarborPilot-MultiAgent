@@ -7,6 +7,10 @@ export type AgentContract = {
   upstream_agents: string[];
   human_gate: string | null;
   deterministic_guardrails: string[];
+  llm_role: string;
+  llm_guardrails: string[];
+  retry_policy: string;
+  handoff_policy: string;
 };
 
 export type AgentWorkflowContract = {
@@ -29,6 +33,81 @@ export type AgentSystemReport = {
   checks: AgentContractCheck[];
   human_gates: string[];
   deterministic_guardrails: string[];
+};
+
+export type AgentRunSummary = {
+  workflow_id: string;
+  workflow_name: string;
+  status: "QUEUED" | "RUNNING" | "NEEDS_HUMAN" | "FAILED" | "COMPLETED" | string;
+  current_step: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AgentRuntimeStep = {
+  step_id: string;
+  node: string;
+  status: "COMPLETED" | "NEEDS_HUMAN" | "FAILED" | "ROLLED_BACK" | "ROLLBACK_TARGET" | string;
+  attempt: number;
+  max_attempts: number;
+  assigned_to: string;
+  started_at: string;
+  finished_at: string;
+  input_summary: string;
+  output_summary: string;
+  payload: {
+    tool_calls?: string[];
+    model?: string;
+    can_retry?: boolean;
+    handoff_to?: string;
+    needs_human_reason?: string | null;
+    [key: string]: unknown;
+  };
+};
+
+export type AgentRuntimeEvent = {
+  event_id: string;
+  entity_type: string;
+  entity_id: string;
+  event_type: string;
+  summary: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+};
+
+export type AgentRunDetail = {
+  run: AgentRunSummary | null;
+  steps: AgentRuntimeStep[];
+  events?: AgentRuntimeEvent[];
+};
+
+export type AgentQueueRunResponse = {
+  ok: boolean;
+  message: string;
+  job: AgentQueueJob | null;
+};
+
+export type AgentQueueJob = {
+  job_id: string;
+  workflow_name: string;
+  status: string;
+  priority: number;
+  attempts: number;
+  max_attempts: number;
+  payload_summary: string;
+  assigned_to?: string | null;
+  last_error?: string | null;
+  worker_summary?: string | null;
+  can_retry?: boolean;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type CatalogRefreshPlanResponse = {
+  ok: boolean;
+  mode: "dry_run" | "write" | string;
+  jobs: AgentQueueJob[];
+  next_step: string;
 };
 export type EvidenceLevel =
   | "SELF_REPORTED"
@@ -72,6 +151,7 @@ export type SourceCategory =
   | "writing_style_reference";
 
 export type SourceTrustLevel = "official" | "directory" | "community" | "methodology" | "writing_reference";
+export type ConfidenceLevel = "low" | "medium" | "high";
 
 export type SourcePolicy = {
   source_id: string;
@@ -133,7 +213,7 @@ export type FieldExtractionCandidate = {
   field_name: string;
   value: string | null;
   evidence_snippet: string | null;
-  confidence: "low" | "medium" | "high";
+  confidence: ConfidenceLevel;
   status: FieldVerificationStatus;
   review_required: boolean;
 };
@@ -183,7 +263,7 @@ export type ProgramExperienceSignal = {
   source_name: string;
   source_url: string | null;
   captured_at: string | null;
-  confidence: "low" | "medium" | "high";
+  confidence: ConfidenceLevel;
   official_verification_required: boolean;
   use_boundary: string;
 };
@@ -197,6 +277,17 @@ export type ProgramDataCoverageItem = {
   source_type: string | null;
   review_required: boolean;
   blocks_formal_use: boolean;
+  next_action: string;
+};
+
+export type DataQualityMetric = {
+  scope: string;
+  official_field_coverage: number;
+  verified_current_coverage: number;
+  review_required_count: number;
+  blocked_field_count: number;
+  blocked_fields: string[];
+  parser_capabilities: string[];
   next_action: string;
 };
 
@@ -217,6 +308,7 @@ export type ProgramDataPackage = {
   community_experiences: ProgramExperienceSignal[];
   acquisition_plan: AcquisitionSourcePlan[];
   human_review_required: boolean;
+  quality_metric?: DataQualityMetric | null;
 };
 
 export type DataAcquisitionReport = {
@@ -226,9 +318,14 @@ export type DataAcquisitionReport = {
   selected_program_ids: string[];
   packages: ProgramDataPackage[];
   source_plan: AcquisitionSourcePlan[];
+  field_evidence_records: FieldEvidenceRecord[];
+  extraction_results: SourceExtractionResult[];
+  persisted_evidence_count: number;
   summary: string;
   next_actions: string[];
   agent_chain: string[];
+  quality_metrics: DataQualityMetric[];
+  crawler_capabilities: string[];
 };
 
 export type CrawlQueueItem = {
@@ -314,7 +411,7 @@ export type ReviewQueueItem = {
   page_hash: string | null;
   snapshot_url?: string | null;
   extracted_at: string | null;
-  confidence: "low" | "medium" | "high";
+  confidence: ConfidenceLevel;
   source_priority: number;
   status: "PENDING" | "APPROVED" | "REJECTED";
   reviewer_id: string | null;
@@ -337,6 +434,47 @@ export type ReviewPublishResponse = {
   item: ReviewQueueItem;
   published_record: FieldEvidenceRecord | null;
   message: string;
+};
+
+export type ReviewBulkPublishResponse = {
+  ok: boolean;
+  published_count: number;
+  preview_count: number;
+  skipped_count: number;
+  queue_before: number;
+  queue_after: number | null;
+  responses: ReviewPublishResponse[];
+  message: string;
+};
+export type ProgramUrlCandidate = {
+  program_id: string;
+  institution: string;
+  program_name: string;
+  candidate_url: string;
+  candidate_label: string;
+  source_url: string | null;
+  match_score: number;
+  status: FieldVerificationStatus;
+  reason: string;
+  review_required: boolean;
+  publishable_after_review: boolean;
+  evidence_record: FieldEvidenceRecord;
+};
+
+export type CatalogAutoUpdateReport = {
+  run_id: string;
+  mode: "dry_run" | "live_fetch";
+  checked_at: string;
+  selected_program_ids: string[];
+  scanned_program_count: number;
+  missing_detail_page_count: number;
+  candidate_count: number;
+  persisted_candidate_count: number;
+  review_queue_size: number;
+  candidates: ProgramUrlCandidate[];
+  warnings: string[];
+  summary: string;
+  agent_chain: string[];
 };
 export type DataRefreshReport = {
   run_id: string;
@@ -371,7 +509,7 @@ export type FieldEvidenceRecord = {
   extracted_at: string | null;
   verified_at: string | null;
   page_hash: string | null;
-  confidence: "low" | "medium" | "high";
+  confidence: ConfidenceLevel;
   source_priority: number;
   status: FieldVerificationStatus;
   review_required: boolean;
@@ -401,6 +539,7 @@ export type ProgramTrustDetail = {
   program_id: string;
   cycle: string;
   production_ready: boolean;
+  reference_ready: boolean;
   status_label: string;
   source_warning: string;
   official_current_fields: string[];
@@ -412,6 +551,12 @@ export type ProgramTrustDetail = {
 };
 
 export type ApplicantPayload = {
+  personal_info: {
+    preferred_name: string;
+    citizenship: string;
+    current_location: string;
+    application_notes: string;
+  };
   target_regions: Array<"HK" | "SG">;
   target_cycle: string;
   target_degree: "taught_master" | "research_master";
@@ -446,6 +591,14 @@ export type ApplicantPayload = {
     tools: string[];
     evidence_level: EvidenceLevel;
   }>;
+  additional_background: {
+    core_courses: string[];
+    exchange_experiences: string[];
+    research_outputs: string[];
+    activities: string[];
+    awards: string[];
+    skills: string[];
+  };
   budget_hkd: number | null;
   career_goal: string;
   risk_flags: string[];
@@ -457,6 +610,7 @@ export type WorkflowResult = {
     profile_id: string;
     discipline_tags: string[];
     target_regions?: string[];
+    additional_background?: ApplicantPayload["additional_background"];
     profile_completeness: number;
     missing_fields: string[];
     fact_summary: Record<string, number>;
@@ -471,7 +625,12 @@ export type WorkflowResult = {
   assessment: {
     assessment_type: "PRELIMINARY" | "VERIFIED";
     overall_level: string;
-    confidence: "low" | "medium" | "high";
+    competitiveness_level: "强" | "中强" | "中" | "弱";
+    competitiveness_summary: string;
+    application_positioning: Record<string, string>;
+    hard_thresholds: string[];
+    strengthening_actions: string[];
+  confidence: ConfidenceLevel;
     data_completeness: number;
     dimension_scores: Record<string, number>;
     strengths: string[];
@@ -494,6 +653,8 @@ export type WorkflowResult = {
     draft: string;
     draft_zh: string;
     draft_en: string;
+    material_gaps: string[];
+    paragraph_drafts: string[];
     fact_bindings: Array<{ claim: string; fact_id: string }>;
     target_program_ids: string[];
     school_customization: string[];
@@ -508,6 +669,11 @@ export type WorkflowResult = {
     status_label?: string;
     hard_rule_violations: string[];
     programs_requiring_data_review: string[];
+    programs_with_missing_or_blocked_fields?: string[];
+    programs_requiring_current_cycle_review?: string[];
+    timeline_blockers?: Record<string, string[]>;
+    previous_cycle_reference_fields?: Record<string, string[]>;
+    required_timeline_fields?: string[];
     writing_review: string;
     human_gates: string[];
   };
@@ -560,7 +726,7 @@ export type ProgramMatch = {
       official_verification_required: boolean;
     }>;
   };
-  tier: "reach" | "match" | "safer" | "not_recommended" | "insufficient_info";
+  tier: "reach" | "target" | "safe" | "candidate" | "not_recommended";
   fit_score: number;
   score_breakdown: Record<
     "academic" | "language" | "experience" | "discipline_fit" | "budget_fit" | "data_trust",
@@ -608,7 +774,7 @@ export type ConsultantSchoolPlan = {
 
 export type DimensionFinding = {
   dimension: string;
-  level: "高" | "中" | "低" | "信息不足" | "待确认";
+  level: "高" | "中" | "低" | "信息不足" | "需核验";
   conclusion: string;
   basis: string;
   applicable_to: string[];
@@ -617,13 +783,13 @@ export type DimensionFinding = {
 };
 
 export type RecommendationExplanation = {
-  hard_condition: "通过" | "待确认" | "未通过";
+  hard_condition: "通过" | "需核验" | "未通过";
   academic_match: "高" | "中" | "低" | "未知";
   course_match: "高" | "中" | "低" | "未知";
   experience_match: "高" | "中" | "低" | "未知";
   budget_match: "高" | "中" | "低" | "未知";
   timeline_feasibility: "可规划" | "准备建议" | "未知";
-  confidence: "高" | "中" | "低";
+  confidence: ConfidenceLevel;
   decision_basis: string[];
   uncertainties: string[];
 };
@@ -651,6 +817,12 @@ export type TimelineTask = {
     | "scholarship";
   linked_program_ids: string[];
   risk: string | null;
+  institution?: string | null;
+  program_name?: string | null;
+  round_open_date?: string | null;
+  round_deadline?: string | "NOT_PUBLISHED" | null;
+  application_url?: string | null;
+  submit_to?: string | null;
   program_round?: string | null;
   official_deadline?: string | "NOT_PUBLISHED" | null;
   source_url?: string | null;
@@ -661,10 +833,10 @@ export type TimelineTask = {
   review_required?: boolean;
   task_name?: string | null;
   suggested_due_date?: string | null;
-  date_basis?: "官方截止倒推" | "内部准备建议" | "上一申请季参考" | "人工复核" | null;
+  date_basis?: "官方截止倒推" | "学生准备动作" | "上一申请季参考" | "人工复核" | null;
   previous_cycle_reference?: string | "NOT_PUBLISHED" | null;
   owner?: string;
-  status?: "待办" | "进行中" | "已完成" | "等待官方发布" | "需人工复核";
+  status?: "未开始" | "准备中" | "待上传" | "已提交" | "需复核";
   upload_materials?: string[];
   reminder_at?: string | null;
   risk_level?: "高" | "中" | "低";
@@ -683,6 +855,34 @@ export type AgentTrace = {
   needs_human_reason?: string | null;
 };
 
+
+export type ProgramSchemeState = {
+  band_overrides: Record<string, "reach" | "target" | "safe" | "candidate" | "blocked">;
+  removed_program_ids: string[];
+  extra_candidate_ids: string[];
+};
+
+
+export type WritingDraftHistoryItem = {
+  id: string;
+  createdAt: string;
+  title: string;
+  documentType: "PS" | "SOP" | "CV" | "ESSAY" | "REFERENCE_PACKAGE";
+  targetProgram: string;
+  factCount: number;
+  gapCount: number;
+  wordCount: number;
+};
+
+export type LocalWorkspaceState = {
+  selected_program_ids: string[];
+  questionnaire_values: Record<string, string>;
+  result_snapshot: unknown | null;
+  field_sensitivity: Record<string, string>;
+  writing_draft_history?: WritingDraftHistoryItem[];
+  program_scheme?: ProgramSchemeState;
+};
+
 export type LLMConfigResponse = {
   ok: boolean;
   provider: "mock" | "openai" | "deepseek" | "compatible";
@@ -698,6 +898,7 @@ export type QuestionnaireSchema = {
     id: string;
     title: string;
     description: string;
+    source_template?: string;
     repeatable?: boolean;
     fields: Array<{
       id: string;
@@ -706,6 +907,8 @@ export type QuestionnaireSchema = {
       options?: string[];
       sensitive?: boolean;
       required?: boolean;
+      placeholder?: string;
+      help?: string;
     }>;
   }>;
 };
@@ -780,7 +983,7 @@ export type WritingInterviewQuestion = {
   id: string;
   question: string;
   why_it_matters: string;
-  target_section: "项目题目" | "故事卡" | "技术深度" | "Why Program" | "职业目标" | "事实核验";
+  target_section: string;
   required: boolean;
   sensitive: boolean;
 };

@@ -141,6 +141,7 @@ def scenario_cases() -> list[ScenarioCase]:
             budget_hkd=330000,
             expect_strict_intent=False,
             expect_no_reach=True,
+            expected_mix_min=4,
             blocked_terms=BA_BLOCKED_TERMS,
             target_program_ids=(
                 "cityu-msc-business-and-data-analytics-2027",

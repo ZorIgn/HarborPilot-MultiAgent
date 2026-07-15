@@ -22,3 +22,9 @@ Thumbs.db
 web_min_build/
 
 data/reviewed_field_evidence.local.json
+data/.harborpilot_profile_secret
+data/*.sqlite
+data/*.sqlite3
+data/source_snapshots/
+audit_artifacts/
+web/next-dev/

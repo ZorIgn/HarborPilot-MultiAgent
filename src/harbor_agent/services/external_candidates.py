@@ -72,12 +72,11 @@ def qs_import_summary_for_programs(programs: list[Program]) -> dict[str, Any]:
         "matched_candidate_count": len(candidates),
         "matched_candidates": candidates,
         "use_boundary": [
-            "可用于发现项目、补全官网入口、理解上一申请季窗口和申请系统位置。",
-            "不能自动写入正式截止日期、学费、语言要求、材料要求。",
-            "给学生展示时应写成“官网线索/上一申请季参考”，不能写成“学校已确认”。",
+            "可用于发现项目、补充官网入口线索、理解上一申请季窗口和申请系统位置。",
+            "不能自动写入正式截止日期、学费、语言要求或材料要求。",
+            "面向学生展示时必须标明“官网线索 / 上一申请季参考”，不能写成学校已经发布当前季。",
         ],
     }
-
 
 def qs_candidate_for_program(program: Program) -> dict[str, Any] | None:
     candidates = qs_candidates_for_programs([program])
@@ -94,20 +93,19 @@ def qs_evidence_note_for_program(program: Program) -> str | None:
     if not candidate:
         return None
     window_status = str(candidate.get("window_status") or "")
-    source_name = "GradWindow/QS Master Applications"
+    source_name = "上一申请季官网窗口线索"
     if window_status.startswith("official_previous_cycle"):
         closes_at = candidate.get("closes_at")
         opens_at = candidate.get("opens_at")
         if opens_at and closes_at:
             return (
-                f"{source_name} 已导入上一申请季官网窗口：{opens_at} 至 {closes_at}。"
-                "当前申请季仍需回学校官网确认后才能作为正式截止。"
+                f"{source_name}: {opens_at} 至 {closes_at}。"
+                "当前申请季发布后仍需回到学校官网核对，才能作为正式截止日期。"
             )
-        return f"{source_name} 已导入上一申请季官网线索；当前申请季仍需回学校官网确认。"
+        return f"{source_name}已定位；当前申请季发布后需要回到项目详情页复核。"
     if candidate.get("application_url") or candidate.get("source_url"):
-        return f"{source_name} 已定位官网项目页/申请入口；截止日期、学费、语言和材料仍需逐项确认。"
-    return f"{source_name} 已提供项目发现线索；正式要求仍以学校官网原文为准。"
-
+        return "已定位官网项目页或申请入口；截止日期、学费、语言和材料仍需逐项核对。"
+    return "已找到项目发现线索；正式要求仍以学校项目页、申请系统或官方 PDF 原文为准。"
 
 def qs_previous_cycle_deadline(program: Program) -> date | None:
     candidate = qs_candidate_for_program(program)

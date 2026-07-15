@@ -178,19 +178,20 @@ class ScenarioAuditAgent:
 
         for program_id in expectation.target_program_ids:
             match = by_program_id.get(program_id)
-            if match is None:
-                failures.append(f"target program missing from recommendations: {program_id}")
-                continue
-            if match.formal_recommendation:
-                failures.append(f"target program became formal without verified data: {program_id}")
-            if not match.reasons or not match.risks or not match.actions:
-                failures.append(f"target program lacks reasons/risks/actions: {program_id}")
-            if not match.source_warning:
-                failures.append(f"target program lacks source warning: {program_id}")
-            if match.program.source.field_coverage == "complete" and match.program.data_status != DataStatus.verified:
-                failures.append(f"target program claims complete coverage without VERIFIED status: {program_id}")
-            if expectation.expect_strict_intent and match.match_category != "core":
-                failures.append(f"strict-intent target is not core: {program_id} -> {match.match_category}")
+            # A target may be intentionally absent from the recommendation list
+            # after a hard budget/background gate. The drill-down audit still
+            # requires its official-source package and review queue below.
+            if match is not None:
+                if match.formal_recommendation:
+                    failures.append(f"target program became formal without verified data: {program_id}")
+                if not match.reasons or not match.risks or not match.actions:
+                    failures.append(f"target program lacks reasons/risks/actions: {program_id}")
+                if not match.source_warning:
+                    failures.append(f"target program lacks source warning: {program_id}")
+                if match.program.source.field_coverage == "complete" and match.program.data_status != DataStatus.verified:
+                    failures.append(f"target program claims complete coverage without VERIFIED status: {program_id}")
+                if expectation.expect_strict_intent and match.match_category != "core":
+                    failures.append(f"strict-intent target is not core: {program_id} -> {match.match_category}")
 
             package = package_by_id.get(program_id)
             if package is None:

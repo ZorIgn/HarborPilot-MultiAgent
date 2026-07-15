@@ -1,4 +1,10 @@
 {
+  "personal_info": {
+    "preferred_name": "",
+    "citizenship": "",
+    "current_location": "",
+    "application_notes": ""
+  },
   "target_regions": ["HK", "SG"],
   "target_cycle": "2027-fall",
   "target_degree": "taught_master",
@@ -45,6 +51,14 @@
       "evidence_level": "USER_CONFIRMED"
     }
   ],
+  "additional_background": {
+    "core_courses": ["Data Structures", "Database Systems", "Machine Learning", "Statistics"],
+    "exchange_experiences": [],
+    "research_outputs": [],
+    "activities": ["student analytics club"],
+    "awards": ["course project distinction"],
+    "skills": ["Python", "SQL", "Tableau", "statistics", "machine learning"]
+  },
   "budget_hkd": 420000,
   "career_goal": "Become a product data analyst in a cross-border technology company.",
   "risk_flags": []

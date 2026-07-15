@@ -1,0 +1,61 @@
+{
+  "version": "v1-configurable-agent-strategy",
+  "institution_tiers": {
+    "elite": {
+      "score": 5.1,
+      "aliases": [
+        "the university of hong kong",
+        "hong kong university of science and technology",
+        "the chinese university of hong kong",
+        "national university of singapore",
+        "nanyang technological university"
+      ]
+    },
+    "strong": {
+      "score": 4.15,
+      "aliases": [
+        "city university of hong kong",
+        "the hong kong polytechnic university",
+        "singapore management university",
+        "singapore university of technology and design"
+      ]
+    },
+    "solid": {
+      "score": 3.15,
+      "aliases": [
+        "hong kong baptist university",
+        "lingnan university",
+        "the education university of hong kong"
+      ]
+    }
+  },
+  "profile_tier_base": {
+    "C9": 4.75,
+    "985": 4.45,
+    "211": 4.05,
+    "double_first_class": 3.85,
+    "overseas": 4.1,
+    "regular": 3.15,
+    "unknown": 3.25
+  },
+  "recommendation_quotas": {
+    "reach": 14,
+    "target": 14,
+    "safe": 12,
+    "candidate": 10,
+    "not_recommended": 12,
+    "max_total": 60
+  },
+  "application_mix_quotas": {
+    "reach": 4,
+    "target": 4,
+    "safe": 3,
+    "max_total": 10
+  },
+  "agent_adjustable_fields": [
+    "institution_tiers",
+    "recommendation_quotas",
+    "application_mix_quotas",
+    "profile_tier_base"
+  ]
+}

@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "set NEXT_TELEMETRY_DISABLED=1&& set NEXT_IGNORE_INCORRECT_LOCKFILE=1&& set NEXT_TRACE_SPAN_THRESHOLD_MS=2147483647&& next build",
-    "start": "next start",
+    "dev": "set NEXT_DIST_DIR=next-dev&& next dev -p 3001",
+    "build": "set NEXT_DIST_DIR=next-build&& set NEXT_TELEMETRY_DISABLED=1&& set NEXT_IGNORE_INCORRECT_LOCKFILE=1&& set NEXT_TRACE_SPAN_THRESHOLD_MS=2147483647&& next build",
+    "start": "set NEXT_DIST_DIR=next-build&& next start -p 3001",
     "lint": "next lint"
   },
   "dependencies": {

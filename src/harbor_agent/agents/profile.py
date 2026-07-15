@@ -75,11 +75,20 @@ class ProfileAgent:
             profile_id=f"profile_{profile_id}",
             target_cycle=payload.target_cycle,
             target_regions=payload.target_regions,
-            discipline_tags=tags or ["interdisciplinary"],
-            raw_interest_text=payload.raw_interest_text,
+            discipline_tags=tags,
+            raw_interest_text=_join_background_text(
+                payload.raw_interest_text,
+                payload.additional_background.core_courses,
+                payload.additional_background.skills,
+                payload.additional_background.research_outputs,
+                payload.additional_background.exchange_experiences,
+                payload.additional_background.activities,
+                payload.additional_background.awards,
+            ),
             education=payload.education,
             language=payload.language,
             experiences=payload.experiences,
+            additional_background=payload.additional_background,
             budget_hkd=payload.budget_hkd,
             career_goal=payload.career_goal,
             risk_flags=payload.risk_flags,
@@ -93,7 +102,13 @@ class ProfileAgent:
         # Only the user's selected direction, free-form interest text, and major decide
         # primary discipline tags. Career goals and experience descriptions may inform
         # matching later, but must not silently turn a CS/AI/Data applicant into BA.
-        text = " ".join(payload.discipline_interests + [payload.raw_interest_text, payload.education.major])
+        background_terms = [
+            *payload.additional_background.core_courses,
+            *payload.additional_background.research_outputs,
+            *payload.additional_background.skills,
+            *payload.additional_background.awards,
+        ]
+        text = " ".join(payload.discipline_interests + [payload.raw_interest_text, payload.education.major, *background_terms])
         lowered = text.lower()
         tags = [
             tag
@@ -104,8 +119,10 @@ class ProfileAgent:
 
     def _missing_fields(self, payload: ApplicantProfileInput) -> list[str]:
         missing: list[str] = []
-        if not payload.discipline_interests and not payload.raw_interest_text:
+        if not payload.discipline_interests and not payload.raw_interest_text and not payload.additional_background.core_courses:
             missing.append("target discipline direction")
+        if not payload.additional_background.core_courses and not payload.raw_interest_text:
+            missing.append("core courses or prerequisites")
         if payload.language.test == "NONE" or payload.language.overall is None:
             missing.append("language test score")
         if not payload.experiences:
@@ -120,3 +137,10 @@ class ProfileAgent:
             if not exp.outcomes:
                 missing.append(f"experience #{index + 1} measurable outcome")
         return missing
+
+
+def _join_background_text(raw: str, *groups: list[str]) -> str:
+    parts = [raw.strip()]
+    for group in groups:
+        parts.extend(item.strip() for item in group if item.strip())
+    return " ".join(dict.fromkeys(part for part in parts if part))

@@ -1,0 +1,891 @@
+[
+    {
+        "program_id":  "cityu-ma-communication-and-new-media-2027",
+        "official_program_url":  "https://www.cityu.edu.hk/pg/programme/p25",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "CityUHK official programme detail page for MA Communication and New Media; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "cityu-ma-english-studies-2027",
+        "official_program_url":  "https://www.cityu.edu.hk/pg/programme/p40",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "CityUHK official programme detail page for MA English Studies; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "cityu-ma-integrated-marketing-communication-2027",
+        "official_program_url":  "https://www.cityu.edu.hk/pg/programme/p39",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "CityUHK official programme detail page for MA Integrated Marketing Communication; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "cityu-ma-public-policy-and-management-2027",
+        "official_program_url":  "https://www.cityu.edu.hk/pg/programme/p27",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "CityUHK official programme detail page for MA Public Policy and Management; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "cityu-msc-applied-economics-2027",
+        "official_program_url":  "https://www.cityu.edu.hk/pg/programme/p13",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "CityUHK official programme detail page for MSc Applied Economics; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "cityu-msc-business-and-data-analytics-2027",
+        "official_program_url":  "https://www.cityu.edu.hk/pg/programme/p84",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "CityUHK official programme detail page for MSc Business and Data Analytics; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "cityu-msc-computer-science-2027",
+        "official_program_url":  "https://www.cityu.edu.hk/pg/programme/p53",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "CityUHK official programme detail page for MSc Computer Science; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "cityu-msc-construction-management-2027",
+        "official_program_url":  "https://www.cityu.edu.hk/pg/programme/p52",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "CityUHK official programme detail page for MSc Construction Management; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "cityu-msc-data-science-2027",
+        "official_program_url":  "https://www.cityu.edu.hk/pg/programme/p70",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "CityUHK official programme detail page for MSc Data Science; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "cityu-msc-finance-2027",
+        "official_program_url":  "https://www.cityu.edu.hk/pg/programme/p04",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "CityUHK official programme detail page for MSc Finance; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "cuhk-ma-in-applied-english-linguistics-2027",
+        "official_program_url":  "https://www.gs.cuhk.edu.hk/programmes/arts/ma-english-applied-english-linguistics",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "CUHK Graduate School official programme detail page for MA in English (Applied English Linguistics); extracted from the official Arts programme listing and title-matched to the programme."
+    },
+    {
+        "program_id":  "cuhk-ma-in-global-communication-2027",
+        "official_program_url":  "https://www.gs.cuhk.edu.hk/programmes/social-science/ma-global-communication",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "CUHK Graduate School official programme detail page for MA in Global Communication; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "cuhk-ma-in-journalism-2027",
+        "official_program_url":  "https://www.gs.cuhk.edu.hk/programmes/social-science/ma-journalism",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "CUHK Graduate School official programme detail page for MA in Journalism; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "cuhk-master-of-accountancy-2027",
+        "official_program_url":  "https://www.gs.cuhk.edu.hk/programmes/business-administration/master-accountancy",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "CUHK Graduate School official programme detail page for Master of Accountancy; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "cuhk-master-of-public-health-2027",
+        "official_program_url":  "https://www.gs.cuhk.edu.hk/programmes/medicine/master-public-health",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "CUHK Graduate School official programme detail page for Master of Public Health; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "cuhk-master-of-social-science-in-public-policy-2027",
+        "official_program_url":  "https://www.gs.cuhk.edu.hk/programmes/social-science/msSc-public-policy",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "CUHK Graduate School official programme detail page for Master of Social Science in Public Policy; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "cuhk-msc-in-artificial-intelligence-2027",
+        "official_program_url":  "https://www.gs.cuhk.edu.hk/programmes/engineering/msc-artificial-intelligence",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "CUHK Graduate School official programme detail page for MSc in Artificial Intelligence; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "cuhk-msc-in-business-analytics-2027",
+        "official_program_url":  "https://www.gs.cuhk.edu.hk/programmes/business-administration/msc-business-analytics",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "CUHK Graduate School official programme detail page for MSc in Business Analytics; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "cuhk-msc-in-computer-science-2027",
+        "official_program_url":  "https://msc.cse.cuhk.edu.hk/?page_id=11\u0026lang=en",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-04T00:00:00Z",
+        "evidence_snippet":  "CUHK MSc Computer Science 官方项目站点；关键申请字段仍需字段级核验。"
+    },
+    {
+        "program_id":  "cuhk-msc-in-data-science-and-business-statistics-2027",
+        "official_program_url":  "https://www.sta.cuhk.edu.hk/programmes/msc-in-data-science-and-business-statistics/",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-04T00:00:00Z",
+        "evidence_snippet":  "CUHK Statistics 官方项目详情页；关键申请字段仍需字段级核验。"
+    },
+    {
+        "program_id":  "cuhk-msc-in-finance-2027",
+        "official_program_url":  "https://www.gs.cuhk.edu.hk/programmes/business-administration/msc-finance",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "CUHK Graduate School official programme detail page for MSc in Finance; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "cuhk-msc-in-genomics-and-bioinformatics-2027",
+        "official_program_url":  "https://www.gs.cuhk.edu.hk/programmes/medicine/msc-genomics-and-bioinformatics",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "CUHK Graduate School official programme detail page for MSc in Genomics and Bioinformatics; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "cuhk-msc-in-information-engineering-2027",
+        "official_program_url":  "https://www.gs.cuhk.edu.hk/programmes/engineering/msc-information-engineering",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "CUHK Graduate School official programme detail page for MSc in Information Engineering; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "cuhk-msc-in-management-2027",
+        "official_program_url":  "https://www.gs.cuhk.edu.hk/programmes/business-administration/msc-management",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "CUHK Graduate School official programme detail page for MSc in Management; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "cuhk-msc-in-marketing-2027",
+        "official_program_url":  "https://www.gs.cuhk.edu.hk/programmes/business-administration/msc-marketing",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "CUHK Graduate School official programme detail page for MSc in Marketing; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "eduhk-ma-child-and-family-education-2027",
+        "official_program_url":  "https://www.eduhk.hk/fehd/en/programmes.php?id=705",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "EdUHK official MA Child and Family Education programme page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "eduhk-ma-education-for-sustainability-2027",
+        "official_program_url":  "https://maefs.eduhk.hk/",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "EdUHK official MA Education for Sustainability programme site; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "eduhk-ma-stem-education-2027",
+        "official_program_url":  "https://mastem.eduhk.hk/",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "EdUHK official MA STEM Education programme site; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "eduhk-master-of-education-2027",
+        "official_program_url":  "https://www.eduhk.hk/gradsch/index.php/prospective-students/master-of-education-for-prospective-students.html",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "EdUHK official Master of Education programme page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "eduhk-ma-teaching-english-to-speakers-of-other-languages-2027",
+        "official_program_url":  "https://www.eduhk.hk/fhm/en/page/matesol-homepage",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "EdUHK official MA Teaching English to Speakers of Other Languages programme page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "hkbu-master-of-education-2027",
+        "official_program_url":  "https://educ.hkbu.edu.hk/?page_id=20282",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "HKBU Department of Education and Psychology official programme page for Master of Education; direct page returns 200, title is Master of education, and the page contains the programme title; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "hkbu-msc-applied-accounting-and-finance-2027",
+        "official_program_url":  "https://mscaaf.hkbu.edu.hk/",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "HKBU School of Business official MSc Applied Accounting and Finance programme microsite; page title and H1 identify the programme, and the site includes admission and apply links. Key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "hkbu-msc-business-management-2027",
+        "official_program_url":  "https://mscbm.hkbu.edu.hk/",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "HKBU School of Business official MSc Business Management programme microsite; page title and H1 identify the programme, and the site includes admission and apply links. Key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "hkbu-msc-corporate-governance-and-compliance-2027",
+        "official_program_url":  "https://msccgc.hkbu.edu.hk/",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "HKBU School of Business official MSc Corporate Governance and Compliance programme microsite; page title and H1 identify the programme, and the site includes admission and apply links. Key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "hkbu-msc-data-analytics-and-artificial-intelligence-2027",
+        "official_program_url":  "https://www.comp.hkbu.edu.hk/v1/?page=msc_daai",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "HKBU Department of Computer Science official programme page for MSc Data Analytics and Artificial Intelligence; direct page returns 200 and contains the programme title."
+    },
+    {
+        "program_id":  "hkbu-msc-information-technology-management-2027",
+        "official_program_url":  "https://www.comp.hkbu.edu.hk/v1/?page=msc_itm",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "HKBU Department of Computer Science official programme page for MSc Information Technology Management; direct page returns 200 and contains the programme title."
+    },
+    {
+        "program_id":  "hku-master-of-accounting-2027",
+        "official_program_url":  "https://portal.hku.hk/tpg-admissions/programme-details?programme=master-of-accounting-hkubs\u0026mode=1",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "HKU Taught Postgraduate Admissions 官方项目详情页；项目轮次、材料、学费和语言要求仍需字段级核验。"
+    },
+    {
+        "program_id":  "hku-master-of-architecture-2027",
+        "official_program_url":  "https://portal.hku.hk/tpg-admissions/programme-details?programme=master-of-architecture-arch\u0026mode=1",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "HKU Taught Postgraduate Admissions official programme detail route for Master of Architecture; page route returns 200 and contains the programme slug; key fields still require field-level verification."
+    },
+    {
+        "program_id":  "hku-master-of-economics-2027",
+        "official_program_url":  "https://portal.hku.hk/tpg-admissions/programme-details?programme=master-of-economics-hkubs\u0026mode=1",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "HKU Taught Postgraduate Admissions 官方项目详情页；项目轮次、材料、学费和语言要求仍需字段级核验。"
+    },
+    {
+        "program_id":  "hku-master-of-education-2027",
+        "official_program_url":  "https://portal.hku.hk/tpg-admissions/programme-details?programme=master-of-education-edu\u0026mode=1",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "HKU Taught Postgraduate Admissions 官方项目详情页；项目轮次、材料、学费和语言要求仍需字段级核验。"
+    },
+    {
+        "program_id":  "hku-master-of-finance-2027",
+        "official_program_url":  "https://portal.hku.hk/tpg-admissions/programme-details?programme=master-of-finance-hkubs\u0026mode=1",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "HKU Taught Postgraduate Admissions 官方项目详情页；项目轮次、材料、学费和语言要求仍需字段级核验。"
+    },
+    {
+        "program_id":  "hku-master-of-global-management-2027",
+        "official_program_url":  "https://portal.hku.hk/tpg-admissions/programme-details?programme=master-of-global-management-hkubs\u0026mode=1",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "HKU Taught Postgraduate Admissions 官方项目详情页；项目轮次、材料、学费和语言要求仍需字段级核验。"
+    },
+    {
+        "program_id":  "hku-master-of-journalism-2027",
+        "official_program_url":  "https://portal.hku.hk/tpg-admissions/programme-details?programme=master-of-journalism-socsc\u0026mode=1",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "HKU Taught Postgraduate Admissions 官方项目详情页；项目轮次、材料、学费和语言要求仍需字段级核验。"
+    },
+    {
+        "program_id":  "hku-master-of-public-administration-2027",
+        "official_program_url":  "https://portal.hku.hk/tpg-admissions/programme-details?programme=master-of-public-administration-socsc\u0026mode=1",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "HKU Taught Postgraduate Admissions 官方项目详情页；项目轮次、材料、学费和语言要求仍需字段级核验。"
+    },
+    {
+        "program_id":  "hku-master-of-public-health-2027",
+        "official_program_url":  "https://portal.hku.hk/tpg-admissions/programme-details?programme=master-of-public-health-med\u0026mode=1",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "HKU Taught Postgraduate Admissions 官方项目详情页；项目轮次、材料、学费和语言要求仍需字段级核验。"
+    },
+    {
+        "program_id":  "hku-master-of-public-policy-2027",
+        "official_program_url":  "https://portal.hku.hk/tpg-admissions/programme-details?programme=master-of-public-policy-socsc\u0026mode=1",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "HKU Taught Postgraduate Admissions official programme detail route for Master of Public Policy; page route returns 200 and contains the programme slug; key fields still require field-level verification."
+    },
+    {
+        "program_id":  "hku-master-of-science-in-business-analytics-2027",
+        "official_program_url":  "https://portal.hku.hk/tpg-admissions/programme-details?programme=master-of-science-in-business-analytics-hkubs\u0026mode=1",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "HKU Taught Postgraduate Admissions 官方项目详情页；项目轮次、材料、学费和语言要求仍需字段级核验。"
+    },
+    {
+        "program_id":  "hku-master-of-science-in-computer-science-2027",
+        "official_program_url":  "https://www.cse.hku.hk/tpg/msc-cs/",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-04T00:00:00Z",
+        "evidence_snippet":  "HKU CSE 官方 MSc Computer Science 项目详情页；关键申请字段仍需字段级核验。"
+    },
+    {
+        "program_id":  "hku-master-of-science-in-data-science-2027",
+        "official_program_url":  "https://datascience.hku.hk/",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-04T00:00:00Z",
+        "evidence_snippet":  "HKU Master of Data Science 官方项目站点；关键申请字段仍需字段级核验。"
+    },
+    {
+        "program_id":  "hku-master-of-science-in-engineering-2027",
+        "official_program_url":  "https://portal.hku.hk/tpg-admissions/programme-details?programme=master-of-science-in-engineering-engg\u0026mode=1",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "HKU Taught Postgraduate Admissions official programme detail route for Master of Science in Engineering; page route returns 200 and contains the programme slug; key fields still require field-level verification."
+    },
+    {
+        "program_id":  "hku-master-of-science-in-environmental-management-2027",
+        "official_program_url":  "https://portal.hku.hk/tpg-admissions/programme-details?programme=master-of-science-in-environmental-management-sci\u0026mode=1",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "HKU Taught Postgraduate Admissions 官方项目详情页；项目轮次、材料、学费和语言要求仍需字段级核验。"
+    },
+    {
+        "program_id":  "hku-master-of-science-in-marketing-2027",
+        "official_program_url":  "https://portal.hku.hk/tpg-admissions/programme-details?programme=master-of-science-in-marketing-hkubs\u0026mode=1",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "HKU Taught Postgraduate Admissions 官方项目详情页；项目轮次、材料、学费和语言要求仍需字段级核验。"
+    },
+    {
+        "program_id":  "hku-master-of-science-in-statistics-2027",
+        "official_program_url":  "https://portal.hku.hk/tpg-admissions/programme-details?programme=master-of-statistics-cds\u0026mode=1",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "HKU Taught Postgraduate Admissions 官方项目详情页；项目轮次、材料、学费和语言要求仍需字段级核验。"
+    },
+    {
+        "program_id":  "hku-master-of-urban-planning-2027",
+        "official_program_url":  "https://portal.hku.hk/tpg-admissions/programme-details?programme=master-of-urban-planning-arch\u0026mode=1",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "HKU Taught Postgraduate Admissions official programme detail route for Master of Urban Planning; page route returns 200 and contains the programme slug; key fields still require field-level verification."
+    },
+    {
+        "program_id":  "hkust-master-of-public-management-2027",
+        "official_program_url":  "https://prog-crs.hkust.edu.hk/pgprog/2026-27/mpm",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "HKUST official Master of Public Management programme detail page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "hkust-master-of-public-policy-2027",
+        "official_program_url":  "https://prog-crs.hkust.edu.hk/pgprog/2026-27/mpp",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "HKUST official Master of Public Policy programme detail page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "hkust-msc-in-accounting-2027",
+        "official_program_url":  "https://prog-crs.hkust.edu.hk/pgprog/2026-27/msc-acct",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "HKUST official MSc Accounting programme detail page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "hkust-msc-in-big-data-technology-2027",
+        "official_program_url":  "https://prog-crs.hkust.edu.hk/pgprog/2025-26/msc-bdt",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-04T00:00:00Z",
+        "evidence_snippet":  "HKUST 官方 MSc Big Data Technology 项目详情页；该 URL 为 2025-26 页面，作为往届参考入口，当前季关键字段需重新核验。"
+    },
+    {
+        "program_id":  "hkust-msc-in-biotechnology-2027",
+        "official_program_url":  "https://prog-crs.hkust.edu.hk/pgprog/2026-27/msc-btec",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "HKUST official MSc Biotechnology programme detail page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "hkust-msc-in-business-analytics-2027",
+        "official_program_url":  "https://prog-crs.hkust.edu.hk/pgprog/2026-27/msc-ba",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "HKUST official MSc Business Analytics programme detail page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "hkust-msc-in-economics-2027",
+        "official_program_url":  "https://prog-crs.hkust.edu.hk/pgprog/2026-27/msc-econ",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "HKUST official MSc Economics programme detail page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "hkust-msc-in-electronic-engineering-2027",
+        "official_program_url":  "https://prog-crs.hkust.edu.hk/pgprog/2026-27/msc-elec",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "HKUST official MSc Electronic Engineering programme detail page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "hkust-msc-in-engineering-enterprise-management-2027",
+        "official_program_url":  "https://prog-crs.hkust.edu.hk/pgprog/2026-27/msc-eem",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "HKUST official MSc Engineering Enterprise Management programme detail page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "hkust-msc-in-financial-technology-2027",
+        "official_program_url":  "https://prog-crs.hkust.edu.hk/pgprog/2026-27/msc-fintec",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "HKUST official MSc Financial Technology programme detail page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "hkust-msc-in-global-operations-2027",
+        "official_program_url":  "https://prog-crs.hkust.edu.hk/pgprog/2026-27/msc-gom",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "HKUST official MSc Global Operations programme detail page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "hkust-msc-in-information-technology-2027",
+        "official_program_url":  "https://prog-crs.hkust.edu.hk/pgprog/2025-26/msc-it",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-04T00:00:00Z",
+        "evidence_snippet":  "HKUST 官方 MSc Information Technology 项目详情页；该 URL 为 2025-26 页面，作为往届参考入口，当前季关键字段需重新核验。"
+    },
+    {
+        "program_id":  "hkust-msc-in-international-management-2027",
+        "official_program_url":  "https://prog-crs.hkust.edu.hk/pgprog/2026-27/msc-im",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "HKUST official MSc International Management programme detail page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "lingnan-ma-creative-and-media-industries-2027",
+        "official_program_url":  "https://www.ln.edu.hk/daci/macmi",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "Lingnan University official Department of Digital Arts and Creative Industries page for Master of Arts in Creative and Media Industries; direct page returns 200 and contains the programme title."
+    },
+    {
+        "program_id":  "lingnan-ma-international-affairs-2027",
+        "official_program_url":  "https://www.ln.edu.hk/gia/maia/",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "Lingnan University official Department of Government and International Affairs page for Master of Arts in International Affairs; direct page returns 200 and contains the programme title."
+    },
+    {
+        "program_id":  "lingnan-ma-translation-studies-2027",
+        "official_program_url":  "https://www.ln.edu.hk/tran/programmes/mats",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "Lingnan University official Department of Translation page for Master of Arts in Translation Studies; direct page returns 200 and contains the programme title."
+    },
+    {
+        "program_id":  "lingnan-msc-artificial-intelligence-and-business-analytics-2027",
+        "official_program_url":  "https://www.ln.edu.hk/sds/dai/mscaiba",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "Lingnan University official School of Data Science page for Master of Science in Artificial Intelligence and Business Analytics; direct page returns 200 and contains the programme title."
+    },
+    {
+        "program_id":  "lingnan-msc-data-science-2027",
+        "official_program_url":  "https://www.ln.edu.hk/sds/dai/mscds",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "Lingnan University official School of Data Science page for Master of Science in Data Science; direct page returns 200 and contains the programme title."
+    },
+    {
+        "program_id":  "lingnan-msc-ebusiness-and-supply-chain-management-2027",
+        "official_program_url":  "https://www.ln.edu.hk/fb/tpo/academic-programmes/mscebscm",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "Lingnan University Faculty of Business Taught Postgraduate Programmes Office official page for MSc in eBusiness and Supply Chain Management; direct page returns 200 and contains the programme title."
+    },
+    {
+        "program_id":  "lingnan-msc-finance-2027",
+        "official_program_url":  "https://www.ln.edu.hk/fb/tpo/academic-programmes/mfin",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "Lingnan University Faculty of Business Taught Postgraduate Programmes Office official page for MSc in Finance; direct page returns 200 and contains the programme title."
+    },
+    {
+        "program_id":  "lingnan-msc-human-resource-management-and-organisational-behaviour-2027",
+        "official_program_url":  "https://www.ln.edu.hk/fb/tpo/academic-programmes/mschrom",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "Lingnan University Faculty of Business Taught Postgraduate Programmes Office official page for MSc in Human Resource and Organisational Management; direct page returns 200 and contains the MScHROM programme title. Catalog name may reflect an earlier naming variant and needs field review."
+    },
+    {
+        "program_id":  "lingnan-msc-marketing-and-international-business-2027",
+        "official_program_url":  "https://www.ln.edu.hk/fb/tpo/academic-programmes/mscmib",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "Lingnan University Faculty of Business Taught Postgraduate Programmes Office official page for MSc in Marketing and International Business; direct page returns 200 and contains the programme title."
+    },
+    {
+        "program_id":  "ntu-msc-accountancy-2027",
+        "official_program_url":  "https://www.ntu.edu.sg/business/admissions/graduate-studies/msc-accountancy",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "NTU official MSc Accountancy programme detail page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "ntu-msc-artificial-intelligence-2027",
+        "official_program_url":  "https://www.ntu.edu.sg/education/graduate-programme/master-of-science-in-artificial-intelligence",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-04T00:00:00Z",
+        "evidence_snippet":  "NTU 官方 MSc Artificial Intelligence 项目详情页；关键申请字段仍需字段级核验。"
+    },
+    {
+        "program_id":  "ntu-msc-business-analytics-2027",
+        "official_program_url":  "https://www.ntu.edu.sg/business/admissions/graduate-studies/msc-business-analytics",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "NTU official MSc Business Analytics programme detail page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "ntu-msc-financial-engineering-2027",
+        "official_program_url":  "https://www.ntu.edu.sg/business/admissions/graduate-studies/msc-financial-engineering",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "NTU official MSc Financial Engineering programme detail page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "ntu-msc-management-2027",
+        "official_program_url":  "https://www.ntu.edu.sg/business/admissions/graduate-studies/master-in-management",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "NTU official Master in Management programme detail page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "ntu-msc-marketing-science-2027",
+        "official_program_url":  "https://www.ntu.edu.sg/business/admissions/graduate-studies/msc-marketing-science",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "NTU official MSc Marketing Science programme detail page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "ntu-msc-project-management-2027",
+        "official_program_url":  "https://www.ntu.edu.sg/education/graduate-programme/master-of-science-in-project-management",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "NTU official graduate programme detail page for Master of Science in Project Management; direct page returns 200 and contains the programme title; key fields still require field-level verification."
+    },
+    {
+        "program_id":  "nus-master-in-public-administration-2027",
+        "official_program_url":  "https://lkyspp.nus.edu.sg/graduate-programmes/master-in-public-administration-mpa",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "NUS Lee Kuan Yew School of Public Policy official Master in Public Administration programme page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "nus-master-in-public-policy-2027",
+        "official_program_url":  "https://lkyspp.nus.edu.sg/graduate-programmes/master-in-public-policy-mpp",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "NUS Lee Kuan Yew School of Public Policy official Master in Public Policy programme page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "nus-master-of-architecture-2027",
+        "official_program_url":  "https://cde.nus.edu.sg/arch/programmes/master-of-architecture/",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "NUS College of Design and Engineering official Master of Architecture programme page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "nus-master-of-computing-2027",
+        "official_program_url":  "https://www.comp.nus.edu.sg/programmes/pg/mcs/",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-04T00:00:00Z",
+        "evidence_snippet":  "NUS School of Computing 官方项目详情页；关键申请字段仍需字段级核验。"
+    },
+    {
+        "program_id":  "nus-master-of-public-health-2027",
+        "official_program_url":  "https://sph.nus.edu.sg/education/graduate-programmes/master-of-public-health/",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "NUS Saw Swee Hock School of Public Health official Master of Public Health programme page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "nus-msc-business-analytics-2027",
+        "official_program_url":  "https://msba.nus.edu.sg/",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "NUS official MSc Business Analytics programme site; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "nus-msc-civil-engineering-2027",
+        "official_program_url":  "https://cde.nus.edu.sg/cee/graduate/msc-programmes/msc-civil-engineering/",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "NUS College of Design and Engineering official MSc Civil Engineering programme page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "nus-msc-data-science-and-machine-learning-2027",
+        "official_program_url":  "https://www.stat.nus.edu.sg/prospective-students/graduate-programme/msc-in-data-science-and-machine-learning/",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-04T00:00:00Z",
+        "evidence_snippet":  "NUS Statistics 官方项目详情页；关键申请字段仍需字段级核验。"
+    },
+    {
+        "program_id":  "nus-msc-electrical-engineering-2027",
+        "official_program_url":  "https://cde.nus.edu.sg/ece/graduate/msc-electrical-engineering/",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "NUS College of Design and Engineering official MSc Electrical Engineering programme page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "nus-msc-finance-2027",
+        "official_program_url":  "https://mscfin.nus.edu.sg/",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "NUS official MSc Finance programme site; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "nus-msc-industrial-and-systems-engineering-2027",
+        "official_program_url":  "https://cde.nus.edu.sg/isem/graduate/msc-industrial-systems-engineering/",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "NUS College of Design and Engineering official MSc Industrial and Systems Engineering programme page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "nus-msc-management-2027",
+        "official_program_url":  "https://mim.nus.edu.sg/",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "NUS official MSc Management programme site; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "nus-msc-marketing-analytics-and-insights-2027",
+        "official_program_url":  "https://mscmarketing.nus.edu.sg/",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "NUS official MSc in Marketing Analytics and Insights programme site; text extraction confirms the page title and programme name, while direct local fetch may be protected by Incapsula."
+    },
+    {
+        "program_id":  "nus-msc-quantitative-finance-2027",
+        "official_program_url":  "https://www.math.nus.edu.sg/pg/mqf/",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "NUS Department of Mathematics official MSc Quantitative Finance programme page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "nus-msc-statistics-2027",
+        "official_program_url":  "https://www.stat.nus.edu.sg/prospective-students/graduate-programme/msc-in-statistics/",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "NUS Department of Statistics and Data Science official MSc Statistics programme page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "polyu-ma-bilingual-corporate-communication-2027",
+        "official_program_url":  "https://www.polyu.edu.hk/study/pg/tpg/2027/72017-bcf-bcp",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "PolyU official 2027 taught postgraduate programme detail page for MA Bilingual Corporate Communication; direct page returns 200 and contains the programme title; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "polyu-master-of-design-2027",
+        "official_program_url":  "https://www.polyu.edu.hk/study/pg/tpg/2027/73035-ibd-ibp-isd-isp-ssd-ssp-ted-tep",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "PolyU official 2027 taught postgraduate programme detail page for Master of Design; direct page returns 200 and contains the programme title; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "polyu-msc-accounting-and-finance-analytics-2027",
+        "official_program_url":  "https://www.polyu.edu.hk/study/pg/tpg/2027/21052-fam-pam",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "PolyU official 2027 taught postgraduate programme detail page for MSc Accounting and Finance Analytics; direct page returns 200 and contains the programme title; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "polyu-msc-artificial-intelligence-and-big-data-computing-2027",
+        "official_program_url":  "https://www.polyu.edu.hk/study/pg/tpg/2027/62037-fai-pai",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "PolyU official 2027 taught postgraduate programme detail page for MSc Artificial Intelligence and Big Data Computing; direct page returns 200 and contains the programme title; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "polyu-msc-biomedical-engineering-2027",
+        "official_program_url":  "https://www.polyu.edu.hk/study/pg/tpg/2027/47002-bmf-bmp",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "PolyU official 2027 taught postgraduate programme detail page for MSc Biomedical Engineering; direct page returns 200 and contains the programme title; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "polyu-msc-business-analytics-2027",
+        "official_program_url":  "https://www.polyu.edu.hk/study/pg/tpg/2027/23090-maf-map",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "PolyU official 2027 taught postgraduate programme detail page for MSc Business Analytics; direct page returns 200 and contains the programme title; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "polyu-msc-construction-and-real-estate-2027",
+        "official_program_url":  "https://www.polyu.edu.hk/study/pg/tpg/2027/32111-rfm-rpm",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "PolyU official 2027 taught postgraduate programme detail page for MSc Construction and Real Estate; direct page returns 200 and contains the programme title; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "polyu-msc-data-science-and-analytics-2027",
+        "official_program_url":  "https://www.polyu.edu.hk/study/pg/tpg/2027/62027-dfm-dpm",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "PolyU official 2027 taught postgraduate programme detail page for MSc Data Science and Analytics; direct page returns 200 and contains the programme title; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "polyu-msc-global-hospitality-business-2027",
+        "official_program_url":  "https://www.polyu.edu.hk/study/pg/tpg/2027/24043",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "PolyU official 2027 taught postgraduate programme detail page for MSc Global Hospitality Business; direct page returns 200 and contains the programme title; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "polyu-msc-information-technology-2027",
+        "official_program_url":  "https://www.polyu.edu.hk/study/pg/tpg/2026/61030-fit-pit",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "PolyU official programme detail page for Master of Science in Information Technology; this is a 2026 intake page and current-cycle fields still require field-level verification."
+    },
+    {
+        "program_id":  "polyu-msc-marketing-management-2027",
+        "official_program_url":  "https://www.polyu.edu.hk/study/pg/tpg/2027/23090-mkf-mkp",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "PolyU official 2027 taught postgraduate programme detail page for MSc Marketing Management; direct page returns 200 and contains the programme title; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "polyu-msc-operations-management-2027",
+        "official_program_url":  "https://www.polyu.edu.hk/study/pg/tpg/2027/44092-ofm-opm",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "PolyU official 2027 taught postgraduate programme detail page for MSc Operations Management; direct page returns 200 and contains the programme title; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "polyu-msc-urban-informatics-and-smart-cities-2027",
+        "official_program_url":  "https://www.polyu.edu.hk/study/pg/tpg/2027/34083-ifm-ipm",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "PolyU official 2027 taught postgraduate programme detail page for MSc Urban Informatics and Smart Cities; direct page returns 200 and contains the programme title; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "smu-master-of-it-in-business-2027",
+        "official_program_url":  "https://masters.smu.edu.sg/programmes/master-it-business",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "SMU official Master of IT in Business programme detail page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "smu-msc-accounting-2027",
+        "official_program_url":  "https://masters.smu.edu.sg/programmes/msc-accounting",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "SMU official MSc Accounting programme detail page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "smu-msc-applied-finance-2027",
+        "official_program_url":  "https://masters.smu.edu.sg/programmes/msc-applied-finance",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "SMU official MSc Applied Finance programme detail page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "smu-msc-cfo-leadership-2027",
+        "official_program_url":  "https://masters.smu.edu.sg/programmes/msc-cfo-leadership",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "SMU official MSc CFO Leadership programme detail page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "smu-msc-communication-management-2027",
+        "official_program_url":  "https://masters.smu.edu.sg/programmes/msc-communication-management",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "SMU official MSc Communication Management programme detail page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "smu-msc-computing-2027",
+        "official_program_url":  "https://masters.smu.edu.sg/programmes/msc-computing",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "SMU official MSc Computing programme detail page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "smu-msc-economics-2027",
+        "official_program_url":  "https://masters.smu.edu.sg/programmes/msc-economics",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "SMU official MSc Economics programme detail page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "smu-msc-management-2027",
+        "official_program_url":  "https://masters.smu.edu.sg/programmes/msc-management",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "SMU official MSc Management programme detail page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "smu-msc-quantitative-finance-2027",
+        "official_program_url":  "https://masters.smu.edu.sg/programmes/msc-quantitative-finance",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "SMU official MSc Quantitative Finance programme detail page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "smu-msc-wealth-management-2027",
+        "official_program_url":  "https://masters.smu.edu.sg/programmes/msc-wealth-management",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "SMU official MSc Wealth Management programme detail page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "sutd-master-of-architecture-2027",
+        "official_program_url":  "https://www.sutd.edu.sg/programme-listing/master-of-architecture-programme/",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "SUTD official Master of Architecture programme page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "sutd-msc-human-centred-design-2027",
+        "official_program_url":  "https://www.sutd.edu.sg/programme-listing/mtd-human-centred-design/",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "SUTD official Master of Science in Technology and Design (Human-Centred Design) programme page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "sutd-msc-security-by-design-2027",
+        "official_program_url":  "https://www.sutd.edu.sg/programme-listing/mssd/",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "SUTD official Master of Science in Security by Design programme page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "sutd-msc-technology-and-design-2027",
+        "official_program_url":  "https://www.sutd.edu.sg/programme-listing/master-of-science-in-technology-and-design/",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "SUTD official programme detail page for Master of Science in Technology and Design; direct page returns 200, title contains Master of Science in Technology and Design, and the page contains the programme title; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "sutd-msc-urban-science-policy-and-planning-2027",
+        "official_program_url":  "https://www.sutd.edu.sg/programme-listing/muspp/overview/programme-overview",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "SUTD official Master of Science in Urban Science, Policy and Planning programme page; key application fields still require field-level verification."
+    },
+    {
+        "program_id":  "cityu-msc-business-information-systems-2027",
+        "official_program_url":  "https://www.cityu.edu.hk/pg/programme/p05a",
+        "cycle":  "2027-fall",
+        "captured_at":  "2026-07-05T00:00:00Z",
+        "evidence_snippet":  "CityUHK official programme detail page p05a for MSc Business Information Systems stream. CityUHK also has p05b as another stream page; formal timeline fields still require field-level official verification before use."
+    }
+]

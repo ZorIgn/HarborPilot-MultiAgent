@@ -19,6 +19,7 @@ AGENT_CONTRACTS: list[AgentContract] = [
         outputs=["NormalizedProfile"],
         tools=["taxonomy_mapper", "profile_completeness"],
         deterministic_guardrails=["GPA scale normalization", "discipline taxonomy mapping"],
+        llm_role="none: normalizes structured input with deterministic taxonomy rules",
     ),
     AgentContract(
         agent_name="EvidenceAgent",
@@ -29,6 +30,7 @@ AGENT_CONTRACTS: list[AgentContract] = [
         upstream_agents=["ProfileAgent"],
         human_gate="Student evidence upload and confirmation queue",
         deterministic_guardrails=["Self-reported facts remain low confidence"],
+        llm_role="none: evidence status is rule-based",
     ),
     AgentContract(
         agent_name="EvaluationAgent",
@@ -38,6 +40,8 @@ AGENT_CONTRACTS: list[AgentContract] = [
         tools=["rules.evaluate_general_profile"],
         upstream_agents=["ProfileAgent", "EvidenceAgent"],
         deterministic_guardrails=["Language tests are evaluated by exam type", "GPA is normalized before scoring"],
+        llm_role="explanation polish only: strengths, weaknesses, and action wording",
+        llm_guardrails=["LLM cannot change competitiveness level or hard-threshold results"],
     ),
     AgentContract(
         agent_name="ProgramIntelligenceAgent",
@@ -47,6 +51,7 @@ AGENT_CONTRACTS: list[AgentContract] = [
         tools=["official_source_registry", "community_signal_recall", "program_catalog.recall"],
         upstream_agents=["EvaluationAgent"],
         deterministic_guardrails=["Community signals are never official requirements"],
+        llm_role="none: catalog recall and source coverage are deterministic",
     ),
     AgentContract(
         agent_name="SchoolMatchingAgent",
@@ -56,6 +61,8 @@ AGENT_CONTRACTS: list[AgentContract] = [
         tools=["rules.check_program_eligibility", "matching_score_service"],
         upstream_agents=["ProgramIntelligenceAgent"],
         deterministic_guardrails=["Strict CS/AI/Data intent blocks off-direction business programmes", "Unverified data cannot become a formal recommendation"],
+        llm_role="consultant pass: refine recommendation notes and risk wording after deterministic scoring",
+        llm_guardrails=["LLM cannot invent deadlines, tuition, requirements, rankings, odds, or override blocked programmes"],
     ),
     AgentContract(
         agent_name="DataRefreshAgent",
@@ -66,6 +73,8 @@ AGENT_CONTRACTS: list[AgentContract] = [
         upstream_agents=["SchoolMatchingAgent"],
         human_gate="Official-field review queue",
         deterministic_guardrails=["robots.txt is checked before live fetch", "Fetched fields default to review_required"],
+        llm_role="optional summarizer: source-change summary and next-action wording",
+        llm_guardrails=["Extracted fields remain review_required until official evidence is approved"],
     ),
     AgentContract(
         agent_name="ProgramDataAcquisitionAgent",
@@ -75,6 +84,8 @@ AGENT_CONTRACTS: list[AgentContract] = [
         tools=["SourceDiscoveryAgent", "OfficialCrawlerAgent", "CommunitySignalAgent", "HumanReviewGateAgent"],
         human_gate="Official fields can publish only after review",
         deterministic_guardrails=["Community experience is reference only"],
+        llm_role="planned extractor support: classify official/source content after crawler snapshot",
+        llm_guardrails=["Model output cannot publish a field without source URL, excerpt, timestamp, and review status"],
     ),
 
     AgentContract(
@@ -86,6 +97,7 @@ AGENT_CONTRACTS: list[AgentContract] = [
         upstream_agents=["ProgramDataAcquisitionAgent"],
         human_gate="Crawler jobs only produce review candidates; they cannot publish official fields.",
         deterministic_guardrails=["Official and community jobs are separated", "Community jobs cannot emit official fields"],
+        llm_role="none: builds crawl jobs and parser boundaries deterministically",
     ),
     AgentContract(
         agent_name="TimelineAgent",
@@ -96,6 +108,7 @@ AGENT_CONTRACTS: list[AgentContract] = [
         upstream_agents=["DataRefreshAgent"],
         human_gate="Deadline confirmation before formal schedule",
         deterministic_guardrails=["No official back-plan for unverified deadlines"],
+        llm_role="none: timeline dates are source-gated",
     ),
     AgentContract(
         agent_name="StoryCardAgent",
@@ -104,6 +117,7 @@ AGENT_CONTRACTS: list[AgentContract] = [
         outputs=["StoryCard list"],
         tools=["questionnaire_gap_check", "star_story_builder"],
         human_gate="Student confirms factual story details",
+        llm_role="none: converts questionnaire answers into structured cards",
     ),
     AgentContract(
         agent_name="WritingAgent",
@@ -114,6 +128,8 @@ AGENT_CONTRACTS: list[AgentContract] = [
         upstream_agents=["StoryCardAgent"],
         human_gate="Sentence-level fact verification before export",
         deterministic_guardrails=["Unsupported claims become review flags"],
+        llm_role="core generator: creates material gaps, story-card-based outline, paragraph drafts, and fact bindings",
+        llm_guardrails=["Use only student facts and official programme evidence", "Unsupported school claims are removed or flagged"],
     ),
 
     AgentContract(
@@ -129,6 +145,7 @@ AGENT_CONTRACTS: list[AgentContract] = [
             "Scenario audits fail when unverified fields become formal recommendations",
             "Community sources cannot leak official requirement fields",
         ],
+        llm_role="none: scenario QA is deterministic",
     ),
     AgentContract(
         agent_name="ReviewAgent",
@@ -139,6 +156,7 @@ AGENT_CONTRACTS: list[AgentContract] = [
         upstream_agents=["TimelineAgent", "WritingAgent"],
         human_gate="Blocks formal use until official fields and student facts are confirmed",
         deterministic_guardrails=["Unverified source fields set passed=false"],
+        llm_role="none: final gates are deterministic",
     ),
 ]
 

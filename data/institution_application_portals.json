@@ -1,0 +1,110 @@
+[
+  {
+    "institution": "The University of Hong Kong",
+    "institution_zh": "香港大学",
+    "application_url": "https://portal.hku.hk/tpg-admissions/programme-listing",
+    "cycle": "2027-fall",
+    "captured_at": "2026-07-05T00:00:00Z",
+    "source_type": "official_application_system",
+    "evidence_snippet": "学校 TPG Admissions Portal 的课程选择与网申入口；用于进入申请系统，项目具体要求仍以项目详情页字段级证据为准。"
+  },
+  {
+    "institution": "The Chinese University of Hong Kong",
+    "institution_zh": "香港中文大学",
+    "application_url": "https://www.gradsch.cuhk.edu.hk/OnlineApp/login.aspx",
+    "cycle": "2027-fall",
+    "captured_at": "2026-07-05T00:00:00Z",
+    "source_type": "official_application_system",
+    "evidence_snippet": "研究院 Online Application 系统登录入口；用于提交申请，项目具体要求仍以项目详情页字段级证据为准。"
+  },
+  {
+    "institution": "City University of Hong Kong",
+    "institution_zh": "香港城市大学",
+    "application_url": "https://banweb.cityu.edu.hk/pls/PROD/hwskalog_cityu.P_DispLoginNon",
+    "cycle": "2027-fall",
+    "captured_at": "2026-07-05T00:00:00Z",
+    "source_type": "official_application_system",
+    "evidence_snippet": "CityUHK 申请人登录入口；用于进入申请系统，项目具体要求仍以项目详情页字段级证据为准。"
+  },
+  {
+    "institution": "Hong Kong Baptist University",
+    "institution_zh": "香港浸会大学",
+    "application_url": "https://iss.hkbu.edu.hk/amsappl_pg/welcome.jsf",
+    "cycle": "2027-fall",
+    "captured_at": "2026-07-05T00:00:00Z",
+    "source_type": "official_application_system",
+    "evidence_snippet": "HKBU Online Application System for Admission to Postgraduate Studies；用于进入申请系统，项目具体要求仍以项目详情页字段级证据为准。"
+  },
+  {
+    "institution": "Lingnan University",
+    "institution_zh": "岭南大学",
+    "application_url": "https://apply.ln.edu.hk/",
+    "cycle": "2027-fall",
+    "captured_at": "2026-07-05T00:00:00Z",
+    "source_type": "official_application_system",
+    "evidence_snippet": "Lingnan Online Admission System；用于进入申请系统，项目具体要求仍以项目详情页字段级证据为准。"
+  },
+  {
+    "institution": "The Hong Kong Polytechnic University",
+    "institution_zh": "香港理工大学",
+    "application_url": "https://www38.polyu.edu.hk/eAdmission/index.do",
+    "cycle": "2027-fall",
+    "captured_at": "2026-07-05T00:00:00Z",
+    "source_type": "official_application_system",
+    "evidence_snippet": "PolyU eAdmission 系统入口；用于进入申请系统，项目具体要求仍以项目详情页字段级证据为准。"
+  },
+  {
+    "institution": "National University of Singapore",
+    "institution_zh": "新加坡国立大学",
+    "application_url": "https://gradapp.nus.edu.sg/portal/app_manage",
+    "cycle": "2027-fall",
+    "captured_at": "2026-07-05T00:00:00Z",
+    "source_type": "official_application_system",
+    "evidence_snippet": "NUS Graduate Admission System application management portal；用于进入申请系统，项目具体要求仍以项目详情页字段级证据为准。"
+  },
+  {
+    "institution": "Nanyang Technological University, Singapore",
+    "institution_zh": "南洋理工大学",
+    "application_url": "https://venus.wis.ntu.edu.sg/GOAL/OnlineApplicationModule/frmOnlineApplication.aspx",
+    "cycle": "2027-fall",
+    "captured_at": "2026-07-05T00:00:00Z",
+    "source_type": "official_application_system",
+    "evidence_snippet": "NTU GOAL Online Application Module；用于进入申请系统，项目具体要求仍以项目详情页字段级证据为准。"
+  },
+  {
+    "institution": "The Hong Kong University of Science and Technology",
+    "institution_zh": "香港科技大学",
+    "application_url": "https://w5.ab.ust.hk/cgi-bin/std_nem_cgi.sh/WService=broker_a_p/prg/pg_ap_main.r",
+    "cycle": "2027-fall",
+    "captured_at": "2026-07-05T00:00:00Z",
+    "source_type": "official_application_system",
+    "evidence_snippet": "HKUST official Postgraduate Admissions Online Application System entry; use it to enter the application system, while programme-specific requirements still require field-level evidence from the programme page."
+  },
+  {
+    "institution": "Singapore Management University",
+    "institution_zh": "新加坡管理大学",
+    "application_url": "https://admissions.smu.edu.sg/apply/graduate",
+    "cycle": "2027-fall",
+    "captured_at": "2026-07-05T00:00:00Z",
+    "source_type": "official_application_system",
+    "evidence_snippet": "SMU official graduate application entry; use it to enter the application system, while programme-specific requirements still require field-level evidence from the programme page."
+  },
+  {
+    "institution": "The Education University of Hong Kong",
+    "institution_zh": "香港教育大学",
+    "application_url": "https://www.eduhk.hk/acadprog/online/",
+    "cycle": "2027-fall",
+    "captured_at": "2026-07-05T00:00:00Z",
+    "source_type": "official_application_system",
+    "evidence_snippet": "EdUHK official Online Application page for academic programmes and admissions; use it to enter the application flow, while programme-specific requirements still require field-level evidence from the programme page."
+  },
+  {
+    "institution": "Singapore University of Technology and Design",
+    "institution_zh": "新加坡科技设计大学",
+    "application_url": "https://admission.sutd.edu.sg/",
+    "cycle": "2027-fall",
+    "captured_at": "2026-07-05T00:00:00Z",
+    "source_type": "official_application_system",
+    "evidence_snippet": "SUTD official admissions application entry linked from the graduate admissions page; use it to enter the application flow, while programme-specific requirements still require field-level evidence from the programme page."
+  }
+]

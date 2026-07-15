@@ -35,6 +35,7 @@ from harbor_agent.models import (
     WorkflowResult,
     WritingPlanResult,
 )
+from harbor_agent.services.data_loader import load_programs
 from harbor_agent.services.intent import build_intent_profile
 
 
@@ -58,10 +59,11 @@ class WorkflowOrchestrator:
 
     def run_background_stage(self, payload: ApplicantProfileInput) -> BackgroundStageResult:
         workflow_id = f"wf_{uuid4().hex[:12]}"
-        trace = TraceRecorder(workflow_id)
+        trace = TraceRecorder(workflow_id, "background")
 
         profile, evidence, assessment = self._profile_evidence_assessment(payload, trace)
 
+        trace.complete()
         return BackgroundStageResult(
             workflow_id=workflow_id,
             profile=profile,
@@ -72,12 +74,13 @@ class WorkflowOrchestrator:
 
     def run_program_plan_stage(self, payload: ApplicantProfileInput) -> ProgramPlanResult:
         workflow_id = f"wf_{uuid4().hex[:12]}"
-        trace = TraceRecorder(workflow_id)
+        trace = TraceRecorder(workflow_id, "program_plan")
 
         profile, _, assessment = self._profile_evidence_assessment(payload, trace)
-        matches = self._program_matching(profile, assessment, trace)
+        matches = [] if assessment.overall_level == "NEEDS_DATA" else self._program_matching(profile, assessment, trace)
         layers = _layer_program_matches(matches)
 
+        trace.complete()
         return ProgramPlanResult(
             workflow_id=workflow_id,
             profile=profile,
@@ -101,10 +104,10 @@ class WorkflowOrchestrator:
         selected_program_ids: list[str],
     ) -> ApplicationPlanResult:
         workflow_id = f"wf_{uuid4().hex[:12]}"
-        trace = TraceRecorder(workflow_id)
+        trace = TraceRecorder(workflow_id, "application_plan")
 
         profile, _, assessment = self._profile_evidence_assessment(payload, trace)
-        matches = self._program_matching(profile, assessment, trace)
+        matches = self._program_matching(profile, assessment, trace, selected_program_ids)
 
         with trace.span(
             "DataRefreshAgent",
@@ -150,6 +153,7 @@ class WorkflowOrchestrator:
             review = self.review_agent.run(selected, placeholder_writing)
             span["output_summary"] = "passed" if review["passed"] else "needs human review"
 
+        trace.complete()
         return ApplicationPlanResult(
             workflow_id=workflow_id,
             selected_programs=selected,
@@ -159,6 +163,15 @@ class WorkflowOrchestrator:
             trace=trace.events,
         )
 
+
+    def selected_program_matches(self, payload: ApplicantProfileInput, selected_program_ids: list[str]):
+        workflow_id = f"wf_{uuid4().hex[:12]}"
+        trace = TraceRecorder(workflow_id, "selected_program_matches")
+        profile, _, assessment = self._profile_evidence_assessment(payload, trace)
+        matches = self._program_matching(profile, assessment, trace, selected_program_ids)
+        selected = self.program_agent.refresh_selected(matches, selected_program_ids)
+        trace.complete()
+        return profile, selected
     def run_data_refresh_stage(self, request: DataRefreshRequest) -> DataRefreshReport:
         return self.data_refresh_agent.run(request)
 
@@ -176,11 +189,11 @@ class WorkflowOrchestrator:
         document_type: str = "PS",
     ) -> WritingPlanResult:
         workflow_id = f"wf_{uuid4().hex[:12]}"
-        trace = TraceRecorder(workflow_id)
+        trace = TraceRecorder(workflow_id, "writing_plan")
 
         profile, _, assessment = self._profile_evidence_assessment(payload, trace)
-        matches = self._program_matching(profile, assessment, trace)
-        selected = [item for item in matches if item.program.id in selected_program_ids]
+        matches = self._program_matching(profile, assessment, trace, selected_program_ids)
+        selected = self.program_agent.refresh_selected(matches, selected_program_ids)
 
         with trace.span(
             "StoryCardAgent",
@@ -212,6 +225,7 @@ class WorkflowOrchestrator:
             review = self.review_agent.run(selected, writing)
             span["output_summary"] = "passed" if review["passed"] else "needs human review"
 
+        trace.complete()
         return WritingPlanResult(
             workflow_id=workflow_id,
             story_cards=story_cards,
@@ -222,7 +236,7 @@ class WorkflowOrchestrator:
 
     def run_assessment(self, payload: ApplicantProfileInput) -> WorkflowResult:
         workflow_id = f"wf_{uuid4().hex[:12]}"
-        trace = TraceRecorder(workflow_id)
+        trace = TraceRecorder(workflow_id, "assessment")
 
         profile, evidence, assessment = self._profile_evidence_assessment(payload, trace)
         matches = self._program_matching(profile, assessment, trace)
@@ -252,6 +266,7 @@ class WorkflowOrchestrator:
             review = self.review_agent.run(matches, writing)
             span["output_summary"] = "passed" if review["passed"] else "needs human review"
 
+        trace.complete()
         return WorkflowResult(
             workflow_id=workflow_id,
             profile=profile,
@@ -303,13 +318,13 @@ class WorkflowOrchestrator:
             )
         return profile, evidence, assessment
 
-    def _program_matching(self, profile, assessment, trace: TraceRecorder):
+    def _program_matching(self, profile, assessment, trace: TraceRecorder, pinned_program_ids: list[str] | None = None):
         with trace.span(
             "ProgramIntelligenceAgent",
             f"regions={profile.target_regions}; tags={profile.discipline_tags}",
             tool_calls=["official_source_registry", "community_signal_recall", "program_catalog.recall"],
         ) as span:
-            candidates = self.program_agent.run(profile)
+            candidates = _include_pinned_programs(self.program_agent.run(profile), profile, pinned_program_ids)
             span["output_summary"] = f"{len(candidates)} candidate programs recalled"
 
         with trace.span(
@@ -317,15 +332,32 @@ class WorkflowOrchestrator:
             f"{len(candidates)} candidates",
             tool_calls=["rules.check_program_eligibility", "matching_score_service", "unverified_data_gate"],
         ) as span:
-            matches = self.matching_agent.run(profile, assessment, candidates)
+            matches = self.matching_agent.run(profile, assessment, candidates, pinned_program_ids=pinned_program_ids)
             span["output_summary"] = (
                 f"{sum(1 for item in matches if item.hard_rule_passed)} eligible; "
-                f"{sum(1 for item in matches if item.tier == 'insufficient_info')} candidate-only; "
+                f"{sum(1 for item in matches if item.explanation and item.explanation.hard_condition == '需核验')} need field review; "
                 f"{sum(1 for item in matches if item.tier == 'not_recommended')} blocked"
             )
         return matches
 
 
+def _include_pinned_programs(candidates, profile, pinned_program_ids: list[str] | None):
+    if not pinned_program_ids:
+        return candidates
+    seen = {program.id for program in candidates}
+    pinned = []
+    for program in load_programs():
+        if program.id not in pinned_program_ids or program.id in seen:
+            continue
+        if program.cycle != profile.target_cycle:
+            continue
+        if program.country not in profile.target_regions:
+            continue
+        if program.degree_type != "taught_master":
+            continue
+        pinned.append(program)
+        seen.add(program.id)
+    return candidates + pinned
 def _layer_program_matches(
     matches,
 ):
@@ -365,7 +397,7 @@ def _balanced_application_mix(core, related, viable):
     if len(selected) < 6:
         selected.extend([item for item in related if item.strategy_band in {"target", "safe"}][: 6 - len(selected)])
     if len(selected) < 6:
-        selected.extend([item for item in viable if item not in selected][: 6 - len(selected)])
+        selected.extend([item for item in related if item not in selected][: 6 - len(selected)])
 
     deduped = []
     seen = set()
@@ -412,7 +444,7 @@ def _build_consultant_plan(profile, assessment, layers, matches) -> ConsultantSc
         "保底": sum(1 for item in application_mix if item.strategy_band == "safe"),
         "候选": sum(1 for item in application_mix if item.strategy_band == "candidate"),
     }
-    interests = _student_direction_label(profile.discipline_tags) or "目标方向待确认"
+    interests = _student_direction_label(profile.discipline_tags) or "目标方向待补充"
     language = (
         f"{profile.language.test} {profile.language.overall}"
         if profile.language.test != "NONE" and profile.language.overall
@@ -423,13 +455,13 @@ def _build_consultant_plan(profile, assessment, layers, matches) -> ConsultantSc
         f"GPA {display_gpa(profile)}，{language}，目标方向：{interests}。"
     )
     strategy_summary = (
-        "本方案按院校挑战度、专业方向匹配、GPA/语言硬条件、经历相关性和数据可信度分层。"
+        "本方案按学校层级、专业方向匹配、GPA/语言硬条件、经历相关性和数据可信度分层。"
         "默认只给出 6-10 个可行动项目；港三/新二等高挑战项目进入冲刺，"
         "城大/理工/SMU 等同层级项目作为主申，浸会/岭南等只在方向匹配时作为保底或候选。"
     )
     data_disclaimer = (
         "当前方案可以用于选校讨论和准备材料；截止日期、学费、语言要求、材料清单和申请入口，"
-        "必须以学校官网当季原文为准。系统会把未确认的信息明确标出来，不把草案包装成最终结论。"
+        "必须以学校官网当季原文为准。系统会把需核验的信息明确标出来，不把草案包装成最终结论。"
     )
     items = [_consultant_item(item) for item in application_mix]
     deferred = [
@@ -441,8 +473,8 @@ def _build_consultant_plan(profile, assessment, layers, matches) -> ConsultantSc
     next_actions = [
         "先确认目标方向是否以 CS/AI/Data 为主，避免商科弱相关项目挤占申请名额。",
         "上传成绩单或填写核心课程成绩后，重新计算课程匹配和先修课风险。",
-        "对建议申请名单刷新学校官网信息，优先找到项目详情页、申请系统和 PDF/FAQ。",
-        "把选定 6-10 个项目加入申请方案，再生成任务与材料时间线。",
+        "对推荐清单核对项目来源，优先找到项目详情页、申请系统和 PDF/FAQ。",
+        "学生从项目库勾选最终项目清单后，再排逐项目日期和材料动作。",
     ]
     if assessment.decision_field_coverage < 70:
         next_actions.insert(1, "当前关键决策字段覆盖不足，正式定校前需要补充排名、课程、经历深度和语言单项。")
@@ -486,7 +518,7 @@ def _consultant_item(item) -> ConsultantPlanItem:
         band=band,
         institution=item.program.institution_zh or item.program.institution,
         program_name=item.program.name_zh or item.program.name,
-        why_this_band=item.consultant_note or "按背景竞争力、院校挑战度和方向匹配分入当前档位。",
+        why_this_band=item.consultant_note or "按背景竞争力、学校层级和方向匹配分入当前档位。",
         student_fit=student_fit,
         main_risk=main_risk,
         next_action=next_action,

@@ -154,7 +154,7 @@
       "region": "US",
       "trust_level": "directory",
       "allowed_uses": ["参考结构化检索、筛选器和院校事实组织方式", "学习如何呈现院校维度"],
-      "forbidden_uses": ["用于港新硕士官方截止日期、学费或录取要求", "绕过站点条款进行批量抓取"],
+      "forbidden_uses": ["用于港新硕士官方截止日期、学费或录取要求", "绕过站点条款进行批量访问"],
       "refresh_cadence": "quarterly_methodology_review",
       "extraction_method": "manual product-pattern review",
       "requires_official_confirmation": true

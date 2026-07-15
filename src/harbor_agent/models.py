@@ -101,15 +101,33 @@ class EducationProfile(BaseModel):
     evidence_level: EvidenceLevel = EvidenceLevel.self_reported
 
 
+class PersonalInfo(BaseModel):
+    preferred_name: str = ""
+    citizenship: str = ""
+    current_location: str = ""
+    application_notes: str = ""
+
+
+class AdditionalBackground(BaseModel):
+    core_courses: list[str] = Field(default_factory=list)
+    exchange_experiences: list[str] = Field(default_factory=list)
+    research_outputs: list[str] = Field(default_factory=list)
+    activities: list[str] = Field(default_factory=list)
+    awards: list[str] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
+
+
 class ApplicantProfileInput(BaseModel):
+    personal_info: PersonalInfo = Field(default_factory=PersonalInfo)
     target_regions: list[Literal["HK", "SG"]] = Field(default_factory=lambda: ["HK", "SG"])
-    target_cycle: str = "2027-fall"
+    target_cycle: str = Field(default="2027-fall", pattern=r"^20\d{2}-(fall|spring)$")
     target_degree: Literal["taught_master", "research_master"] = "taught_master"
     discipline_interests: list[str] = Field(default_factory=list)
     raw_interest_text: str = ""
     education: EducationProfile
     language: LanguageScore = Field(default_factory=LanguageScore)
     experiences: list[Experience] = Field(default_factory=list)
+    additional_background: AdditionalBackground = Field(default_factory=AdditionalBackground)
     budget_hkd: int | None = Field(default=None, ge=0)
     career_goal: str = ""
     risk_flags: list[str] = Field(default_factory=list)
@@ -124,6 +142,7 @@ class NormalizedProfile(BaseModel):
     education: EducationProfile
     language: LanguageScore
     experiences: list[Experience]
+    additional_background: AdditionalBackground = Field(default_factory=AdditionalBackground)
     budget_hkd: int | None = None
     career_goal: str = ""
     risk_flags: list[str] = Field(default_factory=list)
@@ -158,6 +177,7 @@ class ProgramFieldEvidence(BaseModel):
     source_type: Literal[
         "official_program_index",
         "official_program_page",
+        "official_application_system",
         "official_admissions_page",
         "official_pdf",
         "official_faq",
@@ -307,6 +327,7 @@ class ProgramTrustDetail(BaseModel):
     program_id: str
     cycle: str
     production_ready: bool
+    reference_ready: bool = False
     status_label: str
     source_warning: str
     official_current_fields: list[str] = Field(default_factory=list)
@@ -364,6 +385,17 @@ class ProgramDataCoverageItem(BaseModel):
     blocks_formal_use: bool = True
     next_action: str
 
+
+class DataQualityMetric(BaseModel):
+    scope: str
+    official_field_coverage: int = Field(ge=0, le=100)
+    verified_current_coverage: int = Field(ge=0, le=100)
+    review_required_count: int = 0
+    blocked_field_count: int = 0
+    blocked_fields: list[str] = Field(default_factory=list)
+    parser_capabilities: list[str] = Field(default_factory=list)
+    next_action: str = ""
+
 class ProgramDataPackage(BaseModel):
     program_id: str
     institution: str
@@ -381,6 +413,7 @@ class ProgramDataPackage(BaseModel):
     community_experiences: list[ProgramExperienceSignal] = Field(default_factory=list)
     acquisition_plan: list[AcquisitionSourcePlan] = Field(default_factory=list)
     human_review_required: bool = True
+    quality_metric: DataQualityMetric | None = None
 
 
 class DataAcquisitionRequest(BaseModel):
@@ -397,9 +430,14 @@ class DataAcquisitionReport(BaseModel):
     selected_program_ids: list[str] = Field(default_factory=list)
     packages: list[ProgramDataPackage] = Field(default_factory=list)
     source_plan: list[AcquisitionSourcePlan] = Field(default_factory=list)
+    field_evidence_records: list[FieldEvidenceRecord] = Field(default_factory=list)
+    extraction_results: list[SourceExtractionResult] = Field(default_factory=list)
+    persisted_evidence_count: int = 0
     summary: str
     next_actions: list[str] = Field(default_factory=list)
     agent_chain: list[str] = Field(default_factory=list)
+    quality_metrics: list[DataQualityMetric] = Field(default_factory=list)
+    crawler_capabilities: list[str] = Field(default_factory=list)
 
 
 class CrawlQueueRequest(BaseModel):
@@ -485,6 +523,27 @@ class ReviewPublishResponse(BaseModel):
     item: ReviewQueueItem
     published_record: FieldEvidenceRecord | None = None
     message: str
+
+
+class ReviewBulkPublishRequest(BaseModel):
+    program_id: str | None = None
+    limit: int = Field(default=20, ge=1, le=200)
+    reviewer_id: str = "local_reviewer"
+    reviewer_note: str | None = None
+    persist: bool = True
+
+
+class ReviewBulkPublishResponse(BaseModel):
+    ok: bool
+    published_count: int
+    preview_count: int
+    skipped_count: int
+    queue_before: int
+    queue_after: int | None = None
+    responses: list[ReviewPublishResponse] = Field(default_factory=list)
+    message: str
+
+
 class DataRefreshRequest(BaseModel):
     region: Literal["HK", "SG", "ALL"] = "ALL"
     institution: str | None = None
@@ -515,6 +574,45 @@ class DataRefreshReport(BaseModel):
     human_review_required: bool
     summary: str
     next_actions: list[str] = Field(default_factory=list)
+
+
+class CatalogAutoUpdateRequest(BaseModel):
+    selected_program_ids: list[str] = Field(default_factory=list)
+    institution: str | None = None
+    dry_run: bool = True
+    max_programs: int = Field(default=24, ge=1, le=200)
+    max_candidates_per_program: int = Field(default=6, ge=1, le=20)
+
+
+class ProgramUrlCandidate(BaseModel):
+    program_id: str
+    institution: str
+    program_name: str
+    candidate_url: HttpUrl | str
+    candidate_label: str
+    source_url: HttpUrl | str | None = None
+    match_score: int = Field(ge=0, le=100)
+    status: FieldVerificationStatus = FieldVerificationStatus.official_previous_cycle
+    reason: str
+    review_required: bool = True
+    publishable_after_review: bool = False
+    evidence_record: FieldEvidenceRecord
+
+
+class CatalogAutoUpdateReport(BaseModel):
+    run_id: str
+    mode: Literal["dry_run", "live_fetch"]
+    checked_at: datetime
+    selected_program_ids: list[str] = Field(default_factory=list)
+    scanned_program_count: int
+    missing_detail_page_count: int
+    candidate_count: int
+    persisted_candidate_count: int = 0
+    review_queue_size: int = 0
+    candidates: list[ProgramUrlCandidate] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    summary: str
+    agent_chain: list[str] = Field(default_factory=list)
 
 
 class Program(BaseModel):
@@ -558,6 +656,11 @@ class RuleCheck(BaseModel):
 class AssessmentResult(BaseModel):
     assessment_type: Literal["PRELIMINARY", "VERIFIED"]
     overall_level: Literal["A", "A-", "B+", "B", "C+", "C", "NEEDS_DATA"]
+    competitiveness_level: Literal["强", "中强", "中", "弱"] = "中"
+    competitiveness_summary: str = ""
+    application_positioning: dict[str, str] = Field(default_factory=dict)
+    hard_thresholds: list[str] = Field(default_factory=list)
+    strengthening_actions: list[str] = Field(default_factory=list)
     confidence: Literal["low", "medium", "high"]
     data_completeness: int
     dimension_scores: dict[str, int]
@@ -576,7 +679,7 @@ class AssessmentResult(BaseModel):
 
 class DimensionFinding(BaseModel):
     dimension: str
-    level: Literal["高", "中", "低", "信息不足", "待确认"]
+    level: Literal["高", "中", "低", "信息不足", "需核验"]
     conclusion: str
     basis: str
     applicable_to: list[str] = Field(default_factory=list)
@@ -608,7 +711,7 @@ class ProgramIntentProfile(BaseModel):
 
 class ProgramMatch(BaseModel):
     program: Program
-    tier: Literal["reach", "match", "safer", "not_recommended", "insufficient_info"]
+    tier: Literal["reach", "target", "safe", "candidate", "not_recommended"]
     fit_score: int
     score_breakdown: dict[str, int] = Field(default_factory=dict)
     match_category: Literal["core", "related", "general", "blocked"] = "general"
@@ -644,6 +747,12 @@ class TimelineTask(BaseModel):
     ] = "materials"
     linked_program_ids: list[str] = Field(default_factory=list)
     risk: str | None = None
+    institution: str | None = None
+    program_name: str | None = None
+    round_open_date: date | None = None
+    round_deadline: date | Literal["NOT_PUBLISHED"] | None = None
+    application_url: HttpUrl | str | None = None
+    submit_to: str | None = None
     program_round: str | None = None
     official_deadline: date | Literal["NOT_PUBLISHED"] | None = None
     source_url: HttpUrl | str | None = None
@@ -654,10 +763,10 @@ class TimelineTask(BaseModel):
     review_required: bool = False
     task_name: str | None = None
     suggested_due_date: date | None = None
-    date_basis: Literal["官方截止倒推", "内部准备建议", "上一申请季参考", "人工复核"] | None = None
+    date_basis: Literal["官方截止倒推", "学生准备动作", "上一申请季参考", "人工复核"] | None = None
     previous_cycle_reference: date | Literal["NOT_PUBLISHED"] | None = None
     owner: str = "学生"
-    status: Literal["待办", "进行中", "已完成", "等待官方发布", "需人工复核"] = "待办"
+    status: Literal["未开始", "准备中", "待上传", "已提交", "需复核"] = "未开始"
     upload_materials: list[str] = Field(default_factory=list)
     reminder_at: date | None = None
     risk_level: Literal["高", "中", "低"] = "中"
@@ -671,6 +780,8 @@ class WritingDraft(BaseModel):
     draft: str
     draft_zh: str = ""
     draft_en: str = ""
+    material_gaps: list[str] = Field(default_factory=list)
+    paragraph_drafts: list[str] = Field(default_factory=list)
     fact_bindings: list[dict[str, str]]
     target_program_ids: list[str] = Field(default_factory=list)
     school_customization: list[str] = Field(default_factory=list)
@@ -685,7 +796,7 @@ class WritingInterviewQuestion(BaseModel):
     id: str
     question: str
     why_it_matters: str
-    target_section: Literal["项目题目", "故事卡", "技术深度", "Why Program", "职业目标", "事实核验"]
+    target_section: str
     required: bool = True
     sensitive: bool = False
 
@@ -715,7 +826,7 @@ class ProgramCompareRow(BaseModel):
     program_name: str
     institution: str
     tier: str = "候选"
-    hard_condition: str = "待确认"
+    hard_condition: str = "需核验"
     academic_match: str = "未知"
     course_match: str = "未知"
     experience_match: str = "未知"
@@ -786,6 +897,10 @@ class AgentContract(BaseModel):
     upstream_agents: list[str] = Field(default_factory=list)
     human_gate: str | None = None
     deterministic_guardrails: list[str] = Field(default_factory=list)
+    llm_role: str = "none"
+    llm_guardrails: list[str] = Field(default_factory=list)
+    retry_policy: str = "retry failed step from Admin queue after operator review"
+    handoff_policy: str = "handoff to human reviewer when source or fact confidence is insufficient"
 
 
 class AgentWorkflowContract(BaseModel):

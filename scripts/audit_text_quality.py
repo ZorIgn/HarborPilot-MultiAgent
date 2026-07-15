@@ -23,7 +23,7 @@ SKIP_PARTS = {
 }
 MOJIBAKE_MARKERS = [
     "\ufffd",
-    "????",
+    "?" * 4,
     "\u7ec0\u60e7",
     "\u701b\ufe3d",
     "\u9422\u5ba0",

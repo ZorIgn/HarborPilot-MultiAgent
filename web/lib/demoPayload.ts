@@ -1,6 +1,12 @@
 import type { ApplicantPayload } from "./types";
 
 export const demoPayload: ApplicantPayload = {
+  personal_info: {
+    preferred_name: "",
+    citizenship: "",
+    current_location: "",
+    application_notes: ""
+  },
   target_regions: ["HK", "SG"],
   target_cycle: "2027-fall",
   target_degree: "taught_master",
@@ -48,6 +54,14 @@ export const demoPayload: ApplicantPayload = {
       evidence_level: "USER_CONFIRMED"
     }
   ],
+  additional_background: {
+    core_courses: ["数据结构", "算法", "数据库", "机器学习", "统计学"],
+    exchange_experiences: [],
+    research_outputs: [],
+    activities: ["学生数据社群活动组织"],
+    awards: ["校级课程项目优秀展示"],
+    skills: ["Python", "SQL", "Tableau", "统计建模", "机器学习"]
+  },
   budget_hkd: 420000,
   career_goal: "希望进入跨境科技公司做产品数据分析。",
   risk_flags: []

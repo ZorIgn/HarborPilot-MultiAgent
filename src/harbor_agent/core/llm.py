@@ -40,16 +40,22 @@ class OpenAICompatibleLLMProvider:
         timeout_seconds: float = 30,
     ):
         try:
-            from openai import OpenAI
+            import httpx
         except ImportError as exc:
             raise RuntimeError(
                 "请先执行 `pip install -r requirements-llm.txt` 安装大模型依赖。"
             ) from exc
-        self._client = OpenAI(api_key=api_key, base_url=base_url, timeout=timeout_seconds)
+        resolved_base_url = (base_url or "https://api.openai.com/v1").rstrip("/")
+        self._client = httpx.Client(timeout=timeout_seconds, trust_env=False)
+        self._chat_url = f"{resolved_base_url}/chat/completions"
+        self._headers = {
+            "authorization": f"Bearer {api_key}",
+            "content-type": "application/json",
+        }
         self._model = model
         self.name = model
         self.provider = provider
-        self.base_url = base_url
+        self.base_url = resolved_base_url
 
     def complete_json(self, system: str, user: str, schema_hint: dict[str, Any]) -> dict[str, Any]:
         messages = [
@@ -62,23 +68,20 @@ class OpenAICompatibleLLMProvider:
                 ),
             },
         ]
-        kwargs: dict[str, Any] = dict(
+        payload: dict[str, Any] = dict(
             model=self._model,
             messages=messages,
             temperature=0.2,
             stream=False,
         )
+        response = self._client.post(self._chat_url, headers=self._headers, json=payload)
         try:
-            response = self._client.chat.completions.create(
-                **kwargs,
-                response_format={"type": "json_object"},
-            )
+            response.raise_for_status()
         except Exception as exc:
-            message = str(exc).lower()
-            if "response_format" not in message and "json_object" not in message:
-                raise
-            response = self._client.chat.completions.create(**kwargs)
-        text = response.choices[0].message.content or "{}"
+            detail = response.text[:500] if response.text else str(exc)
+            raise RuntimeError(f"模型服务返回 {response.status_code}：{detail}") from exc
+        data = response.json()
+        text = data.get("choices", [{}])[0].get("message", {}).get("content") or "{}"
         try:
             return json.loads(text)
         except json.JSONDecodeError:

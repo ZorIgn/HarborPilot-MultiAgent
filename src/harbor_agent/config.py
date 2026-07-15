@@ -10,7 +10,10 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     openai_model: str = "gpt-4.1-mini"
     openai_base_url: str | None = None
-    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+    cors_origins: str = "http://localhost:3001,http://127.0.0.1:3001"
+    admin_token: str | None = None
+    profile_store_secret: str | None = None
+    allow_insecure_local_admin: bool = False
 
     model_config = SettingsConfigDict(
         env_file=".env",

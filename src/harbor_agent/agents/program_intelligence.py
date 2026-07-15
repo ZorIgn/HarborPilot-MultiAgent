@@ -80,7 +80,7 @@ class ProgramIntelligenceAgent:
                 if finding.fields_requiring_review:
                     item.risks.insert(
                         0,
-                        "信息刷新助手标记为待学校确认："
+                        "信息刷新助手标记为官网信息需补充："
                         + "、".join(finding.fields_requiring_review[:4])
                         + "。",
                     )
@@ -94,7 +94,7 @@ class ProgramIntelligenceAgent:
                 }:
                     item.program.data_status = DataStatus.pending_review
                     item.data_status = DataStatus.pending_review
-                item.risks.insert(0, "项目信息仍需查看学校官网原文，当前不能作为最终申请依据。")
+                item.risks.insert(0, "项目信息仍需查看项目官网页面和申请入口，当前不能作为最终申请依据。")
                 item.actions.insert(0, "高优先级刷新官方项目页、申请入口、截止日期和材料要求。")
         return selected
 

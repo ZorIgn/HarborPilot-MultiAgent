@@ -5,6 +5,7 @@ from pathlib import Path
 
 from harbor_agent.models import FieldEvidenceRecord
 from harbor_agent.services.data_loader import DATA_DIR
+from harbor_agent.services.program_store import upsert_field_evidence_records
 
 STORE_PATH = DATA_DIR / "reviewed_field_evidence.local.json"
 
@@ -28,6 +29,7 @@ def load_published_field_records() -> list[FieldEvidenceRecord]:
 
 
 def save_published_field_record(record: FieldEvidenceRecord) -> None:
+    upsert_field_evidence_records([record])
     records = load_published_field_records()
     remaining = [
         item
@@ -43,3 +45,9 @@ def save_published_field_record(record: FieldEvidenceRecord) -> None:
         json.dumps([item.model_dump(mode="json") for item in remaining], ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    try:
+        from harbor_agent.services.data_loader import clear_data_loader_caches
+
+        clear_data_loader_caches()
+    except Exception:
+        pass

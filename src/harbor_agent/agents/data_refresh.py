@@ -129,9 +129,9 @@ class DataRefreshAgent:
                 robots_txt_url=_robots_txt_url(str(source.url)),
                 robots_allowed=None,
                 robots_status="SKIPPED_DRY_RUN",
-                summary=f"Dry-run：登记刷新策略为 {source.refresh_cadence}，本次不联网抓取。",
+                summary=f"Dry-run：登记刷新策略为 {source.refresh_cadence}，本次不联网采集。",
                 next_actions=[
-                    "正式刷新时先检查 robots/服务条款，再抓取官方索引或项目页。",
+                    "正式更新时先检查 robots/服务条款，再采集官方索引或项目页。",
                     "抽取后只生成变化报告，不自动覆盖学校信息。",
                 ],
             )
@@ -217,10 +217,10 @@ class DataRefreshAgent:
                 robots_txt_url=robots["robots_url"],
                 robots_allowed=robots["allowed"],
                 robots_status=robots["status"],
-                summary=f"联网检查失败：{type(exc).__name__}。保留为待确认项。",
+                summary=f"联网检查失败：{type(exc).__name__}。保留为需核验项。",
                 next_actions=[
                     "打开官方页面人工确认是否改版、限流或需要 JS 渲染。",
-                    "必要时改用学校提供的 PDF、FAQ 或申请系统页面作为字段来源。",
+                    "必要时改用学校提供的 PDF、FAQ 或申请系统页面作为官网信息来源。",
                 ],
             )
 
@@ -822,13 +822,13 @@ def _summary(
     review_fields = sum(len(item.fields_requiring_review) for item in findings)
     return (
         f"本次执行 {mode}，覆盖 {len(findings)} 个项目、{len(sources)} 个来源，其中官方来源 {official} 个。"
-        f"发现 {review_fields} 个待确认信息点；联网失败来源 {failed} 个。"
+        f"发现 {review_fields} 个需核验信息点；联网失败来源 {failed} 个。"
     )
 
 
 def _next_actions(request: DataRefreshRequest, findings: list[ProgramRefreshFinding]) -> list[str]:
     actions = [
-        "优先处理已选项目，不把未确认信息用于最终申请结论。",
+        "优先处理已选项目，不把需核验信息用于最终申请结论。",
         "官方索引只负责发现项目；截止日期、学费、材料和语言要求必须回到项目页、PDF、FAQ 或申请系统逐项确认。",
         "社区和目录来源只作为线索、别名、经验和产品方法参考。",
     ]
@@ -845,7 +845,7 @@ def _next_actions_clean(
     qs_import_summary: dict | None = None,
 ) -> list[str]:
     actions = [
-        "优先处理已加入申请方案的项目；没有学校原文确认的信息，只作为准备提醒。",
+        "优先处理学生最终项目清单；没有项目官网页面核对的信息，只作为材料准备提醒。",
         "项目名称、申请入口、截止日期、学费、语言和材料要求，需要回到学校项目页、PDF/FAQ 或申请系统逐项确认。",
         "GitHub、GradCafe、小红书等二级来源只用于发现线索和理解经验，不能直接当作学校要求。",
     ]
@@ -915,10 +915,10 @@ def _qs_import_extraction_result(qs_import_summary: dict, checked_at: datetime) 
 def _parser_plan(sources: list[SourcePolicy]) -> list[str]:
     official_names = [source.name for source in sources if source.trust_level == SourceTrustLevel.official]
     return [
-        "Playwright/httpx 抓取官方索引，保存 HTML/PDF 快照和 page_hash。",
+        "Playwright/httpx 采集官方索引，保存 HTML/PDF 快照和 page_hash。",
         "FieldExtractionAgent 抽取截止日期、学费、材料、语言、申请入口等候选信息。",
         "DiffAgent 比较上次快照，只有页面变化才进入确认清单。",
-        "ReviewerGate 对关键信息做人工确认；未确认信息在前端继续显示为待学校确认。",
+        "ReviewerGate 对关键信息做人工确认；未核验字段在学生端显示为官网当前季未核验或往届参考。",
         "当前优先 parser：" + "、".join(official_names[:6]) if official_names else "当前没有匹配到官方 parser。",
     ]
 

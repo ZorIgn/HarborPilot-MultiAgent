@@ -7,7 +7,7 @@ services:
       HARBOR_AGENT_LLM_MODE: ${HARBOR_AGENT_LLM_MODE:-mock}
       HARBOR_AGENT_OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       HARBOR_AGENT_OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4.1-mini}
-      HARBOR_AGENT_CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+      HARBOR_AGENT_CORS_ORIGINS: http://localhost:3001,http://127.0.0.1:3001
     ports:
       - "8000:8000"
 
@@ -17,7 +17,7 @@ services:
     environment:
       NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
     ports:
-      - "3000:3000"
+      - "3001:3001"
     depends_on:
       - api
 

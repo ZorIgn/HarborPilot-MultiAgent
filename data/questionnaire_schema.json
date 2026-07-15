@@ -1,5 +1,5 @@
 {
-  "version": "questionnaire-hk-sg-master-v1",
+  "version": "questionnaire-hk-sg-master-writing-v2",
   "source_templates": [
     "个人信息表 硕士.docx",
     "个人陈述调查问卷.docx",
@@ -7,74 +7,202 @@
   ],
   "sections": [
     {
-      "id": "basic_profile",
-      "title": "个人与网申基础信息",
-      "description": "用于网申表格和材料清单，不直接交给模型生成文书。",
+      "id": "ps_opening_motivation",
+      "title": "PS：开篇动机",
+      "description": "从真实兴趣、经历转折或职业观察进入，不写空泛口号。",
+      "source_template": "个人陈述调查问卷.docx",
       "fields": [
-        {"id": "name", "label": "姓名", "type": "text", "sensitive": true, "required": false},
-        {"id": "birth_date", "label": "出生日期", "type": "date", "sensitive": true, "required": false},
-        {"id": "email", "label": "邮箱", "type": "text", "sensitive": true, "required": false},
-        {"id": "phone", "label": "手机号", "type": "text", "sensitive": true, "required": false},
-        {"id": "passport_status", "label": "护照状态", "type": "select", "options": ["已办理", "办理中", "暂无"], "required": false},
-        {"id": "family_address", "label": "家庭住址与邮编", "type": "textarea", "sensitive": true, "required": false}
+        {"id": "opening_trigger", "label": "你最早为什么关注这个申请方向？请写一个具体场景或经历。", "type": "textarea", "required": true, "placeholder": "例如一次课程、实习问题、研究阅读、行业观察或生活中的具体问题。"},
+        {"id": "interest_origin", "label": "这个兴趣如何从偶然变成持续投入？", "type": "textarea", "required": false, "placeholder": "写清楚你后续做了什么，而不是只写“我很感兴趣”。"},
+        {"id": "problem_awareness", "label": "你现在最想解决或理解的专业问题是什么？", "type": "textarea", "required": false, "placeholder": "可以是技术问题、商业问题、社会问题或行业效率问题。"}
       ]
     },
     {
-      "id": "education_courses",
-      "title": "教育背景与核心课程",
-      "description": "用于背景评估、课程匹配和文书学术段落。",
+      "id": "ps_academic_ability",
+      "title": "PS：学术能力",
+      "description": "证明你具备学习目标项目的基础、方法和理解能力。",
+      "source_template": "个人陈述调查问卷.docx / 个人信息表 硕士.docx",
       "fields": [
-        {"id": "school_name", "label": "本科学校", "type": "text", "required": false},
-        {"id": "school_tier", "label": "学校层级", "type": "select", "options": ["C9", "985", "211", "双一流", "双非/普通本科", "海外本科"], "required": true},
-        {"id": "major_degree", "label": "专业与学位", "type": "text", "required": true},
-        {"id": "gpa_rank", "label": "均分/GPA/排名", "type": "textarea", "required": true},
-        {"id": "core_courses", "label": "与申请方向相关的核心课程及分数", "type": "textarea", "required": false},
-        {"id": "exchange", "label": "交换经历", "type": "textarea", "required": false}
+        {"id": "major_degree", "label": "本科专业、学位和申请方向之间的关系是什么？", "type": "textarea", "required": true, "placeholder": "如果是转专业，写清楚已有基础和需要补强的部分。"},
+        {"id": "academic_strength", "label": "请写 1-2 个最能体现学术能力的课程、研究、竞赛或项目。", "type": "textarea", "required": true, "placeholder": "包括任务、方法、你做的工作、结果和老师/成绩/作品等证据。"},
+        {"id": "gpa_rank", "label": "GPA、排名或成绩亮点如何支持申请？", "type": "textarea", "required": false, "placeholder": "写明口径，例如 86/100、3.6/4.0、专业前 15%。"}
       ]
     },
     {
-      "id": "statement_motivation",
-      "title": "个人陈述：动机与方向",
-      "description": "来自个人陈述调查问卷，用于主题规划和缺口追问。",
+      "id": "ps_core_courses",
+      "title": "PS：核心课程",
+      "description": "把目标项目需要的先修课、方法课和成绩证据整理出来。",
+      "source_template": "个人陈述调查问卷.docx / 个人信息表 硕士.docx",
       "fields": [
-        {"id": "interest_origin", "label": "选择申请方向的原因或兴趣起源", "type": "textarea", "required": false},
-        {"id": "transition_reason", "label": "如转专业，请说明原因和补足计划", "type": "textarea", "required": false},
-        {"id": "academic_examples", "label": "1-2 个体现学术能力的课程/课题/竞赛例子", "type": "textarea", "required": false},
-        {"id": "practical_examples", "label": "1-2 个实习、项目、科研或活动经历，写清过程、贡献、结果", "type": "textarea", "required": false},
-        {"id": "career_plan", "label": "短期与三到五年职业规划", "type": "textarea", "required": true},
-        {"id": "why_program", "label": "为什么申请该项目/方向", "type": "textarea", "required": false},
-        {"id": "why_school", "label": "为什么申请该学校", "type": "textarea", "required": false},
-        {"id": "extra_info", "label": "论文、志愿、奖项或其他有帮助的信息", "type": "textarea", "required": false}
+        {"id": "core_courses", "label": "请列出与申请方向最相关的核心课程和成绩。", "type": "textarea", "required": true, "placeholder": "课程名 + 分数 + 学到的方法或工具，例如 Statistics 91, Database 88。"},
+        {"id": "prerequisite_fit", "label": "目标项目先修课或背景要求中，你已经满足哪些？还有哪些需要解释？", "type": "textarea", "required": false, "placeholder": "只写你能证明的课程、项目或经历，不确定的部分写待确认。"}
       ]
     },
     {
-      "id": "experience_bank",
-      "title": "经历素材库",
-      "description": "每段经历会生成 Story Card：Situation、Task、Action、Result、Reflection。",
-      "repeatable": true,
+      "id": "ps_practice_experience",
+      "title": "PS：实践经历",
+      "description": "选择 1-2 段最能支撑申请方向的经历，写出过程、贡献和结果。",
+      "source_template": "个人陈述调查问卷.docx / 个人信息表 硕士.docx",
       "fields": [
-        {"id": "experience_type", "label": "经历类型", "type": "select", "options": ["实习/工作", "科研/论文", "课程项目", "竞赛/奖项", "社团/志愿", "其他"], "required": true},
-        {"id": "experience_time", "label": "起止时间", "type": "text", "required": false},
-        {"id": "experience_org", "label": "单位/项目/组织名称", "type": "text", "required": false},
-        {"id": "experience_role", "label": "你的角色", "type": "text", "required": false},
-        {"id": "experience_process", "label": "任务、行动、困难与解决过程", "type": "textarea", "required": false},
-        {"id": "experience_result", "label": "可量化成果或产出", "type": "textarea", "required": false},
-        {"id": "experience_reflection", "label": "收获、反思和与目标项目的关系", "type": "textarea", "required": false}
+        {"id": "experience_org", "label": "经历发生在哪个组织、课程、实验室或项目中？", "type": "text", "required": false, "placeholder": "组织/课程/项目名称，时间段，角色。"},
+        {"id": "practice_problem", "label": "当时面对的具体问题是什么？为什么重要？", "type": "textarea", "required": true, "placeholder": "不要只写“负责数据分析”，写清楚要分析什么、为什么要分析。"},
+        {"id": "practice_role", "label": "你在其中承担什么角色？", "type": "textarea", "required": true, "placeholder": "写清楚你的职责边界，避免把团队成果全部写成个人成果。"},
+        {"id": "practice_actions", "label": "你具体做了哪些动作、使用了哪些方法或工具？", "type": "textarea", "required": true, "placeholder": "例如调研、建模、访谈、实验设计、代码实现、报告呈现。"},
+        {"id": "practice_result", "label": "结果是什么？有什么数字、作品、反馈或可验证材料？", "type": "textarea", "required": true, "placeholder": "写结果、影响、排名、评分、上线、报告、推荐人可确认的反馈。"},
+        {"id": "practice_reflection", "label": "这段经历让你意识到哪些能力缺口或下一步目标？", "type": "textarea", "required": false, "placeholder": "用于连接为什么需要读这个硕士项目。"}
       ]
     },
     {
-      "id": "recommenders",
-      "title": "推荐信信息",
-      "description": "用于推荐信素材整理，不自动编造推荐人口吻。",
-      "repeatable": true,
+      "id": "ps_career_plan",
+      "title": "PS：职业规划",
+      "description": "把短期岗位、三到五年目标和申请项目的作用讲清楚。",
+      "source_template": "个人陈述调查问卷.docx",
       "fields": [
-        {"id": "recommender_name", "label": "推荐人姓名", "type": "text", "sensitive": true, "required": false},
-        {"id": "recommender_title", "label": "职称/职务/单位", "type": "text", "required": false},
-        {"id": "recommender_email", "label": "学校官方邮箱", "type": "text", "sensitive": true, "required": false},
-        {"id": "relationship", "label": "推荐人与申请者关系及认识场景", "type": "textarea", "required": false},
-        {"id": "course_or_project", "label": "课程、presentation、小组活动或研究项目细节", "type": "textarea", "required": false},
-        {"id": "impression_examples", "label": "推荐人能观察到的具体能力和事件", "type": "textarea", "required": false},
-        {"id": "other_observations", "label": "成绩、荣誉、困难克服或其他推荐素材", "type": "textarea", "required": false}
+        {"id": "career_plan", "label": "毕业后的短期目标和三到五年目标分别是什么？", "type": "textarea", "required": true, "placeholder": "尽量具体到岗位、行业、城市/地区、希望解决的问题。"},
+        {"id": "career_transfer", "label": "目标项目如何帮助你从当前背景走向这些目标？", "type": "textarea", "required": false, "placeholder": "写能力、方法、资源或行业理解，不写录取概率。"}
+      ]
+    },
+    {
+      "id": "ps_why_program",
+      "title": "PS：为什么该校该项目",
+      "description": "所有学校定制内容必须绑定官网、网申系统或官方 PDF 证据。",
+      "source_template": "个人陈述调查问卷.docx",
+      "fields": [
+        {"id": "why_program_binding", "label": "你想绑定该项目的哪些官方信息？请贴官网原文或 URL。", "type": "textarea", "required": true, "placeholder": "课程、培养目标、方向、项目特色、实践机会等，必须来自官方来源。"},
+        {"id": "why_school", "label": "学校、学院或城市为什么适合你的目标？", "type": "textarea", "required": false, "placeholder": "只写你能解释清楚且可核验的信息。"}
+      ]
+    },
+    {
+      "id": "ps_supplemental_info",
+      "title": "PS：补充信息",
+      "description": "收集论文、志愿者、交换、奖项、技能等能补强申请的事实。",
+      "source_template": "个人陈述调查问卷.docx / 个人信息表 硕士.docx",
+      "fields": [
+        {"id": "special_context", "label": "还有哪些对申请有帮助但前面没有写到的信息？", "type": "textarea", "required": false, "placeholder": "例如交换、论文、志愿者、奖项、证书、技能、家庭或地区背景等。"},
+        {"id": "additional_evidence", "label": "这些信息有什么证明材料或推荐人可以确认？", "type": "textarea", "required": false, "placeholder": "证书、成绩单、报告、作品链接、推荐人反馈等。"}
+      ]
+    },
+    {
+      "id": "ps_special_prompts",
+      "title": "PS：特殊题目",
+      "description": "有学校指定 Essay、SOP、字数或格式时，先记录原题再生成。",
+      "source_template": "个人陈述调查问卷.docx",
+      "fields": [
+        {"id": "prompt_original", "label": "请粘贴项目文书题目、字数限制和上传格式。", "type": "textarea", "required": false, "placeholder": "来自项目官网、网申系统或官方 PDF。"},
+        {"id": "prompt_constraints", "label": "题目里有哪些必须回答或不能写的要求？", "type": "textarea", "required": false, "placeholder": "例如字数、问题点、格式、是否需要回答 Why Program。"}
+      ]
+    },
+    {
+      "id": "essay_prompt_response",
+      "title": "Essay 题目拆解",
+      "description": "先确认题目，再拆回答结构、证据和字数限制。",
+      "source_template": "个人陈述调查问卷.docx",
+      "fields": [
+        {"id": "essay_prompt", "label": "请粘贴 Essay 原题、字数限制和提交入口说明。", "type": "textarea", "required": true, "placeholder": "没有原题时只生成结构和补充问题，不生成正式段落。"},
+        {"id": "essay_argument", "label": "你希望这篇 Essay 回答的核心观点是什么？", "type": "textarea", "required": true, "placeholder": "一句话写清楚主张，然后列 2-3 个事实支撑。"},
+        {"id": "essay_evidence", "label": "可用于回答题目的经历、数据或证据有哪些？", "type": "textarea", "required": true, "placeholder": "只写真实经历，不套用案例事实。"}
+      ]
+    },
+    {
+      "id": "cv_education",
+      "title": "CV：教育与课程",
+      "description": "整理可以公开提交的教育、成绩、课程与语言信息。",
+      "source_template": "个人信息表 硕士.docx",
+      "fields": [
+        {"id": "cv_education_summary", "label": "学校、学院、专业、学位、就读时间和 GPA 如何写入 CV？", "type": "textarea", "required": true, "placeholder": "不填写身份证、护照号、家庭住址、账号密码。"},
+        {"id": "core_courses", "label": "CV 中需要展示哪些核心课程、成绩或方法训练？", "type": "textarea", "required": false, "placeholder": "与申请方向强相关的课程优先。"}
+      ]
+    },
+    {
+      "id": "cv_experience",
+      "title": "CV：实习与工作",
+      "description": "把经历整理为可扫描的 bullet 素材。",
+      "source_template": "个人信息表 硕士.docx",
+      "fields": [
+        {"id": "practice_problem", "label": "最重要的实习/工作/项目经历是什么？任务目标是什么？", "type": "textarea", "required": true, "placeholder": "组织、时间、岗位、任务目标。"},
+        {"id": "practice_actions", "label": "你做了哪些动作、用了哪些工具和方法？", "type": "textarea", "required": true, "placeholder": "动作动词 + 工具/方法 + 产出。"},
+        {"id": "practice_result", "label": "结果如何量化？", "type": "textarea", "required": true, "placeholder": "数字、排名、上线、报告、评分、节省时间、提升比例等。"}
+      ]
+    },
+    {
+      "id": "cv_research_projects",
+      "title": "CV：科研与项目",
+      "description": "整理研究、论文、课程项目、竞赛项目和作品链接。",
+      "source_template": "个人信息表 硕士.docx",
+      "fields": [
+        {"id": "research_projects", "label": "科研、论文、课程项目或竞赛项目有哪些？", "type": "textarea", "required": false, "placeholder": "项目名、时间、角色、方法、结果、论文/报告/代码链接。"},
+        {"id": "technical_role", "label": "如果项目偏技术，你负责的技术部分是什么？", "type": "textarea", "required": false, "placeholder": "数据、模型、系统、实验、可视化、工程协作等。"}
+      ]
+    },
+    {
+      "id": "cv_awards_skills",
+      "title": "CV：奖项与技能",
+      "description": "整理奖学金、证书、活动、技能和语言成绩。",
+      "source_template": "个人信息表 硕士.docx",
+      "fields": [
+        {"id": "awards_certificates", "label": "奖项、证书、奖学金、竞赛和活动经历有哪些？", "type": "textarea", "required": false, "placeholder": "写明级别、颁发机构和年份。"},
+        {"id": "skills_tools", "label": "技能、工具、语言和证书如何分组？", "type": "textarea", "required": false, "placeholder": "例如 Python, SQL, R, Tableau, Stata, IELTS 7.0。"}
+      ]
+    },
+    {
+      "id": "reference_recommender_profile",
+      "title": "推荐信：推荐人基本信息",
+      "description": "只收集推荐信草稿需要的身份信息，不收集账号密码。",
+      "source_template": "推荐信调查表（学校）.docx",
+      "fields": [
+        {"id": "recommender_identity", "label": "推荐人的姓名/称呼、职称、单位和职务是什么？", "type": "textarea", "required": true, "placeholder": "例如任课教师、导师、课题指导老师、院系领导或工作上级。"},
+        {"id": "recommender_official_role", "label": "推荐人与申请方向的关系是什么？", "type": "textarea", "required": true, "placeholder": "说明为什么这位推荐人有资格评价你的学术或专业能力。"}
+      ]
+    },
+    {
+      "id": "reference_relationship",
+      "title": "推荐信：推荐人关系",
+      "description": "写清楚何时、何地、通过什么课程或项目认识。",
+      "source_template": "推荐信调查表（学校）.docx",
+      "fields": [
+        {"id": "relationship", "label": "你与推荐人何时、何地、通过什么课程/项目/研究认识？", "type": "textarea", "required": true, "placeholder": "推荐人能直接观察到哪些表现？"},
+        {"id": "course_performance", "label": "如果推荐人教过你课程，课程成绩、排名和课堂表现如何？", "type": "textarea", "required": false, "placeholder": "写分数、排名、presentation、讨论、作业或报告表现。"}
+      ]
+    },
+    {
+      "id": "reference_course_performance",
+      "title": "推荐信：课程表现",
+      "description": "把推荐人能确认的课堂表现、作业和展示写成事实。",
+      "source_template": "推荐信调查表（学校）.docx",
+      "fields": [
+        {"id": "course_or_project", "label": "推荐人最能评价你的哪门课或哪个项目？", "type": "textarea", "required": true, "placeholder": "课程/项目名称、你的角色、成绩或反馈。"},
+        {"id": "classroom_observation", "label": "推荐人能观察到的课堂表现是什么？", "type": "textarea", "required": false, "placeholder": "提问、展示、讨论、报告修改、研究互动等。"}
+      ]
+    },
+    {
+      "id": "reference_activity_project",
+      "title": "推荐信：presentation/小组活动/研究项目",
+      "description": "用具体事件证明能力，而不是写空泛评价。",
+      "source_template": "推荐信调查表（学校）.docx",
+      "fields": [
+        {"id": "presentation_group_research", "label": "是否有 presentation、小组活动或研究项目？请写主题、人数、持续时间、你的贡献和结果。", "type": "textarea", "required": true, "placeholder": "推荐人是否看到了过程或最终成果？"},
+        {"id": "result_validation", "label": "这件事有什么结果、评分、反馈或可确认材料？", "type": "textarea", "required": false, "placeholder": "成绩、老师评价、报告、PPT、论文、代码、汇报反馈等。"}
+      ]
+    },
+    {
+      "id": "reference_specific_impression",
+      "title": "推荐信：具体印象",
+      "description": "收集推荐人可能记得的 1-2 个画面。",
+      "source_template": "推荐信调查表（学校）.docx",
+      "fields": [
+        {"id": "impression_examples", "label": "推荐人可能记得的具体印象是什么？", "type": "textarea", "required": true, "placeholder": "例如一次提问、报告修改、团队协作、研究讨论或主动补强。"},
+        {"id": "feedback_quote", "label": "推荐人是否给过具体反馈？请只写真实反馈，不编造原话。", "type": "textarea", "required": false, "placeholder": "可以转述，不要虚构直接引语。"}
+      ]
+    },
+    {
+      "id": "reference_competency_events",
+      "title": "推荐信：综合能力事件",
+      "description": "用于支撑学习能力、研究潜力、沟通协作或职业成熟度。",
+      "source_template": "推荐信调查表（学校）.docx",
+      "fields": [
+        {"id": "competency_events", "label": "还有哪些能体现综合能力的事件？", "type": "textarea", "required": false, "placeholder": "成绩、特长、荣誉、克服困难、实习、活动等，必须是推荐人了解或可确认的。"},
+        {"id": "other_observations", "label": "推荐人可以确认哪些其他事实？", "type": "textarea", "required": false, "placeholder": "不要写推荐人无法观察或无法确认的内容。"},
+        {"id": "recommender_submission_boundary", "label": "这封推荐信是否需要推荐人本人确认、上传或提交？", "type": "textarea", "required": true, "placeholder": "推荐信最终必须由推荐人确认和提交，禁止代签或伪造身份。"}
       ]
     }
   ]
