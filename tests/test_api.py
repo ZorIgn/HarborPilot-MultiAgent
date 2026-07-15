@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from starlette.datastructures import Headers
 
 from harbor_agent.app import app
+from harbor_agent.services import evidence_graph
 from harbor_agent.services.data_loader import load_programs
 
 
@@ -376,7 +377,9 @@ def test_source_registry_and_data_refresh() -> None:
     assert all("robots_txt_url" in check for check in data["source_checks"])
 
 
-def test_program_catalog_exposes_field_level_trust_detail() -> None:
+def test_program_catalog_exposes_field_level_trust_detail(monkeypatch) -> None:
+    monkeypatch.setattr(evidence_graph, "load_field_evidence_records", lambda _program_ids=None: [])
+    monkeypatch.setattr(evidence_graph, "load_published_field_records", lambda: [])
     client = TestClient(app)
 
     response = client.get("/api/programs?limit=1")
@@ -387,10 +390,10 @@ def test_program_catalog_exposes_field_level_trust_detail() -> None:
     assert trust["program_id"] == program["id"]
     assert trust["reviewer_gate_fields"]
     assert trust["production_ready"] is False
-    assert trust["reference_ready"] is True
-    assert "2026 Fall \u5f80\u5c4a\u53c2\u8003" in trust["status_label"]
-    assert "\u6b63\u5f0f\u63d0\u4ea4\u65e5\u671f" in trust["source_warning"]
-    assert "deadline" in trust["stale_or_reference_fields"]
+    assert trust["reference_ready"] is False
+    assert trust["status_label"] == "\u7f3a\u5c11\u5173\u952e\u9879\u76ee\u5b57\u6bb5"
+    assert "\u4e0d\u80fd\u751f\u6210\u6b63\u5f0f\u7533\u8bf7\u65f6\u95f4\u7ebf" in trust["source_warning"]
+    assert trust["stale_or_reference_fields"] == []
     assert "deadline" in trust["fields_requiring_review"]
     assert {"official_program_url", "deadline", "tuition_hkd", "materials", "language_requirement", "application_url"} & {
         record["field_name"] for record in trust["field_records"]

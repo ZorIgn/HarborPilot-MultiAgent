@@ -14,6 +14,7 @@ from harbor_agent.agents.writing import STYLE_GUIDE, WritingAgent
 from harbor_agent.agents.data_refresh import _extract_field_candidates
 from harbor_agent.core.llm import MockLLMProvider
 from harbor_agent.models import ApplicantProfileInput, FieldEvidenceRecord, FieldVerificationStatus, ProgramMatch, StoryCard
+from harbor_agent.services import evidence_graph
 from harbor_agent.services.evidence_graph import build_field_evidence_records
 from harbor_agent.services.data_loader import load_programs
 from harbor_agent.services.program_urls import has_application_entry, has_program_detail_page, is_generic_program_url
@@ -398,13 +399,15 @@ def test_persisted_review_publish_is_visible_to_student_catalog(monkeypatch) -> 
     catalog_deadline = next(record for record in catalog_program["trust_detail"]["field_records"] if record["field_name"] == "deadline")
     assert catalog_deadline["value"] == "2027-03-20"
 
-def test_field_status_can_vary_independently() -> None:
-    program = load_programs()[0]
+def test_field_status_can_vary_independently(monkeypatch) -> None:
+    monkeypatch.setattr(evidence_graph, "load_field_evidence_records", lambda _program_ids=None: [])
+    monkeypatch.setattr(evidence_graph, "load_published_field_records", lambda: [])
+    program = next(item for item in load_programs() if item.id == "cityu-ma-communication-and-new-media-2027")
     records = [record for record in build_field_evidence_records([program]) if record.program_id == program.id]
     by_field = {record.field_name: record for record in records}
 
-    assert by_field["deadline"].status.value in {"OFFICIAL_PREVIOUS_CYCLE", "NOT_PUBLISHED"}
-    assert by_field["tuition_hkd"].status.value in {"OFFICIAL_PREVIOUS_CYCLE", "NOT_PUBLISHED"}
+    assert by_field["deadline"].status == FieldVerificationStatus.model_inferred
+    assert by_field["tuition_hkd"].status == FieldVerificationStatus.model_inferred
     assert by_field["deadline"].field_name != by_field["tuition_hkd"].field_name
 
 
