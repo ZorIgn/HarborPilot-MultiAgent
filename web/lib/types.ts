@@ -151,6 +151,7 @@ export type SourceCategory =
   | "writing_style_reference";
 
 export type SourceTrustLevel = "official" | "directory" | "community" | "methodology" | "writing_reference";
+export type SourceScope = "programme_detail" | "institution_index" | "application_portal" | "community_reference" | "methodology";
 export type ConfidenceLevel = "low" | "medium" | "high";
 
 export type SourcePolicy = {
@@ -230,6 +231,13 @@ export type SourceExtractionResult = {
   unresolved_fields: string[];
   raw_json: Record<string, unknown>;
   agent_chain: string[];
+  fetch_status?: string;
+  final_url?: string | null;
+  page_title?: string | null;
+  binding_status?: "not_checked" | "matched" | "weak_match" | "unrelated" | "index_only";
+  binding_score?: number;
+  attempts?: number;
+  duration_ms?: number;
 };
 
 export type AcquisitionSourcePlan = {
@@ -244,6 +252,8 @@ export type AcquisitionSourcePlan = {
   robots_policy: string;
   requires_human_review: boolean;
   next_actions: string[];
+  source_scope?: SourceScope;
+  target_program_id?: string | null;
 };
 
 export type ProgramContentSection = {
@@ -295,6 +305,7 @@ export type ProgramDataPackage = {
   program_id: string;
   institution: string;
   program_name: string;
+  program_name_en?: string | null;
   cycle: string;
   official_url: string | null;
   application_url: string | null;
@@ -326,6 +337,46 @@ export type DataAcquisitionReport = {
   agent_chain: string[];
   quality_metrics: DataQualityMetric[];
   crawler_capabilities: string[];
+  run_status?: "COMPLETED" | "NEEDS_REVIEW" | "FAILED";
+  planned_source_count?: number;
+  attempted_source_count?: number;
+  successful_source_count?: number;
+  failed_source_count?: number;
+  binding_warning_count?: number;
+  run_warnings?: string[];
+};
+
+export type SourceHealthItem = {
+  source_id: string;
+  name: string;
+  url: string;
+  source_scope: SourceScope;
+  last_status: string;
+  last_checked_at: string | null;
+  last_success_at: string | null;
+  last_failure_at: string | null;
+  last_http_status: number | null;
+  last_page_hash: string | null;
+  attempt_count: number;
+  success_count: number;
+  failure_count: number;
+  failure_rate: number;
+  average_duration_ms: number;
+  review_pending_count: number;
+  freshness_state: "fresh" | "due" | "stale" | "unknown";
+  next_action: string;
+};
+
+export type SourceHealthSummary = {
+  generated_at: string;
+  total_sources: number;
+  healthy_sources: number;
+  due_sources: number;
+  stale_sources: number;
+  never_run_sources: number;
+  failing_sources: number;
+  pending_review_count: number;
+  items: SourceHealthItem[];
 };
 
 export type CrawlQueueItem = {
@@ -410,6 +461,11 @@ export type ReviewQueueItem = {
   evidence_snippet: string | null;
   page_hash: string | null;
   snapshot_url?: string | null;
+  source_scope?: SourceScope | null;
+  page_title?: string | null;
+  final_url?: string | null;
+  binding_status?: "not_checked" | "matched" | "weak_match" | "unrelated" | "index_only";
+  binding_score?: number;
   extracted_at: string | null;
   confidence: ConfidenceLevel;
   source_priority: number;
@@ -517,6 +573,13 @@ export type FieldEvidenceRecord = {
   evidence_snippet: string | null;
   snapshot_url?: string | null;
   agent_chain: string[];
+  source_scope?: SourceScope | null;
+  page_title?: string | null;
+  final_url?: string | null;
+  binding_status?: "not_checked" | "matched" | "weak_match" | "unrelated" | "index_only";
+  binding_score?: number;
+  reviewer_note?: string | null;
+  review_decision_id?: string | null;
 };
 
 export type EvidenceGraphSummary = {

@@ -10,6 +10,11 @@ type TimelineLoading = string | null;
 type Program = ProgramMatch["program"];
 type TrustRecord = NonNullable<Program["trust_detail"]>["field_records"][number];
 type TaskStatus = NonNullable<TimelineTask["status"]>;
+type EvidenceFieldState = {
+  badgeStatus: string;
+  label: string;
+  kind: "published" | "awaiting_publish" | "needs_verification" | "missing";
+};
 
 type SourceSummary = {
   total: number;
@@ -124,15 +129,16 @@ function EvidenceFieldCell({ field, program }: { field: string; program: Program
   const record = findRecord(program, field);
   const fallback = fallbackFieldValue(program, field);
   const usable = record && (record.status === "OFFICIAL_VERIFIED_CURRENT" || record.status === "OFFICIAL_PREVIOUS_CYCLE");
+  const state = evidenceFieldState(program, field, record);
   return <section className={("source-field-cell " + (usable ? "usable" : "needs-source")).trim()}>
     <div className="source-field-head">
       <span>{fieldLabels[field] ?? field}</span>
-      <DataBadge status={record?.status ?? "MODEL_INFERRED"} />
+      <DataBadge status={state.badgeStatus} label={state.label} />
     </div>
     <strong>{record ? fieldRecordDisplayValue(record) : fallback}</strong>
-    <small>{record?.cycle ? previousCycleLabel(record.cycle) : "申请季待补充"} ? {formatSourceTime(record)}</small>
+    <small>{record?.cycle ? previousCycleLabel(record.cycle) : state.kind === "awaiting_publish" ? "申请季待发布" : "申请季待补充"} · {formatSourceTime(record)}</small>
     {record?.evidence_snippet ? <p>{fieldRecordExcerpt(record.evidence_snippet)}</p> : null}
-    {record?.source_url ? <a className="text-link" href={record.source_url} target="_blank" rel="noreferrer"><ExternalLink size={13} aria-hidden />打开来源</a> : <span className="source-missing-note">发布后更新来源</span>}
+    {record?.source_url ? <a className="text-link" href={record.source_url} target="_blank" rel="noreferrer"><ExternalLink size={13} aria-hidden />打开来源</a> : <span className="source-missing-note">{state.kind === "missing" ? "来源待补充" : state.kind === "needs_verification" ? "核验后更新来源" : "发布后更新来源"}</span>}
   </section>;
 }
 
@@ -330,6 +336,27 @@ function fallbackFieldValue(program: Program, field: string) {
   if (field === "tuition_hkd") return formatProgramField(program, field, program.tuition_hkd ? formatMoney(program.tuition_hkd) : null, "官网学费待补充");
   return "等待来源更新";
 }
+function evidenceFieldState(program: Program, field: string, record: TrustRecord | null): EvidenceFieldState {
+  if (record && record.status !== "MODEL_INFERRED") {
+    const published = record.status === "OFFICIAL_VERIFIED_CURRENT" || record.status === "OFFICIAL_PREVIOUS_CYCLE";
+    return { badgeStatus: record.status, label: dataStatusLabels[record.status] ?? record.status, kind: published ? "published" : "needs_verification" };
+  }
+  const hasCandidate = Boolean(record?.value && record.value !== "NOT_PUBLISHED") || hasProgramFieldCandidate(program, field);
+  if (hasCandidate && (field === "official_program_url" || field === "application_url")) {
+    return { badgeStatus: "EXTRACTED", label: "已提取待发布", kind: "awaiting_publish" };
+  }
+  if (hasCandidate) return { badgeStatus: "PENDING_REVIEW", label: "待官网核验", kind: "needs_verification" };
+  return { badgeStatus: "MODEL_INFERRED", label: "缺少来源", kind: "missing" };
+}
+function hasProgramFieldCandidate(program: Program, field: string) {
+  if (field === "official_program_url") return Boolean(program.official_program_url);
+  if (field === "application_url") return Boolean(program.application_url);
+  if (field === "deadline") return Boolean(program.deadline && program.deadline !== "NOT_PUBLISHED");
+  if (field === "language_requirement") return Object.values(program.requirements?.language ?? {}).some((value) => value !== null && value !== undefined);
+  if (field === "materials") return Boolean(program.materials?.length);
+  if (field === "tuition_hkd") return Boolean(program.tuition_hkd);
+  return false;
+}
 function fieldRecordDisplayValue(record: TrustRecord) {
   if (!record.value || record.value === "NOT_PUBLISHED") return "当前季未发布";
   const value = String(record.value).replace(/\s+/g, " ").trim();
@@ -366,7 +393,7 @@ function toIcsTimestamp(date: Date) { return date.toISOString().replace(/[-:]/g,
 function escapeIcsText(value: string) { return String(value).replace(/\\/g, "\\\\").replace(/\n/g, "\\n").replace(/,/g, "\\,").replace(/;/g, "\\;"); }
 function PanelTitle({ icon, title }: { icon: ReactNode; title: string }) { return <div className="panel-title">{icon}<IslandTitle size="small" color="app-yellow">{title}</IslandTitle></div>; }
 function Metric({ label, value, detail }: { label: string; value: string; detail: string }) { return <article className="metric-card"><p>{label}</p><strong>{value}</strong><span>{detail}</span></article>; }
-function DataBadge({ status }: { status?: string | null }) { const value = status ?? "MODEL_INFERRED"; return <span className={("data-badge " + value.toLowerCase()).trim()}>{dataStatusLabels[value] ?? value}</span>; }
+function DataBadge({ status, label }: { status?: string | null; label?: string }) { const value = status ?? "MODEL_INFERRED"; return <span className={("data-badge " + value.toLowerCase()).trim()}>{label ?? dataStatusLabels[value] ?? value}</span>; }
 function EmptyState({ text }: { text: string }) { return <div className="empty-state"><Sparkles size={18} aria-hidden /><span>{text}</span></div>; }
 
 export function ProgramMiniList({ matches }: { matches: ProgramMatch[] }) {

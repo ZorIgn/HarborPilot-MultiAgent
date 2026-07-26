@@ -537,7 +537,7 @@ def test_admin_catalog_auto_update_skips_programs_that_already_have_detail_pages
     assert stale["publishable_after_review"] is False
     assert "404" in stale["reason"]
 
-def test_review_queue_publish_gate_requires_human_approval() -> None:
+def test_review_queue_blocks_legacy_candidates_without_page_binding() -> None:
     client = TestClient(app)
     program_id = "hku-master-of-science-in-computer-science-2027"
 
@@ -545,16 +545,15 @@ def test_review_queue_publish_gate_requires_human_approval() -> None:
     assert queue_response.status_code == 200
     queue = queue_response.json()
     assert queue["pending_count"] >= 1
-    assert queue["publishable_count"] >= 1
-    publishable = next(item for item in queue["items"] if item["publishable"])
-    assert publishable["source_type"].startswith("official")
-    assert publishable["page_hash"]
-    assert "official" in publishable["boundary"].lower()
+    assert queue["publishable_count"] == 0
+    candidate = queue["items"][0]
+    assert candidate["publishable"] is False
+    assert "not publishable" in candidate["boundary"].lower()
 
     reject_response = client.post(
         "/api/admin/review-queue/publish",
         json={
-            "review_id": publishable["review_id"],
+            "review_id": candidate["review_id"],
             "decision": "reject",
             "reviewer_id": "qa_reviewer",
             "reviewer_note": "source did not match the current application cycle",
@@ -569,7 +568,7 @@ def test_review_queue_publish_gate_requires_human_approval() -> None:
     approve_response = client.post(
         "/api/admin/review-queue/publish",
         json={
-            "review_id": publishable["review_id"],
+            "review_id": candidate["review_id"],
             "decision": "approve",
             "reviewer_id": "qa_reviewer",
             "reviewer_note": "checked the official public source in preview mode",
@@ -578,24 +577,21 @@ def test_review_queue_publish_gate_requires_human_approval() -> None:
     )
     assert approve_response.status_code == 200
     approved = approve_response.json()
-    assert approved["ok"] is True
-    assert approved["item"]["status"] == "APPROVED"
-    assert approved["published_record"]["status"] == "OFFICIAL_VERIFIED_CURRENT"
-    assert approved["published_record"]["review_required"] is False
-    assert approved["published_record"]["reviewer_id"] == "qa_reviewer"
-    assert "HumanReviewGateAgent" in approved["published_record"]["agent_chain"]
+    assert approved["ok"] is False
+    assert approved["item"]["status"] == "REJECTED"
+    assert approved["published_record"] is None
 
 
 
 
-def test_admin_review_queue_bulk_publish_preview_keeps_review_gate() -> None:
+def test_admin_review_queue_bulk_preview_does_not_bypass_binding_gate() -> None:
     client = TestClient(app)
     program_id = "hku-master-of-science-in-computer-science-2027"
 
     queue_response = client.get(f"/api/admin/review-queue?program_id={program_id}&limit=20")
     assert queue_response.status_code == 200
     queue = queue_response.json()
-    assert queue["publishable_count"] >= 1
+    assert queue["publishable_count"] == 0
 
     response = client.post(
         "/api/admin/review-queue/bulk-publish",
@@ -612,12 +608,10 @@ def test_admin_review_queue_bulk_publish_preview_keeps_review_gate() -> None:
     data = response.json()
     assert data["ok"] is True
     assert data["published_count"] == 0
-    assert 1 <= data["preview_count"] <= 3
+    assert data["preview_count"] == 0
     assert data["queue_after"] is None
     assert data["queue_before"] == queue["pending_count"]
-    assert all(item["ok"] for item in data["responses"])
-    assert all(item["published_record"]["status"] == "OFFICIAL_VERIFIED_CURRENT" for item in data["responses"])
-    assert all(item["published_record"]["review_required"] is False for item in data["responses"])
+    assert data["responses"] == []
 
     after = client.get(f"/api/admin/review-queue?program_id={program_id}&limit=20").json()
     assert after["pending_count"] == queue["pending_count"]

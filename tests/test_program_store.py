@@ -319,6 +319,35 @@ def test_load_programs_cache_invalidates_when_store_file_changes_without_explici
 
     second = data_loader.load_programs()
     assert [program.id for program in second] == [program.id for program in seed]
+
+
+def test_catalog_replace_preserves_review_evidence(tmp_path) -> None:
+    db_path = tmp_path / "harborpilot.sqlite3"
+    seed = load_programs_from_store(seed_json_path=Path("data/programs_2027_fall.json"))[:2]
+    program_store.seed_program_store(seed[:1], db_path=db_path, replace=True)
+    record = FieldEvidenceRecord(
+        program_id=seed[0].id,
+        field_name="deadline",
+        value="2027-01-15",
+        cycle="2027-fall",
+        source_url="https://example.edu/programme",
+        source_type="official_program_page",
+        extracted_at=datetime.now(UTC),
+        page_hash="sha256:preserve-review",
+        confidence="high",
+        source_priority=1,
+        status=FieldVerificationStatus.official_verified_current,
+        review_required=False,
+        reviewer_id="reviewer-test",
+        agent_chain=["HumanReviewGateAgent"],
+    )
+    upsert_field_evidence_records([record], db_path=db_path)
+
+    program_store.seed_program_store(seed, db_path=db_path, replace=True)
+
+    loaded = load_field_evidence_records([seed[0].id], db_path=db_path)
+    assert len(loaded) == 1
+    assert loaded[0].reviewer_id == "reviewer-test"
 def test_data_acquisition_live_mode_persists_field_candidates(monkeypatch) -> None:
     captured: list[FieldEvidenceRecord] = []
 

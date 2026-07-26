@@ -94,7 +94,18 @@ def build_field_evidence_records(programs: list[Program] | None = None) -> list[
         record for record in load_published_field_records()
         if record.program_id in program_ids
     )
-    return records
+    deduped: dict[tuple[str, str, str, str, str, str], FieldEvidenceRecord] = {}
+    for record in records:
+        key = (
+            record.program_id,
+            record.field_name,
+            record.cycle or "",
+            str(record.source_url or ""),
+            record.page_hash or "",
+            str(record.value or ""),
+        )
+        deduped[key] = record
+    return list(deduped.values())
 
 
 def build_program_trust_detail(program: Program) -> ProgramTrustDetail:

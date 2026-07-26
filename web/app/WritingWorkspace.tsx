@@ -555,9 +555,9 @@ function ProgressCard({ completion, ready }: { completion: ReturnType<typeof com
   return (
     <div className="writing-progress-card">
       <strong>{ready ? `${completion.percent}%` : "读取中"}</strong>
-      <span>{ready ? "当前问卷完成度" : writingCopy.loadingSchema}</span>
+      <span>{ready ? "已有素材覆盖度" : writingCopy.loadingSchema}</span>
       <div className="progress-track static"><span style={{ width: `${completion.percent}%` }} /></div>
-      <small>{ready ? `${completion.filled}/${completion.total} 已填，${completion.requiredMissing} 个必填问题` : "问题结构来自三份模板文件"}</small>
+      <small>{ready ? `${completion.filled}/${completion.total} 已填，${completion.requiredMissing} 个必填缺口` : "问题结构来自三份模板文件"}</small>
     </div>
   );
 }

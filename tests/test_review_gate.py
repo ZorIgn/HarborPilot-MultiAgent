@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from harbor_agent.models import FieldEvidenceRecord, FieldVerificationStatus, ReviewPublishRequest
+from harbor_agent.models import FieldEvidenceRecord, FieldVerificationStatus, ReviewPublishRequest, SourceScope
 from harbor_agent.services import review_gate
 
 
@@ -121,9 +121,56 @@ def test_review_gate_requires_target_cycle_year_in_date_evidence(monkeypatch) ->
 
 def test_review_gate_accepts_current_cycle_evidence_on_school_domain(monkeypatch) -> None:
     record = _deadline_candidate("https://www.hku.hk/programme", "2027-03-20", "2027 Fall application deadline: 20 March 2027")
+    record.program_id = "hku-master-of-science-in-computer-science-2027"
+    record.source_scope = SourceScope.programme_detail
+    record.final_url = "https://www.hku.hk/programme"
+    record.page_title = "Master of Science in Computer Science"
+    record.binding_status = "matched"
+    record.binding_score = 90
     monkeypatch.setattr(review_gate, "build_field_evidence_records", lambda: [record])
 
     queue = review_gate.build_review_queue()
 
     assert queue.publishable_count == 1
     assert queue.items[0].publishable is True
+
+
+def test_review_preview_has_no_persistent_decision_and_preserves_provenance(monkeypatch) -> None:
+    record = _deadline_candidate(
+        "https://www.hku.hk/programme/computer-science",
+        "2027-03-20",
+        "2027 Fall application deadline: 20 March 2027",
+    )
+    record.program_id = "hku-master-of-science-in-computer-science-2027"
+    record.source_scope = SourceScope.programme_detail
+    record.final_url = "https://www.hku.hk/programme/computer-science"
+    record.page_title = "Master of Science in Computer Science"
+    record.binding_status = "matched"
+    record.binding_score = 92
+    record.page_hash = "sha256:preview-provenance"
+    decisions: list[dict] = []
+    monkeypatch.setattr(review_gate, "build_field_evidence_records", lambda: [record])
+    monkeypatch.setattr(
+        review_gate,
+        "save_review_decision",
+        lambda **kwargs: decisions.append(kwargs) or "should-not-be-created",
+    )
+
+    queue = review_gate.build_review_queue()
+    response = review_gate.publish_review_item(
+        ReviewPublishRequest(
+            review_id=queue.items[0].review_id,
+            decision="approve",
+            reviewer_id="preview-reviewer",
+            persist=False,
+        )
+    )
+
+    assert response.ok is True
+    assert decisions == []
+    assert response.published_record is not None
+    assert response.published_record.source_scope == SourceScope.programme_detail
+    assert response.published_record.final_url == record.final_url
+    assert response.published_record.binding_status == "matched"
+    assert response.published_record.binding_score == 92
+    assert response.published_record.review_decision_id is None

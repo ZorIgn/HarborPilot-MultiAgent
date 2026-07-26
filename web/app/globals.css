@@ -1259,6 +1259,25 @@ a:focus-visible {
   background: rgba(255, 253, 243, 0.84);
 }
 
+.plan-table-wrap:focus-visible {
+  outline: 3px solid rgba(46, 130, 105, 0.34);
+  outline-offset: 3px;
+}
+
+.plan-table-scroll-hint {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  .plan-table-scroll-hint {
+    display: block;
+    margin: 0 0 8px;
+    color: var(--leaf-deep);
+    font-size: 0.78rem;
+    font-weight: 900;
+  }
+}
+
 .consultant-plan-brief {
   display: grid;
   grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.75fr);

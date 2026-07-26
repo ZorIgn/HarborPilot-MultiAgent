@@ -27,6 +27,7 @@ import {
   getQuestionnaireSchema,
   getReviewQueue,
   getScenarioAudit,
+  getSourceHealth,
   getSourceRegistry,
   publishReviewBatch,
   publishReviewItem,
@@ -75,6 +76,7 @@ import type {
   ReviewQueueSummary,
   ScenarioAuditReport,
   SourceRegistry,
+  SourceHealthSummary,
   StoryCard,
   TimelineTask,
   WorkflowResult,
@@ -86,6 +88,7 @@ import type {
 
 type ViewMode = "home" | "assessment" | "programs" | "timeline" | "writing" | "agent" | "settings";
 type StageLoading = "background" | "programs" | "timeline" | "writing" | "interview" | "data" | "crawl" | "catalog" | "review" | "scenario" | "package" | "llm" | null;
+type SourceHealthLoadState = "loading" | "ready" | "error";
 type Provider = "mock" | "deepseek" | "openai" | "compatible";
 type DocumentType = "PS" | "SOP" | "CV" | "ESSAY" | "REFERENCE_PACKAGE";
 type QuestionnaireValues = Record<string, string>;
@@ -115,6 +118,8 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
   const [catalog, setCatalog] = useState<CatalogProgram[]>([]);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [sourceRegistry, setSourceRegistry] = useState<SourceRegistry | null>(null);
+  const [sourceHealth, setSourceHealth] = useState<SourceHealthSummary | null>(null);
+  const [sourceHealthLoadState, setSourceHealthLoadState] = useState<SourceHealthLoadState>("loading");
   const [sourceAcquisition, setSourceAcquisition] = useState<DataAcquisitionReport | null>(null);
   const [crawlQueue, setCrawlQueue] = useState<CrawlQueueReport | null>(null);
   const [catalogAutoUpdate, setCatalogAutoUpdate] = useState<CatalogAutoUpdateReport | null>(null);
@@ -167,6 +172,9 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
     getHealth().then(setHealth).catch(() => setHealth(null));
     getPrograms().then((items) => { setCatalog(items); setCatalogError(null); }).catch((err) => { setCatalog([]); setCatalogError(appErrorCopy.catalogLoadFailed); });
     getSourceRegistry().then(setSourceRegistry).catch(() => setSourceRegistry(null));
+    getSourceHealth()
+      .then((value) => { if (active) { setSourceHealth(value); setSourceHealthLoadState("ready"); } })
+      .catch(() => { if (active) { setSourceHealth(null); setSourceHealthLoadState("error"); } });
     getEvidenceGraphSummary().then(setEvidenceGraph).catch(() => setEvidenceGraph(null));
     getAgentSystemReport().then(setAgentSystem).catch(() => setAgentSystem(null));
     getAgentRuns(20).then(setAgentRuns).catch(() => setAgentRuns([]));
@@ -431,6 +439,7 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
       const response = await runDataRefresh({ region: "ALL", selected_program_ids: selectedProgramIds, dry_run: !liveFetch, use_llm: realModel, max_sources: selectedProgramIds.length ? 24 : 16 });
       mergeResult({ source_refresh: response });
       setEvidenceGraph(await getEvidenceGraphSummary());
+      if (liveFetch) await reloadSourceHealth();
     } catch (err) { setError(appErrorCopy.sourceRefreshFailed); }
     finally { setLoading(null); }
   }
@@ -440,7 +449,7 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
     try {
       const response = await runDataAcquisition({ selected_program_ids: selectedProgramIds, dry_run: dryRun, include_community: true, max_sources_per_program: selectedProgramIds.length ? 4 : 1 });
       setSourceAcquisition(response);
-      if (!dryRun) { setEvidenceGraph(await getEvidenceGraphSummary()); }
+      if (!dryRun) { setEvidenceGraph(await getEvidenceGraphSummary()); await reloadSourceHealth(); }
     } catch (err) { setError(appErrorCopy.sourceRefreshFailed); }
     finally { setLoading(null); }
   }
@@ -452,12 +461,23 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
     finally { setLoading(null); }
   }
 
+  async function reloadSourceHealth() {
+    setSourceHealthLoadState("loading");
+    try {
+      setSourceHealth(await getSourceHealth());
+      setSourceHealthLoadState("ready");
+    } catch {
+      setSourceHealth(null);
+      setSourceHealthLoadState("error");
+    }
+  }
+
   async function runCatalogUpdate(dryRun: boolean) {
     setLoading("catalog"); setError(null);
     try {
       const response = await runCatalogAutoUpdate({ selected_program_ids: selectedProgramIds, dry_run: dryRun, max_programs: selectedProgramIds.length ? Math.max(selectedProgramIds.length, 12) : 48, max_candidates_per_program: 6 });
       setCatalogAutoUpdate(response);
-      if (!dryRun) { setEvidenceGraph(await getEvidenceGraphSummary()); setReviewQueue(await getReviewQueue({ limit: 80 })); setReviewPublishResult(null); }
+      if (!dryRun) { setEvidenceGraph(await getEvidenceGraphSummary()); setReviewQueue(await getReviewQueue({ limit: 80 })); setReviewPublishResult(null); await reloadSourceHealth(); }
     } catch (err) { setError(appErrorCopy.catalogUpdateFailed); }
     finally { setLoading(null); }
   }
@@ -493,6 +513,7 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
         setReviewQueue(await getReviewQueue({ limit: 80 }));
         setEvidenceGraph(await getEvidenceGraphSummary());
         setCatalog(await getPrograms());
+        await reloadSourceHealth();
       } else {
         setReviewQueue((previous) => previous ? { ...previous, items: previous.items.map((item) => item.review_id === response.item.review_id ? response.item : item) } : previous);
       }
@@ -516,6 +537,7 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
       setReviewQueue(await getReviewQueue({ limit: 80 }));
       setEvidenceGraph(await getEvidenceGraphSummary());
       if (persist && response.published_count > 0) setCatalog(await getPrograms());
+      if (persist) await reloadSourceHealth();
     } catch (err) { setError(appErrorCopy.reviewPreviewFailed); }
     finally { setLoading(null); }
   }
@@ -572,7 +594,7 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
           {error ? <div className="error-strip"><AlertTriangle size={18} aria-hidden /><span>{error}</span></div> : null}
           {loading ? <GlobalProgress stage={loading} /> : null}
           {!realModel && view === "agent" ? <AdminModelNotice onSample={useSampleProfile} /> : null}
-          {view === "home" ? <DashboardView result={result} selectedMatches={selectedMatches} evidenceGraph={evidenceGraph} sourceRefresh={result?.source_refresh ?? null} loading={loading} onBackground={() => runBackground()} onPrograms={() => runPrograms()} onTimeline={runTimeline} onRefresh={() => refreshSources(false)} /> : null}
+          {view === "home" ? <DashboardView result={result} selectedMatches={selectedMatches} evidenceGraph={evidenceGraph} sourceHealth={sourceHealth} sourceHealthLoadState={sourceHealthLoadState} sourceRefresh={result?.source_refresh ?? null} loading={loading} onBackground={() => runBackground()} onPrograms={() => runPrograms()} onTimeline={runTimeline} onRefresh={() => refreshSources(false)} /> : null}
           {view === "assessment" ? <AssessmentPage payload={payload} setPayload={persistPayload} result={result} loading={loading} profileSaveStatus={profileSaveStatus} onRun={() => runBackground()} onRunPrograms={() => runPrograms(payload, true)} /> : null}
           {view === "programs" ? <ProgramCatalogPage payload={payload} catalog={visibleCatalog} catalogTotal={catalog.length} catalogError={catalogError} result={result} focusList={focusList} applicationMix={applicationMix} filters={filters} setFilters={setFilters} selectedProgramIds={selectedProgramIds} programScheme={programScheme} onSchemeChange={updateProgramScheme} onToggle={toggleProgram} onInspect={openProgramPackage} onRequestSourceUpdate={requestProgramSourceUpdate} onRun={() => runPrograms()} loading={loading} /> : null}
           {view === "timeline" ? <TimelinePage selectedMatches={selectedMatches} timeline={result?.timeline ?? []} loading={loading} onRun={runTimeline} onRefresh={() => refreshSources(false)} onTaskStatusChange={updateTimelineTaskStatus} /> : null}
@@ -587,7 +609,7 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
   );
 }
 
-function DashboardView(props: { result: AppState | null; selectedMatches: ProgramMatch[]; evidenceGraph: EvidenceGraphSummary | null; sourceRefresh: DataRefreshReport | null; loading: StageLoading; onBackground: () => void; onPrograms: () => void; onTimeline: () => void; onRefresh: () => void; }) {
+function DashboardView(props: { result: AppState | null; selectedMatches: ProgramMatch[]; evidenceGraph: EvidenceGraphSummary | null; sourceHealth: SourceHealthSummary | null; sourceHealthLoadState: SourceHealthLoadState; sourceRefresh: DataRefreshReport | null; loading: StageLoading; onBackground: () => void; onPrograms: () => void; onTimeline: () => void; onRefresh: () => void; }) {
   const assessmentReady = Boolean(props.result?.assessment);
   const planReady = Boolean(props.result?.focus_list?.length || props.result?.recommendations?.length);
   const timelineReady = Boolean(props.result?.timeline?.length);
@@ -602,6 +624,7 @@ function DashboardView(props: { result: AppState | null; selectedMatches: Progra
     <IslandCard className="hero-card" color="app-teal" pattern="app-yellow"><div><span className="mini-label"><Sparkles size={16} aria-hidden />{dashboardCopy.heroEyebrow}</span><h2>{dashboardCopy.heroTitle}</h2><p>{dashboardCopy.heroBody}</p></div><div className="hero-actions"><IslandButton type="primary" loading={props.loading === "background"} onClick={props.onBackground}>{dashboardCopy.runBackground}</IslandButton><IslandButton type="default" loading={props.loading === "programs"} onClick={props.onPrograms}>{dashboardCopy.runPrograms}</IslandButton><IslandButton type="dashed" loading={props.loading === "data"} onClick={props.onRefresh}>{dashboardCopy.refreshSources}</IslandButton></div></IslandCard>
     <section className="status-grid"><Metric label={dashboardCopy.metrics.profile.label} value={`${props.result?.profile?.profile_completeness ?? 0}%`} detail={dashboardCopy.metrics.profile.detail} /><Metric label={dashboardCopy.metrics.decision.label} value={`${props.result?.assessment?.decision_field_coverage ?? 0}%`} detail={dashboardCopy.metrics.decision.detail} /><Metric label={dashboardCopy.metrics.evidence.label} value={`${props.result?.assessment?.evidence_coverage ?? Math.round((props.result?.evidence?.verified_fact_ratio ?? 0) * 100)}%`} detail={dashboardCopy.metrics.evidence.detail} /><Metric label={dashboardCopy.metrics.source.label} value={`${props.evidenceGraph?.field_record_count ?? 0}`} detail={`${props.evidenceGraph?.verified_field_count ?? 0} ${dashboardCopy.metrics.source.verifiedSuffix}`} /></section>
     <IslandCard className="panel-card"><PanelTitle icon={<ClipboardList size={19} aria-hidden />} title={dashboardCopy.nextTitle} /><div className="next-step-list">{dashboardCopy.nextSteps.map((step) => <StepItem done={stepDone[step.key] ?? false} title={step.title} detail={step.detail} href={step.href} key={step.key} />)}</div></IslandCard>
+    <SourceHealthStrip health={props.sourceHealth} loadState={props.sourceHealthLoadState} />
     <section className="two-column"><IslandCard className="panel-card"><PanelTitle icon={<BookOpenCheck size={19} aria-hidden />} title={dashboardCopy.applicationList} /><ProgramMiniList matches={props.selectedMatches} /><div className="card-actions"><IslandButton type="primary" loading={props.loading === "timeline"} onClick={props.onTimeline}>{dashboardCopy.runTimeline}</IslandButton><Link className="text-link" href="/programs">{dashboardCopy.adjustPrograms}</Link></div></IslandCard><IslandCard className="panel-card" type="dashed"><PanelTitle icon={<ShieldCheck size={19} aria-hidden />} title={dashboardCopy.trustTitle} /><SourceRefreshSummary report={props.sourceRefresh} evidenceGraph={props.evidenceGraph} /></IslandCard></section>
   </div>;
 }
@@ -662,4 +685,27 @@ function buildQuestionnaireResponse(schema: QuestionnaireSchema | null, values: 
 
 function PanelTitle({ icon, title }: { icon: React.ReactNode; title: string }) { return <div className="panel-title">{icon}<IslandTitle size="small" color="app-yellow">{title}</IslandTitle></div>; }
 function StepItem({ done, title, detail, href }: { done: boolean; title: string; detail: string; href: string }) { return <Link className={`step-item ${done ? "done" : ""}`} href={href}><CheckCircle2 size={18} aria-hidden /><span><strong>{title}</strong><small>{detail}</small></span></Link>; }
+function SourceHealthStrip({ health, loadState }: { health: SourceHealthSummary | null; loadState: SourceHealthLoadState }) {
+  if (loadState === "loading") {
+    return <IslandCard className="panel-card source-health-strip" type="dashed"><PanelTitle icon={<ShieldCheck size={18} aria-hidden />} title="信息获取 Agent" /><p className="form-note">正在读取官网来源运行记录…</p></IslandCard>;
+  }
+  if (loadState === "error" || !health) {
+    return <IslandCard className="panel-card source-health-strip" type="dashed"><PanelTitle icon={<ShieldCheck size={18} aria-hidden />} title="信息获取 Agent" /><p className="form-note">来源健康度暂不可用；不影响已保存的学生资料。</p></IslandCard>;
+  }
+
+  const allNeverRun = health.total_sources > 0 && health.never_run_sources === health.total_sources;
+  const status = allNeverRun
+    ? "尚未执行真实官网抓取"
+    : health.failing_sources > 0
+      ? "最近一次抓取存在失败"
+      : health.stale_sources > 0
+        ? "有来源需要重新核验"
+        : health.due_sources > 0
+          ? "有来源接近刷新周期"
+          : health.healthy_sources === health.total_sources && health.total_sources > 0
+            ? "全部已登记来源状态正常"
+            : "仍有来源等待首次抓取";
+  return <IslandCard className="panel-card source-health-strip" type="dashed"><PanelTitle icon={<ShieldCheck size={18} aria-hidden />} title="信息获取 Agent" /><div className="status-grid three"><Metric label="健康来源" value={String(health.healthy_sources) + "/" + String(health.total_sources)} detail={status} /><Metric label="待处理来源" value={String(health.due_sources + health.stale_sources + health.never_run_sources)} detail={String(health.never_run_sources) + " 个未首次抓取 · " + String(health.failing_sources) + " 个最近失败"} /><Metric label="全库待审字段" value={String(health.pending_review_count)} detail="由运营审核，审核前不进入正式时间线" /></div><p className="form-note">索引页只负责发现项目链接；截止日期、学费、语言和材料必须绑定项目详情页快照。</p></IslandCard>;
+}
+
 function Metric({ label, value, detail }: { label: string; value: string; detail: string }) { return <article className="metric-card"><p>{label}</p><strong>{value}</strong><span>{detail}</span></article>; }

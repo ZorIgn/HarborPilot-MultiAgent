@@ -61,6 +61,21 @@ class SourceTrustLevel(str, Enum):
     writing_reference = "writing_reference"
 
 
+class SourceScope(str, Enum):
+    """Where a source sits in the information supply chain.
+
+    An official institution index is trustworthy for discovering a programme
+    URL, but it must not be treated as evidence for that programme's deadline
+    or tuition.
+    """
+
+    programme_detail = "programme_detail"
+    institution_index = "institution_index"
+    application_portal = "application_portal"
+    community_reference = "community_reference"
+    methodology = "methodology"
+
+
 class WorkflowStage(str, Enum):
     profile = "PROFILE"
     matching = "MATCHING"
@@ -282,6 +297,13 @@ class FieldEvidenceRecord(BaseModel):
     evidence_snippet: str | None = None
     snapshot_url: HttpUrl | str | None = None
     agent_chain: list[str] = Field(default_factory=list)
+    source_scope: SourceScope | None = None
+    page_title: str | None = None
+    final_url: HttpUrl | str | None = None
+    binding_status: Literal["not_checked", "matched", "weak_match", "unrelated", "index_only"] = "not_checked"
+    binding_score: int = Field(default=0, ge=0, le=100)
+    reviewer_note: str | None = None
+    review_decision_id: str | None = None
 
 
 class FieldExtractionCandidate(BaseModel):
@@ -305,6 +327,13 @@ class SourceExtractionResult(BaseModel):
     unresolved_fields: list[str] = Field(default_factory=list)
     raw_json: dict[str, Any] = Field(default_factory=dict)
     agent_chain: list[str] = Field(default_factory=list)
+    fetch_status: str = "UNKNOWN"
+    final_url: HttpUrl | str | None = None
+    page_title: str | None = None
+    binding_status: Literal["not_checked", "matched", "weak_match", "unrelated", "index_only"] = "not_checked"
+    binding_score: int = Field(default=0, ge=0, le=100)
+    attempts: int = Field(default=0, ge=0)
+    duration_ms: int = Field(default=0, ge=0)
 
 
 class EvidenceGraphSummary(BaseModel):
@@ -350,6 +379,8 @@ class AcquisitionSourcePlan(BaseModel):
     robots_policy: str = "check_robots_and_terms_before_live_fetch"
     requires_human_review: bool = True
     next_actions: list[str] = Field(default_factory=list)
+    source_scope: SourceScope = SourceScope.programme_detail
+    target_program_id: str | None = None
 
 
 class ProgramContentSection(BaseModel):
@@ -400,6 +431,7 @@ class ProgramDataPackage(BaseModel):
     program_id: str
     institution: str
     program_name: str
+    program_name_en: str | None = None
     cycle: str
     official_url: HttpUrl | str | None = None
     application_url: HttpUrl | str | None = None
@@ -438,6 +470,46 @@ class DataAcquisitionReport(BaseModel):
     agent_chain: list[str] = Field(default_factory=list)
     quality_metrics: list[DataQualityMetric] = Field(default_factory=list)
     crawler_capabilities: list[str] = Field(default_factory=list)
+    run_status: Literal["COMPLETED", "NEEDS_REVIEW", "FAILED"] = "NEEDS_REVIEW"
+    planned_source_count: int = 0
+    attempted_source_count: int = 0
+    successful_source_count: int = 0
+    failed_source_count: int = 0
+    binding_warning_count: int = 0
+    run_warnings: list[str] = Field(default_factory=list)
+
+
+class SourceHealthItem(BaseModel):
+    source_id: str
+    name: str
+    url: HttpUrl | str
+    source_scope: SourceScope = SourceScope.programme_detail
+    last_status: str = "NEVER_RUN"
+    last_checked_at: datetime | None = None
+    last_success_at: datetime | None = None
+    last_failure_at: datetime | None = None
+    last_http_status: int | None = None
+    last_page_hash: str | None = None
+    attempt_count: int = 0
+    success_count: int = 0
+    failure_count: int = 0
+    failure_rate: float = Field(default=0, ge=0, le=1)
+    average_duration_ms: int = Field(default=0, ge=0)
+    review_pending_count: int = 0
+    freshness_state: Literal["fresh", "due", "stale", "unknown"] = "unknown"
+    next_action: str = "等待首次运行"
+
+
+class SourceHealthSummary(BaseModel):
+    generated_at: datetime
+    total_sources: int
+    healthy_sources: int
+    due_sources: int
+    stale_sources: int
+    never_run_sources: int
+    failing_sources: int = 0
+    pending_review_count: int
+    items: list[SourceHealthItem] = Field(default_factory=list)
 
 
 class CrawlQueueRequest(BaseModel):
@@ -490,6 +562,11 @@ class ReviewQueueItem(BaseModel):
     evidence_snippet: str | None = None
     page_hash: str | None = None
     snapshot_url: HttpUrl | str | None = None
+    source_scope: SourceScope | None = None
+    page_title: str | None = None
+    final_url: HttpUrl | str | None = None
+    binding_status: Literal["not_checked", "matched", "weak_match", "unrelated", "index_only"] = "not_checked"
+    binding_score: int = Field(default=0, ge=0, le=100)
     extracted_at: datetime | None = None
     confidence: Literal["low", "medium", "high"] = "low"
     source_priority: int = 99

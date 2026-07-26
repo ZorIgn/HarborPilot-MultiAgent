@@ -526,7 +526,9 @@ def test_student_model_settings_use_student_api_without_admin_token() -> None:
     assert "harborpilot_admin_token" in api_source
     assert "x-harbor-admin-token" in api_source
     assert "withAdminAuth(path" in api_source
-    assert "path.startsWith(\"/api/admin/\")" in api_source
+    assert "ADMIN_AUTH_PATH_PREFIXES" in api_source
+    assert '"/api/workflows/data-acquisition"' in api_source
+    assert '"/api/workflows/data-refresh"' in api_source
     assert "configureStudentLLM" in api_source
     assert "\"/api/llm-config\"" in api_source
     assert "configureStudentLLM(request)" in app_source

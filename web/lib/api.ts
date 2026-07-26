@@ -24,6 +24,7 @@ import type {
   ReviewQueueSummary,
   ScenarioAuditReport,
   SourceRegistry,
+  SourceHealthSummary,
   WorkflowResult,
   WritingDraft,
   WritingInterviewQuestion,
@@ -47,8 +48,19 @@ export function setStoredAdminToken(token: string): void {
   else window.localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
 }
 
+const ADMIN_AUTH_PATH_PREFIXES = [
+  "/api/admin/",
+  "/api/workflows/data-acquisition",
+  "/api/workflows/data-refresh",
+  "/api/workflows/source-refresh",
+] as const;
+
+function requiresAdminAuth(path: string): boolean {
+  return ADMIN_AUTH_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
+}
+
 function withAdminAuth(path: string, init?: RequestInit): RequestInit | undefined {
-  if (!path.startsWith("/api/admin/")) return init;
+  if (!requiresAdminAuth(path)) return init;
   const token = getStoredAdminToken();
   if (!token) return init;
   const headers = new Headers(init?.headers);
@@ -199,6 +211,10 @@ export function runCrawlQueue(payload: { selected_program_ids?: string[]; includ
 
 export function getSourceRegistry(): Promise<SourceRegistry> {
   return apiJson<SourceRegistry>("/api/source-registry", { cache: "no-store" }, "Source registry API");
+}
+
+export function getSourceHealth(): Promise<SourceHealthSummary> {
+  return apiJson<SourceHealthSummary>("/api/source-health", { cache: "no-store" }, "Source health API");
 }
 
 export function getEvidenceGraphSummary(): Promise<EvidenceGraphSummary> {

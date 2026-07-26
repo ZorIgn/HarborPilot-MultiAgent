@@ -13,7 +13,7 @@ from harbor_agent.agents.timeline import TimelineAgent
 from harbor_agent.agents.writing import STYLE_GUIDE, WritingAgent
 from harbor_agent.agents.data_refresh import _extract_field_candidates
 from harbor_agent.core.llm import MockLLMProvider
-from harbor_agent.models import ApplicantProfileInput, FieldEvidenceRecord, FieldVerificationStatus, ProgramMatch, StoryCard
+from harbor_agent.models import ApplicantProfileInput, FieldEvidenceRecord, FieldVerificationStatus, ProgramMatch, SourceScope, StoryCard
 from harbor_agent.services import evidence_graph
 from harbor_agent.services.evidence_graph import build_field_evidence_records
 from harbor_agent.services.data_loader import load_programs
@@ -353,7 +353,12 @@ def test_persisted_review_publish_is_visible_to_student_catalog(monkeypatch) -> 
         review_required=True,
         evidence_snippet="Application deadline: 2027-03-20.",
         snapshot_url="data/source_snapshots/current/hku-cs.html",
-        agent_chain=["DataAcquisitionAgent", "FieldExtractionAgent"],
+        source_scope=SourceScope.programme_detail,
+        page_title="Master of Science in Computer Science",
+        final_url="https://www.hku.hk/current/cs",
+        binding_status="matched",
+        binding_score=92,
+        agent_chain=["DataAcquisitionAgent", "ProgrammeBindingGateAgent", "FieldExtractionAgent"],
     )
     published_records: list[FieldEvidenceRecord] = []
 

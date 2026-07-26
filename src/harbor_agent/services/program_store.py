@@ -28,7 +28,7 @@ def _clear_data_loader_caches_after_write() -> None:
 
 def init_program_store(db_path: Path = DB_PATH) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db_path) as conn:
+    with _connect(db_path) as conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS program_catalog (
@@ -82,17 +82,43 @@ def init_program_store(db_path: Path = DB_PATH) -> None:
                 evidence_snippet TEXT,
                 snapshot_url TEXT,
                 agent_chain_json TEXT NOT NULL,
+                source_scope TEXT,
+                page_title TEXT,
+                final_url TEXT,
+                binding_status TEXT NOT NULL DEFAULT 'not_checked',
+                binding_score INTEGER NOT NULL DEFAULT 0,
+                reviewer_note TEXT,
+                review_decision_id TEXT,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(program_id) REFERENCES program_catalog(id)
             )
             """
         )
+        _ensure_column(conn, "program_field_evidence", "source_scope", "TEXT")
+        _ensure_column(conn, "program_field_evidence", "page_title", "TEXT")
+        _ensure_column(conn, "program_field_evidence", "final_url", "TEXT")
+        _ensure_column(conn, "program_field_evidence", "binding_status", "TEXT NOT NULL DEFAULT 'not_checked'")
+        _ensure_column(conn, "program_field_evidence", "binding_score", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "program_field_evidence", "reviewer_note", "TEXT")
+        _ensure_column(conn, "program_field_evidence", "review_decision_id", "TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_program_field_evidence_program ON program_field_evidence(program_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_program_field_evidence_field ON program_field_evidence(field_name)")
         conn.execute('CREATE INDEX IF NOT EXISTS idx_program_field_evidence_status ON program_field_evidence(status)')
         conn.execute("CREATE INDEX IF NOT EXISTS idx_program_catalog_region ON program_catalog(region)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_program_catalog_institution ON program_catalog(institution)")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS program_store_metadata (
+                key TEXT PRIMARY KEY,
+                value INTEGER NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO program_store_metadata (key, value) VALUES ('catalog_revision', 0)"
+        )
         conn.commit()
 
 
@@ -104,7 +130,7 @@ def load_programs_from_store(
     init_program_store(db_path)
     if _program_count(db_path) == 0 and seed_json_path.exists():
         seed_program_store(_load_program_json(seed_json_path), db_path=db_path, replace=True)
-    with sqlite3.connect(db_path) as conn:
+    with _connect(db_path) as conn:
         rows = conn.execute(
             "SELECT payload_json FROM program_catalog ORDER BY region, institution, school, program_name"
         ).fetchall()
@@ -130,10 +156,17 @@ def seed_program_store(programs: Iterable[Program], *, db_path: Path = DB_PATH, 
             :source_evidence_json, :data_status, :last_verified_at, :payload_json
         )
     """
-    with sqlite3.connect(db_path) as conn:
+    with _connect(db_path) as conn:
         if replace:
             conn.execute("DELETE FROM program_catalog")
         conn.executemany(sql, rows)
+        conn.execute(
+            """
+            UPDATE program_store_metadata
+            SET value = value + 1, updated_at = CURRENT_TIMESTAMP
+            WHERE key = 'catalog_revision'
+            """
+        )
         conn.commit()
     _clear_data_loader_caches_after_write()
     return len(rows)
@@ -154,12 +187,16 @@ def upsert_field_evidence_records(
         INSERT INTO program_field_evidence (
             id, program_id, field_name, value, cycle, source_url, source_type, extracted_at,
             verified_at, page_hash, confidence, source_priority, status, review_required,
-            reviewer_id, evidence_snippet, snapshot_url, agent_chain_json
+            reviewer_id, evidence_snippet, snapshot_url, agent_chain_json,
+            source_scope, page_title, final_url, binding_status, binding_score,
+            reviewer_note, review_decision_id
         )
         VALUES (
             :id, :program_id, :field_name, :value, :cycle, :source_url, :source_type, :extracted_at,
             :verified_at, :page_hash, :confidence, :source_priority, :status, :review_required,
-            :reviewer_id, :evidence_snippet, :snapshot_url, :agent_chain_json
+            :reviewer_id, :evidence_snippet, :snapshot_url, :agent_chain_json,
+            :source_scope, :page_title, :final_url, :binding_status, :binding_score,
+            :reviewer_note, :review_decision_id
         )
         ON CONFLICT(id) DO UPDATE SET
             value=excluded.value,
@@ -177,9 +214,16 @@ def upsert_field_evidence_records(
             evidence_snippet=excluded.evidence_snippet,
             snapshot_url=excluded.snapshot_url,
             agent_chain_json=excluded.agent_chain_json,
+            source_scope=excluded.source_scope,
+            page_title=excluded.page_title,
+            final_url=excluded.final_url,
+            binding_status=excluded.binding_status,
+            binding_score=excluded.binding_score,
+            reviewer_note=excluded.reviewer_note,
+            review_decision_id=excluded.review_decision_id,
             updated_at=CURRENT_TIMESTAMP
     """
-    with sqlite3.connect(db_path) as conn:
+    with _connect(db_path) as conn:
         conn.executemany(sql, rows)
         conn.commit()
     _clear_data_loader_caches_after_write()
@@ -199,12 +243,14 @@ def load_field_evidence_records(
         placeholders = ",".join("?" for _ in ids)
         where = f"WHERE program_id IN ({placeholders})"
         params.extend(ids)
-    with sqlite3.connect(db_path) as conn:
+    with _connect(db_path) as conn:
         rows = conn.execute(
             f"""
             SELECT program_id, field_name, value, cycle, source_url, source_type, extracted_at,
                    verified_at, page_hash, confidence, source_priority, status, review_required,
-                   reviewer_id, evidence_snippet, snapshot_url, agent_chain_json
+                   reviewer_id, evidence_snippet, snapshot_url, agent_chain_json,
+                   source_scope, page_title, final_url, binding_status, binding_score,
+                   reviewer_note, review_decision_id
             FROM program_field_evidence
             {where}
             ORDER BY program_id, source_priority, field_name, updated_at DESC
@@ -213,7 +259,7 @@ def load_field_evidence_records(
         ).fetchall()
     return [_field_evidence_record_from_row(row) for row in rows]
 def _program_count(db_path: Path) -> int:
-    with sqlite3.connect(db_path) as conn:
+    with _connect(db_path) as conn:
         row = conn.execute("SELECT COUNT(*) FROM program_catalog").fetchone()
     return int(row[0] if row else 0)
 
@@ -367,6 +413,13 @@ def _field_evidence_row(record: FieldEvidenceRecord) -> dict[str, object]:
         "evidence_snippet": record.evidence_snippet,
         "snapshot_url": str(record.snapshot_url) if record.snapshot_url else None,
         "agent_chain_json": json.dumps(record.agent_chain, ensure_ascii=False),
+        "source_scope": record.source_scope.value if record.source_scope else None,
+        "page_title": record.page_title,
+        "final_url": str(record.final_url) if record.final_url else None,
+        "binding_status": record.binding_status,
+        "binding_score": record.binding_score,
+        "reviewer_note": record.reviewer_note,
+        "review_decision_id": record.review_decision_id,
     }
 
 
@@ -403,4 +456,34 @@ def _field_evidence_record_from_row(row: tuple) -> FieldEvidenceRecord:
         evidence_snippet=row[14],
         snapshot_url=row[15],
         agent_chain=json.loads(row[16]) if row[16] else [],
+        source_scope=row[17] if row[17] else None,
+        page_title=row[18],
+        final_url=row[19],
+        binding_status=row[20] or "not_checked",
+        binding_score=int(row[21] or 0),
+        reviewer_note=row[22],
+        review_decision_id=row[23],
     )
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+    columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+
+def program_catalog_revision(db_path: Path = DB_PATH) -> int:
+    """Return a monotonic catalog revision for reliable cross-process cache invalidation."""
+    init_program_store(db_path)
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT value FROM program_store_metadata WHERE key = 'catalog_revision'"
+        ).fetchone()
+    return int(row[0]) if row else 0
+
+
+def _connect(db_path: Path) -> sqlite3.Connection:
+    conn = sqlite3.connect(db_path, timeout=10)
+    conn.execute("PRAGMA busy_timeout=10000")
+    conn.execute("PRAGMA journal_mode=WAL")
+    return conn

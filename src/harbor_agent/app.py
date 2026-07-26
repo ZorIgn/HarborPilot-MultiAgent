@@ -30,6 +30,7 @@ from harbor_agent.models import (
     ReviewPublishRequest,
     ReviewPublishResponse,
     ReviewQueueSummary,
+    SourceHealthSummary,
     BackgroundStageResult,
     DataRefreshReport,
     DataRefreshRequest,
@@ -79,6 +80,7 @@ from harbor_agent.services.data_loader import (
     load_taxonomy,
     load_cv_profile_schema,
 )
+from harbor_agent.services.information_store import source_health_summary
 
 settings = get_settings()
 llm_provider = build_llm_provider(settings)
@@ -450,6 +452,13 @@ def source_registry() -> dict:
     return load_source_registry().model_dump(mode="json")
 
 
+@app.get("/api/source-health", response_model=SourceHealthSummary)
+def source_health() -> SourceHealthSummary:
+    """Read-only operational health for the official information pipeline."""
+
+    return source_health_summary(load_source_registry().sources)
+
+
 @app.get("/api/admin/matching-strategy")
 def admin_matching_strategy() -> dict:
     return {"strategy": load_matching_strategy(), "source": strategy_source()}
@@ -730,7 +739,11 @@ def program_data_package(program_id: str) -> ProgramDataPackage:
 
 
 @app.post("/api/workflows/data-acquisition", response_model=DataAcquisitionReport)
-def run_data_acquisition_stage(payload: DataAcquisitionRequest) -> DataAcquisitionReport:
+def run_data_acquisition_stage(payload: DataAcquisitionRequest, request: Request) -> DataAcquisitionReport:
+    if not payload.dry_run and not _admin_request_allowed(request):
+        raise HTTPException(status_code=403, detail="联网采集和证据写入只能由受控 operator/worker 触发。")
+    if not payload.dry_run:
+        _validate_acquisition_scope(payload, request)
     orchestrator = WorkflowOrchestrator(llm_provider)
     return orchestrator.run_data_acquisition_stage(payload)
 
@@ -864,15 +877,30 @@ def run_application_plan_stage(payload: SelectedProgramsRequest) -> ApplicationP
 
 
 @app.post("/api/workflows/data-refresh", response_model=DataRefreshReport)
-def run_data_refresh_stage(payload: DataRefreshRequest) -> DataRefreshReport:
+def run_data_refresh_stage(payload: DataRefreshRequest, request: Request) -> DataRefreshReport:
+    if not payload.dry_run and not _admin_request_allowed(request):
+        raise HTTPException(status_code=403, detail="联网刷新只能由受控 operator/worker 触发。")
     orchestrator = WorkflowOrchestrator(llm_provider)
     return orchestrator.run_data_refresh_stage(payload)
 
 
 @app.post("/api/workflows/source-refresh", response_model=DataRefreshReport)
-def run_source_refresh_stage(payload: DataRefreshRequest) -> DataRefreshReport:
+def run_source_refresh_stage(payload: DataRefreshRequest, request: Request) -> DataRefreshReport:
+    if not payload.dry_run and not _admin_request_allowed(request):
+        raise HTTPException(status_code=403, detail="联网刷新只能由受控 operator/worker 触发。")
     orchestrator = WorkflowOrchestrator(llm_provider)
     return orchestrator.run_data_refresh_stage(payload)
+
+
+def _validate_acquisition_scope(payload: DataAcquisitionRequest, request: Request) -> None:
+    if not payload.selected_program_ids:
+        raise HTTPException(status_code=422, detail="联网采集必须明确指定项目，不能默认抓取全量项目。")
+    known_ids = {program.id for program in load_programs()}
+    unknown = sorted(set(payload.selected_program_ids) - known_ids)
+    if unknown:
+        raise HTTPException(status_code=422, detail={"message": "存在未知项目 ID。", "unknown_program_ids": unknown[:10]})
+    if not _admin_request_allowed(request) and len(payload.selected_program_ids) > 3:
+        raise HTTPException(status_code=422, detail="学生端一次最多申请 3 个项目的来源更新。")
 
 
 @app.post("/api/workflows/writing-plan", response_model=WritingPlanResult)

@@ -8,6 +8,7 @@ from harbor_agent.models import (
     DataAcquisitionReport,
     DataQualityMetric,
     DataAcquisitionRequest,
+    FieldExtractionCandidate,
     FieldEvidenceRecord,
     FieldVerificationStatus,
     Program,
@@ -17,17 +18,25 @@ from harbor_agent.models import (
     ProgramExperienceSignal,
     SourceExtractionResult,
     SourcePolicy,
+    SourceScope,
     SourceTrustLevel,
 )
 from harbor_agent.services.data_loader import load_acquisition_sources, load_programs, load_source_registry
 from harbor_agent.services.evidence_graph import build_program_trust_detail
 from harbor_agent.services.program_store import upsert_field_evidence_records
 from harbor_agent.services.program_urls import student_application_url, student_program_url
+from harbor_agent.services.source_identity import same_official_institution
 from harbor_agent.services.source_snapshot import (
     discovered_links,
     evidence_records_from_candidates,
     extract_field_candidates,
     snapshot_source,
+)
+from harbor_agent.services.information_store import (
+    finish_information_run,
+    record_fetch_attempt,
+    start_information_run,
+    update_information_run_plan,
 )
 from harbor_agent.agents.data_refresh import _source_ids_for_programs
 
@@ -52,6 +61,7 @@ class ProgramDataAcquisitionAgent:
 
     def run(self, request: DataAcquisitionRequest) -> DataAcquisitionReport:
         checked_at = datetime.now(UTC)
+        run_id = f"acq_{uuid4().hex[:12]}"
         programs = _select_programs(load_programs(), request.selected_program_ids)
         registry_sources = load_source_registry().sources
         config = load_acquisition_sources()
@@ -66,14 +76,45 @@ class ProgramDataAcquisitionAgent:
         )
         quality_metrics = [package.quality_metric for package in packages if package.quality_metric]
         crawler_capabilities = _crawler_capabilities(source_plan)
+        if not request.dry_run:
+            start_information_run(
+                run_id,
+                mode="live_fetch",
+                selected_program_ids=[program.id for program in programs],
+                planned_source_count=len(source_plan),
+            )
         live_records: list[FieldEvidenceRecord] = []
         extraction_results: list[SourceExtractionResult] = []
-        if not request.dry_run:
-            live_records, extraction_results = _run_live_snapshot_pipeline(packages, checked_at)
-            _attach_live_records(packages, live_records)
-        persisted_count = 0
-        if not request.dry_run:
-            persisted_count = upsert_field_evidence_records([*_records_for_persistence(packages), *live_records])
+        pipeline_stats = {"attempted": 0, "successful": 0, "failed": 0, "binding_warnings": 0}
+        run_warnings: list[str] = []
+        try:
+            if not request.dry_run:
+                live_records, extraction_results, pipeline_stats, run_warnings = _run_live_snapshot_pipeline_with_run(
+                    packages, checked_at, run_id
+                )
+                _attach_live_records(packages, live_records)
+                source_plan = _dedupe_plans(
+                    plan
+                    for package in packages
+                    for plan in package.acquisition_plan
+                )
+                update_information_run_plan(run_id, len(source_plan))
+            persisted_count = 0
+            if not request.dry_run:
+                persisted_count = upsert_field_evidence_records(_records_for_persistence(packages))
+        except Exception as exc:
+            run_warnings.append(f"{type(exc).__name__}: {exc}")
+            if not request.dry_run:
+                finish_information_run(
+                    run_id,
+                    status="FAILED",
+                    attempted_source_count=pipeline_stats["attempted"],
+                    successful_source_count=pipeline_stats["successful"],
+                    failed_source_count=pipeline_stats["failed"] + 1,
+                    binding_warning_count=pipeline_stats["binding_warnings"],
+                    warnings=run_warnings,
+                )
+            raise
         missing_official = sum(len(package.official_requirements) for package in packages)
         community_count = sum(len(package.community_experiences) for package in packages)
         summary_prefix = (
@@ -81,11 +122,26 @@ class ProgramDataAcquisitionAgent:
             if not request.dry_run
             else ""
         )
+        run_status = (
+            "NEEDS_REVIEW"
+            if run_warnings or any(package.human_review_required for package in packages)
+            else "COMPLETED"
+        )
+        if not request.dry_run:
+            finish_information_run(
+                run_id,
+                status=run_status,
+                attempted_source_count=pipeline_stats["attempted"],
+                successful_source_count=pipeline_stats["successful"],
+                failed_source_count=pipeline_stats["failed"],
+                binding_warning_count=pipeline_stats["binding_warnings"],
+                warnings=run_warnings,
+            )
         return DataAcquisitionReport(
-            run_id=f"acq_{uuid4().hex[:12]}",
+            run_id=run_id,
             mode="dry_run" if request.dry_run else "live_fetch",
             checked_at=checked_at,
-            selected_program_ids=request.selected_program_ids,
+            selected_program_ids=[program.id for program in programs],
             packages=packages,
             source_plan=source_plan,
             field_evidence_records=live_records[:120],
@@ -111,6 +167,13 @@ class ProgramDataAcquisitionAgent:
             ],
             quality_metrics=quality_metrics,
             crawler_capabilities=crawler_capabilities,
+            run_status=run_status,
+            planned_source_count=len(source_plan),
+            attempted_source_count=pipeline_stats["attempted"],
+            successful_source_count=pipeline_stats["successful"],
+            failed_source_count=pipeline_stats["failed"],
+            binding_warning_count=pipeline_stats["binding_warnings"],
+            run_warnings=run_warnings,
         )
 
 
@@ -119,70 +182,483 @@ def _run_live_snapshot_pipeline(
     packages: list[ProgramDataPackage],
     checked_at: datetime,
 ) -> tuple[list[FieldEvidenceRecord], list[SourceExtractionResult]]:
+    records, results, _, _ = _run_live_snapshot_pipeline_with_run(packages, checked_at, "legacy_acquisition_run")
+    return records, results
+
+
+def _run_live_snapshot_pipeline_with_run(
+    packages: list[ProgramDataPackage],
+    checked_at: datetime,
+    run_id: str,
+) -> tuple[list[FieldEvidenceRecord], list[SourceExtractionResult], dict[str, int], list[str]]:
     records: list[FieldEvidenceRecord] = []
     results: list[SourceExtractionResult] = []
+    stats = {"attempted": 0, "successful": 0, "failed": 0, "binding_warnings": 0}
+    warnings: list[str] = []
+    package_by_id = {package.program_id: package for package in packages}
+    plans = _unique_live_plans(packages)
+    queued_detail_urls = {
+        (plan.target_program_id or package.program_id, str(plan.url))
+        for package, plan in plans
+        if package is not None and plan.source_scope == SourceScope.programme_detail
+    }
+    snapshot_cache: dict[tuple[str, str], object] = {}
+    for package, plan in plans:
+        target_id = plan.target_program_id or (package.program_id if package else None)
+        target_package = package_by_id.get(target_id) if target_id else None
+        cache_key = (plan.source_id, str(plan.url))
+        snapshot = snapshot_cache.get(cache_key)
+        cache_hit = snapshot is not None
+        if snapshot is None:
+            stats["attempted"] += 1
+            snapshot = snapshot_source(str(plan.url), dry_run=False, checked_at=checked_at)
+            snapshot_cache[cache_key] = snapshot
+        if not snapshot.ok:
+            if not cache_hit:
+                stats["failed"] += 1
+                warnings.append(
+                    f"{plan.source_id}: {snapshot.status}"
+                    + (f" ({snapshot.error})" if snapshot.error else "")
+                )
+            record_fetch_attempt(
+                run_id,
+                program_id=target_id,
+                source_id=plan.source_id,
+                source_scope=plan.source_scope,
+                requested_url=str(plan.url),
+                snapshot=snapshot,
+            )
+            results.append(_extraction_result_for_failure(plan, snapshot, checked_at))
+            continue
+        if not cache_hit:
+            stats["successful"] += 1
+        html = snapshot.html or snapshot.text
+        links = discovered_links(html, str(plan.url), limit=30)
+        if plan.source_scope == SourceScope.institution_index:
+            candidate_url = _best_program_link(target_package, links) if target_package else None
+            binding_status = "index_only"
+            binding_score = 55 if candidate_url else 0
+            if target_package and candidate_url:
+                records.append(_index_link_record(target_package, candidate_url, str(plan.url), snapshot, checked_at))
+                detail_key = (target_package.program_id, candidate_url)
+                if detail_key not in queued_detail_urls:
+                    discovered_plan = _discovered_detail_plan(target_package, candidate_url, plan.source_id)
+                    queued_detail_urls.add(detail_key)
+                    target_package.acquisition_plan.append(discovered_plan)
+                    plans.append((target_package, discovered_plan))
+            elif target_package:
+                stats["binding_warnings"] += 1
+                warnings.append(f"{target_package.program_id}: institution index did not yield a matching programme detail link")
+            record_fetch_attempt(
+                run_id,
+                program_id=target_id,
+                source_id=plan.source_id,
+                source_scope=plan.source_scope,
+                requested_url=str(plan.url),
+                snapshot=snapshot,
+                binding_status=binding_status,
+                binding_score=binding_score,
+                extracted_field_count=1 if candidate_url else 0,
+            )
+            results.append(_extraction_result_for_index(plan, snapshot, checked_at, links, binding_score))
+            continue
+        if target_package is None:
+            continue
+        binding_status, binding_score = _bind_program_page(target_package, snapshot)
+        if binding_status == "unrelated":
+            stats["binding_warnings"] += 1
+            warnings.append(f"{target_package.program_id}: fetched page does not identify the requested programme")
+            record_fetch_attempt(
+                run_id,
+                program_id=target_package.program_id,
+                source_id=plan.source_id,
+                source_scope=plan.source_scope,
+                requested_url=str(plan.url),
+                snapshot=snapshot,
+                binding_status=binding_status,
+                binding_score=binding_score,
+            )
+            results.append(_extraction_result_for_unrelated(plan, snapshot, checked_at, binding_score))
+            continue
+        candidates = extract_field_candidates(snapshot.text)
+        application_url = _best_application_link(target_package, links)
+        if application_url:
+            candidates = [
+                candidate for candidate in candidates
+                if candidate.field_name != "application_url"
+            ]
+            candidates.append(
+                FieldExtractionCandidate(
+                    field_name="application_url",
+                    value=application_url,
+                    evidence_snippet=f"项目详情页链接到官方申请入口：{application_url}",
+                    confidence="medium",
+                )
+            )
+        detail_url_record = (
+            _detail_url_record(target_package, snapshot, checked_at, binding_score)
+            if binding_status == "matched"
+            else None
+        )
+        if detail_url_record is not None:
+            records.append(detail_url_record)
+        records.extend(
+            evidence_records_from_candidates(
+                program_id=target_package.program_id,
+                cycle=target_package.cycle,
+                source_url=str(snapshot.final_url or plan.url),
+                source_type="official_program_page",
+                snapshot=snapshot,
+                candidates=candidates,
+                trust_level=plan.trust_level,
+                source_scope=plan.source_scope,
+                page_title=snapshot.page_title,
+                final_url=snapshot.final_url,
+                binding_status=binding_status,
+                binding_score=binding_score,
+            )
+        )
+        record_fetch_attempt(
+            run_id,
+            program_id=target_package.program_id,
+            source_id=plan.source_id,
+            source_scope=plan.source_scope,
+            requested_url=str(plan.url),
+            snapshot=snapshot,
+            binding_status=binding_status,
+            binding_score=binding_score,
+            extracted_field_count=sum(candidate.value is not None for candidate in candidates)
+            + (1 if detail_url_record else 0),
+        )
+        results.append(_extraction_result_for_detail(plan, snapshot, checked_at, links, candidates, binding_status, binding_score))
+    return records, results, stats, warnings
+
+
+def _discovered_detail_plan(
+    package: ProgramDataPackage,
+    candidate_url: str,
+    parent_source_id: str,
+) -> AcquisitionSourcePlan:
+    return AcquisitionSourcePlan(
+        source_id=f"program:{package.program_id}:discovered-detail",
+        name=f"{package.institution} discovered programme detail page",
+        url=candidate_url,
+        channel="official_requirement",
+        trust_level=SourceTrustLevel.official,
+        allowed_fields=OFFICIAL_REQUIREMENT_FIELD_ORDER,
+        crawler_method="index discovery followed by direct programme-page snapshot",
+        rate_limit="queued_low_rate_fetch_with_snapshot_cache",
+        requires_human_review=True,
+        source_scope=SourceScope.programme_detail,
+        target_program_id=package.program_id,
+        next_actions=[
+            f"由 {parent_source_id} 发现详情链接；校验院校域名、页面标题和项目名称。",
+            "字段只进入人工审核队列，不自动覆盖项目目录。",
+        ],
+    )
+
+
+def _detail_url_record(
+    package: ProgramDataPackage,
+    snapshot,
+    checked_at: datetime,
+    binding_score: int,
+) -> FieldEvidenceRecord | None:
+    final_url = str(snapshot.final_url or snapshot.url or "")
+    if not final_url:
+        return None
+    return FieldEvidenceRecord(
+        program_id=package.program_id,
+        field_name="official_program_url",
+        value=final_url,
+        cycle=package.cycle,
+        source_url=final_url,
+        source_type="official_program_page",
+        extracted_at=checked_at,
+        page_hash=snapshot.page_hash,
+        confidence="high" if binding_score >= 80 else "medium",
+        source_priority=1,
+        status=FieldVerificationStatus.official_previous_cycle,
+        review_required=True,
+        evidence_snippet=f"项目详情页身份匹配：{snapshot.page_title or final_url}",
+        snapshot_url=snapshot.snapshot_path,
+        source_scope=SourceScope.programme_detail,
+        page_title=snapshot.page_title,
+        final_url=final_url,
+        binding_status="matched",
+        binding_score=binding_score,
+        agent_chain=[
+            "SourceDiscoveryAgent",
+            "SnapshotCrawlerAgent",
+            "ProgrammeBindingGateAgent",
+            "HumanReviewGateAgent",
+        ],
+    )
+
+
+def _unique_live_plans(packages: list[ProgramDataPackage]) -> list[tuple[ProgramDataPackage | None, AcquisitionSourcePlan]]:
+    output: list[tuple[ProgramDataPackage | None, AcquisitionSourcePlan]] = []
+    seen: set[tuple[str, str, str]] = set()
     for package in packages:
         for plan in package.acquisition_plan:
             if plan.channel not in {"official_requirement", "official_content"}:
                 continue
-            snapshot = snapshot_source(str(plan.url), dry_run=False, checked_at=checked_at)
-            if not snapshot.ok:
-                results.append(
-                    SourceExtractionResult(
-                        source_id=plan.source_id,
-                        source_url=plan.url,
-                        source_type=plan.channel,
-                        page_hash=snapshot.page_hash,
-                        snapshot_path=snapshot.snapshot_path,
-                        extracted_at=checked_at,
-                        parser="not_run",
-                        extracted_fields=[],
-                        unresolved_fields=OFFICIAL_REQUIREMENT_FIELD_ORDER,
-                        raw_json={
-                            "status": snapshot.status,
-                            "error": snapshot.error,
-                            "robots_url": snapshot.robots_url,
-                            "robots_allowed": snapshot.robots_allowed,
-                        },
-                        agent_chain=["SourceDiscoveryAgent", "SnapshotCrawlerAgent", "HtmlPdfTextExtractionAgent", "HumanReviewGateAgent"],
-                    )
-                )
+            key = (plan.source_id, str(plan.url), plan.source_scope.value)
+            if plan.source_scope in {SourceScope.programme_detail, SourceScope.institution_index}:
+                key = (plan.source_id, str(plan.url), f"{plan.source_scope.value}:{package.program_id}")
+            if key in seen:
                 continue
-            candidates = extract_field_candidates(snapshot.text)
-            extracted = evidence_records_from_candidates(
-                program_id=package.program_id,
-                cycle=package.cycle,
-                source_url=str(plan.url),
-                source_type=plan.channel,
-                snapshot=snapshot,
-                candidates=candidates,
-                trust_level=plan.trust_level,
-            )
-            records.extend(extracted)
-            resolved = {candidate.field_name for candidate in candidates}
-            results.append(
-                SourceExtractionResult(
-                    source_id=plan.source_id,
-                    source_url=plan.url,
-                    source_type=plan.channel,
-                    page_hash=snapshot.page_hash,
-                    snapshot_path=snapshot.snapshot_path,
-                    extracted_at=checked_at,
-                    parser="regex_html",
-                    extracted_fields=candidates,
-                    unresolved_fields=[field for field in OFFICIAL_REQUIREMENT_FIELD_ORDER if field not in resolved],
-                    raw_json={
-                        "status": snapshot.status,
-                        "http_status": snapshot.http_status,
-                        "snapshot_mime": snapshot.snapshot_mime,
-                        "content_bytes": snapshot.content_bytes,
-                        "discovered_links": discovered_links(snapshot.text, str(plan.url), limit=20),
-                        "review_required": True,
-                    },
-                    agent_chain=["SourceDiscoveryAgent", "SnapshotCrawlerAgent", "HtmlPdfTextExtractionAgent", "FieldCandidateAgent", "HumanReviewGateAgent"],
-                )
-            )
-    return records, results
+            seen.add(key)
+            output.append((package, plan))
+    return output
+
+
+def _bind_program_page(package: ProgramDataPackage, snapshot) -> tuple[str, int]:
+    """Require a programme identity signal before extracting field facts."""
+
+    final_url = str(snapshot.final_url or snapshot.url or "")
+    if not same_official_institution(final_url, str(package.official_url or "")):
+        return "unrelated", 0
+    title = str(snapshot.page_title or "").lower()
+    content = " ".join([title, str(snapshot.text[:12000] or "")]).lower()
+    url_text = str(snapshot.final_url or "").lower()
+    tokens = _identity_tokens(package.program_name_en or package.program_name)
+    if not tokens:
+        return "weak_match", 35
+    content_matched = sum(1 for token in tokens if token in content)
+    title_matched = sum(1 for token in tokens if token in title)
+    url_matched = sum(1 for token in tokens if token in url_text)
+    degree_match = _degree_identity_match(package.program_name_en or package.program_name, content[:3000])
+    if degree_match == "conflict":
+        return "unrelated", 0
+    score = round(
+        min(
+            100,
+            (content_matched / len(tokens) * 75)
+            + (title_matched / len(tokens) * 15)
+            + (url_matched / len(tokens) * 5)
+            + (5 if degree_match == "matched" else 0),
+        )
+    )
+    minimum_content_tokens = 1 if len(tokens) <= 2 else 2
+    if content_matched < minimum_content_tokens:
+        return "unrelated", score
+    if len(tokens) == 1 and title_matched == 0:
+        return "weak_match", min(score, 55)
+    if degree_match != "matched":
+        return "weak_match", min(score, 55)
+    if score >= 60:
+        return "matched", score
+    if score >= 35:
+        return "weak_match", score
+    return "unrelated", score
+
+
+def _best_program_link(package: ProgramDataPackage | None, links: list[str]) -> str | None:
+    if package is None:
+        return None
+    tokens = _identity_tokens(package.program_name_en or package.program_name)
+    if not tokens:
+        return None
+    scored = []
+    for link in links:
+        if not same_official_institution(link, str(package.official_url or "")):
+            continue
+        low = link.lower()
+        score = sum(1 for token in tokens if token in low)
+        if score:
+            scored.append((score, len(low), link))
+    if not scored:
+        return None
+    scored.sort(key=lambda item: (-item[0], item[1], item[2]))
+    return scored[0][2]
+
+
+def _best_application_link(package: ProgramDataPackage, links: list[str]) -> str | None:
+    candidates: list[tuple[int, int, str]] = []
+    for link in links:
+        low = link.lower()
+        if not any(token in low for token in ("apply", "application", "admission")):
+            continue
+        if not same_official_institution(link, str(package.official_url or "")):
+            continue
+        score = (
+            (3 if "apply" in low else 0)
+            + (2 if "application" in low else 0)
+            + (1 if "admission" in low else 0)
+        )
+        candidates.append((score, len(link), link))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (-item[0], item[1], item[2]))
+    return candidates[0][2]
+
+
+def _identity_tokens(value: str) -> list[str]:
+    import re
+
+    stop = {"master", "msc", "of", "in", "and", "the", "programme", "program", "studies"}
+    tokens = [token for token in re.findall(r"[a-z0-9]+", value.lower()) if len(token) >= 3 and token not in stop]
+    return list(dict.fromkeys(tokens))[:12]
+
+
+def _degree_identity_match(target_name: str, page_surface: str) -> str:
+    import re
+
+    target = target_name.lower()
+    surface = page_surface.lower()
+    if re.search(r"\bmsc\b|m\.sc\.?|master of science", target):
+        positive = r"\bmsc\b|m\.sc\.?|master(?:'s)? of science|master(?:'s)? degree"
+    elif re.search(r"\bma\b|master of arts", target):
+        positive = r"\bma\b|master(?:'s)? of arts|master(?:'s)? degree"
+    elif re.search(r"\bmba\b", target):
+        positive = r"\bmba\b|master of business administration"
+    elif re.search(r"\bmph\b", target):
+        positive = r"\bmph\b|master of public health"
+    else:
+        positive = r"\bmaster(?:'s)?\b|postgraduate"
+    has_positive = re.search(positive, surface, re.IGNORECASE) is not None
+    has_undergraduate = (
+        re.search(r"\bbsc\b|b\.sc\.?|\bbachelor(?:'s)?\b|\bundergraduate\b", surface, re.IGNORECASE)
+        is not None
+    )
+    if has_undergraduate and not has_positive:
+        return "conflict"
+    return "matched" if has_positive else "missing"
+
+
+def _index_link_record(package: ProgramDataPackage, candidate_url: str, source_url: str, snapshot, checked_at: datetime) -> FieldEvidenceRecord:
+    return FieldEvidenceRecord(
+        program_id=package.program_id,
+        field_name="official_program_url",
+        value=candidate_url,
+        cycle=package.cycle,
+        source_url=source_url,
+        source_type="official_program_index",
+        extracted_at=checked_at,
+        page_hash=snapshot.page_hash,
+        confidence="medium",
+        source_priority=2,
+        status=FieldVerificationStatus.model_inferred,
+        review_required=True,
+        evidence_snippet=f"索引页发现项目详情链接：{candidate_url}",
+        snapshot_url=snapshot.snapshot_path,
+        source_scope=SourceScope.institution_index,
+        page_title=snapshot.page_title,
+        final_url=snapshot.final_url,
+        binding_status="index_only",
+        binding_score=55,
+        agent_chain=["SourceDiscoveryAgent", "SnapshotCrawlerAgent", "ProgrammeLinkDiscoveryAgent", "HumanReviewGateAgent"],
+    )
+
+
+def _extraction_result_for_failure(plan, snapshot, checked_at: datetime) -> SourceExtractionResult:
+    return SourceExtractionResult(
+        source_id=plan.source_id,
+        source_url=plan.url,
+        source_type=plan.channel,
+        page_hash=snapshot.page_hash,
+        snapshot_path=snapshot.snapshot_path,
+        extracted_at=checked_at,
+        parser="not_run",
+        extracted_fields=[],
+        unresolved_fields=OFFICIAL_REQUIREMENT_FIELD_ORDER,
+        raw_json={"status": snapshot.status, "error": snapshot.error, "robots_url": snapshot.robots_url, "robots_allowed": snapshot.robots_allowed},
+        fetch_status=snapshot.status,
+        final_url=snapshot.final_url,
+        page_title=snapshot.page_title,
+        attempts=snapshot.attempts,
+        duration_ms=snapshot.duration_ms,
+        agent_chain=["SourceDiscoveryAgent", "SnapshotCrawlerAgent", "HtmlPdfTextExtractionAgent", "HumanReviewGateAgent"],
+    )
+
+
+def _extraction_result_for_index(plan, snapshot, checked_at: datetime, links: list[str], binding_score: int) -> SourceExtractionResult:
+    return SourceExtractionResult(
+        source_id=plan.source_id,
+        source_url=plan.url,
+        source_type=plan.channel,
+        page_hash=snapshot.page_hash,
+        snapshot_path=snapshot.snapshot_path,
+        extracted_at=checked_at,
+        parser="regex_html",
+        extracted_fields=[],
+        unresolved_fields=OFFICIAL_REQUIREMENT_FIELD_ORDER,
+        raw_json={"status": snapshot.status, "discovered_links": links, "scope": plan.source_scope.value, "review_required": True},
+        fetch_status=snapshot.status,
+        final_url=snapshot.final_url,
+        page_title=snapshot.page_title,
+        binding_status="index_only",
+        binding_score=binding_score,
+        attempts=snapshot.attempts,
+        duration_ms=snapshot.duration_ms,
+        agent_chain=["SourceDiscoveryAgent", "SnapshotCrawlerAgent", "ProgrammeLinkDiscoveryAgent", "HumanReviewGateAgent"],
+    )
+
+
+def _extraction_result_for_unrelated(plan, snapshot, checked_at: datetime, binding_score: int) -> SourceExtractionResult:
+    return SourceExtractionResult(
+        source_id=plan.source_id,
+        source_url=plan.url,
+        source_type="official_program_page",
+        page_hash=snapshot.page_hash,
+        snapshot_path=snapshot.snapshot_path,
+        extracted_at=checked_at,
+        parser="not_run",
+        extracted_fields=[],
+        unresolved_fields=OFFICIAL_REQUIREMENT_FIELD_ORDER,
+        raw_json={"status": snapshot.status, "reason": "programme binding gate rejected page"},
+        fetch_status=snapshot.status,
+        final_url=snapshot.final_url,
+        page_title=snapshot.page_title,
+        binding_status="unrelated",
+        binding_score=binding_score,
+        attempts=snapshot.attempts,
+        duration_ms=snapshot.duration_ms,
+        agent_chain=["SourceDiscoveryAgent", "SnapshotCrawlerAgent", "ProgrammeBindingGateAgent", "HumanReviewGateAgent"],
+    )
+
+
+def _extraction_result_for_detail(
+    plan,
+    snapshot,
+    checked_at: datetime,
+    links: list[str],
+    candidates,
+    binding_status: str,
+    binding_score: int,
+) -> SourceExtractionResult:
+    resolved = {candidate.field_name for candidate in candidates if candidate.value is not None}
+    if binding_status == "matched":
+        resolved.add("official_program_url")
+    return SourceExtractionResult(
+        source_id=plan.source_id,
+        source_url=plan.url,
+        source_type="official_program_page",
+        page_hash=snapshot.page_hash,
+        snapshot_path=snapshot.snapshot_path,
+        extracted_at=checked_at,
+        parser="regex_html",
+        extracted_fields=candidates,
+        unresolved_fields=[field for field in OFFICIAL_REQUIREMENT_FIELD_ORDER if field not in resolved],
+        raw_json={
+            "status": snapshot.status,
+            "http_status": snapshot.http_status,
+            "snapshot_mime": snapshot.snapshot_mime,
+            "content_bytes": snapshot.content_bytes,
+            "discovered_links": links,
+            "scope": plan.source_scope.value,
+            "review_required": True,
+        },
+        fetch_status=snapshot.status,
+        final_url=snapshot.final_url,
+        page_title=snapshot.page_title,
+        binding_status=binding_status,
+        binding_score=binding_score,
+        attempts=snapshot.attempts,
+        duration_ms=snapshot.duration_ms,
+        agent_chain=["SourceDiscoveryAgent", "SnapshotCrawlerAgent", "ProgrammeBindingGateAgent", "HtmlPdfTextExtractionAgent", "FieldCandidateAgent", "HumanReviewGateAgent"],
+    )
 
 
 def _attach_live_records(packages: list[ProgramDataPackage], records: list[FieldEvidenceRecord]) -> None:
@@ -257,6 +733,21 @@ def _records_for_persistence(packages: list[ProgramDataPackage]) -> list[FieldEv
             )
             if key in seen:
                 continue
+            # Catalog/synthetic values are useful for gap analysis, but they
+            # are not a source snapshot.  Persist them only as explicitly
+            # non-publishable reference candidates.
+            if record.status == FieldVerificationStatus.official_verified_current and not record.review_required:
+                seen.add(key)
+                continue
+            if record.source_type == "official_program_index":
+                record = record.model_copy(
+                    update={
+                        "source_type": "catalog_reference",
+                        "status": FieldVerificationStatus.model_inferred,
+                        "review_required": True,
+                        "verified_at": None,
+                    }
+                )
             records.append(record)
             seen.add(key)
     return records
@@ -289,6 +780,7 @@ def _build_package(
         program_id=program.id,
         institution=program.institution_zh or program.institution,
         program_name=program.name_zh or program.name,
+        program_name_en=program.name,
         cycle=program.cycle,
         official_url=student_program_url(program) or program.source.url,
         application_url=student_application_url(program),
@@ -431,6 +923,22 @@ def _crawler_capabilities(source_plan: list[AcquisitionSourcePlan]) -> list[str]
 def _official_source_plans(program: Program, registry_sources: list[SourcePolicy]) -> list[AcquisitionSourcePlan]:
     source_ids = _source_ids_for_programs([program])
     plans: list[AcquisitionSourcePlan] = []
+    detail_url = student_program_url(program)
+    if detail_url:
+        plans.append(
+            AcquisitionSourcePlan(
+                source_id=f"program:{program.id}:detail",
+                name=f"{program.institution} programme detail page",
+                url=detail_url,
+                channel="official_requirement",
+                trust_level=SourceTrustLevel.official,
+                allowed_fields=["official_program_url", "deadline", "tuition_hkd", "language_requirement", "materials", "essay_prompts", "application_url"],
+                crawler_method="direct programme page snapshot and field parser",
+                source_scope=SourceScope.programme_detail,
+                target_program_id=program.id,
+                next_actions=["确认页面标题、项目代码和当前申请季后，再把字段送入人工审核。"],
+            )
+        )
     for source in registry_sources:
         if source.source_id not in source_ids:
             continue
@@ -455,24 +963,27 @@ def _official_source_plans(program: Program, registry_sources: list[SourcePolicy
                 crawler_method=source.extraction_method,
                 rate_limit="queued_low_rate_fetch_with_snapshot_cache",
                 requires_human_review=True,
+                source_scope=SourceScope.institution_index,
+                target_program_id=program.id,
                 next_actions=[
-                    "采集官方项目页或目录页，并保存 HTML/PDF 快照。",
-                    "抽取字段后逐项绑定原文片段、申请季和 page_hash。",
+                    "采集官方索引页只用于发现项目详情链接，并保存 HTML/PDF 快照。",
+                    "索引页不能直接提供截止日期、学费、语言或材料字段；必须再抓取项目详情页。",
                 ],
             )
         )
-    detail_url = student_program_url(program)
-    if not plans and (detail_url or program.source.url):
+    if not plans and not detail_url and program.source.url:
         plans.append(
             AcquisitionSourcePlan(
-                source_id=f"program:{program.id}",
-                name=f"{program.institution} programme page",
-                url=detail_url or program.source.url,
+                source_id=f"program:{program.id}:index",
+                name=f"{program.institution} programme index",
+                url=program.source.url,
                 channel="official_requirement",
                 trust_level=SourceTrustLevel.official,
-                allowed_fields=["official_program_url", "deadline", "tuition_hkd", "language_requirement", "materials", "essay_prompts", "application_url"],
-                crawler_method="direct programme page snapshot and field parser",
-                next_actions=["打开项目页，确认是否已经发布当前申请季要求。"],
+                allowed_fields=["official_program_url"],
+                crawler_method="programme index snapshot and link discovery",
+                source_scope=SourceScope.institution_index,
+                target_program_id=program.id,
+                next_actions=["先从索引页发现项目详情页，再按项目页重新采集要求字段。"],
             )
         )
     return plans
@@ -493,6 +1004,8 @@ def _community_source_plans(config: dict, program: Program) -> list[AcquisitionS
                 rate_limit=str(source.get("rate_limit", "manual_or_low_rate")),
                 robots_policy=str(source.get("policy", "check_robots_and_terms_before_live_fetch")),
                 requires_human_review=True,
+                source_scope=SourceScope.community_reference,
+                target_program_id=program.id,
                 next_actions=[
                     f"搜索：{_community_query(program, source.get('source_id'))}",
                     "只保存公开短摘要、URL、发布时间、采集时间和经验标签。",

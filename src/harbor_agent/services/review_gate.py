@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import re
 from datetime import UTC, datetime
-from urllib.parse import urlparse
 
 from harbor_agent.models import (
     FieldEvidenceRecord,
@@ -16,31 +15,19 @@ from harbor_agent.models import (
     ReviewQueueSummary,
 )
 from harbor_agent.services.evidence_graph import REVIEWER_GATE_FIELDS, build_field_evidence_records
-from harbor_agent.services.review_store import save_published_field_record
+from harbor_agent.services.data_loader import load_programs
+from harbor_agent.services.review_store import load_review_decisions, save_published_field_record, save_review_decision
+from harbor_agent.services.source_identity import is_allowed_official_url, same_official_institution
 
-
-OFFICIAL_SCHOOL_DOMAINS = {
-    "hku.hk",
-    "cuhk.edu.hk",
-    "hkust.edu.hk",
-    "ust.hk",
-    "cityu.edu.hk",
-    "polyu.edu.hk",
-    "hkbu.edu.hk",
-    "ln.edu.hk",
-    "eduhk.hk",
-    "nus.edu.sg",
-    "ntu.edu.sg",
-    "smu.edu.sg",
-    "sutd.edu.sg",
-}
 CURRENT_CYCLE_DATE_FIELDS = {"deadline", "scholarship_deadline", "recommendation_deadline"}
 
 
 def build_review_queue(program_id: str | None = None, limit: int = 80) -> ReviewQueueSummary:
     generated_at = datetime.now(UTC)
+    rejected_ids = {review_id for review_id, decision in load_review_decisions().items() if decision == "reject"}
     items = [_queue_item_from_record(record) for record in build_field_evidence_records()]
     items = [item for item in items if item is not None]
+    items = [item for item in items if item.review_id not in rejected_ids]
     if program_id:
         items = [item for item in items if item.program_id == program_id]
     items = sorted(items, key=lambda item: (not item.publishable, item.program_id, item.source_priority, item.field_name))
@@ -56,6 +43,12 @@ def build_review_queue(program_id: str | None = None, limit: int = 80) -> Review
 def publish_review_item(request: ReviewPublishRequest) -> ReviewPublishResponse:
     queue = build_review_queue(limit=10_000)
     item = next((candidate for candidate in queue.items if candidate.review_id == request.review_id), None)
+    if item is None and request.decision == "approve":
+        # An operator may explicitly override a previous rejection by opening
+        # the stable review id.  It remains hidden from the normal queue until
+        # that deliberate action.
+        historical = [_queue_item_from_record(record) for record in build_field_evidence_records()]
+        item = next((candidate for candidate in historical if candidate and candidate.review_id == request.review_id), None)
     if item is None:
         return ReviewPublishResponse(
             ok=False,
@@ -81,6 +74,16 @@ def publish_review_item(request: ReviewPublishRequest) -> ReviewPublishResponse:
 
     if request.decision == "reject":
         item.status = "REJECTED"
+        if request.persist:
+            decision_id = save_review_decision(
+                review_id=item.review_id,
+                program_id=item.program_id,
+                field_name=item.field_name,
+                decision="reject",
+                reviewer_id=request.reviewer_id,
+                reviewer_note=request.reviewer_note,
+            )
+            item.reviewer_note = (item.reviewer_note or "") + f" [decision:{decision_id}]"
         return ReviewPublishResponse(
             ok=True,
             item=item,
@@ -99,6 +102,36 @@ def publish_review_item(request: ReviewPublishRequest) -> ReviewPublishResponse:
 
     item.status = "APPROVED"
     value = request.confirmed_value if request.confirmed_value is not None else item.proposed_value
+    validation_error = _validate_confirmed_value(item, value)
+    if validation_error:
+        item.status = "REJECTED"
+        if request.persist:
+            save_review_decision(
+                review_id=item.review_id,
+                program_id=item.program_id,
+                field_name=item.field_name,
+                decision="reject",
+                reviewer_id=request.reviewer_id,
+                reviewer_note=validation_error,
+            )
+        return ReviewPublishResponse(
+            ok=False,
+            item=item,
+            published_record=None,
+            message=validation_error,
+        )
+    decision_id = (
+        save_review_decision(
+            review_id=item.review_id,
+            program_id=item.program_id,
+            field_name=item.field_name,
+            decision="approve",
+            reviewer_id=request.reviewer_id,
+            reviewer_note=request.reviewer_note,
+        )
+        if request.persist
+        else None
+    )
     record = FieldEvidenceRecord(
         program_id=item.program_id,
         field_name=item.field_name,
@@ -116,6 +149,13 @@ def publish_review_item(request: ReviewPublishRequest) -> ReviewPublishResponse:
         reviewer_id=request.reviewer_id,
         evidence_snippet=item.evidence_snippet,
         snapshot_url=item.snapshot_url,
+        source_scope=item.source_scope,
+        page_title=item.page_title,
+        final_url=item.final_url,
+        binding_status=item.binding_status,
+        binding_score=item.binding_score,
+        reviewer_note=request.reviewer_note,
+        review_decision_id=decision_id,
         agent_chain=[*item.agent_chain, "HumanReviewGateAgent", "AuditAgent"],
     )
     if request.persist:
@@ -201,6 +241,11 @@ def _queue_item_from_record(record: FieldEvidenceRecord) -> ReviewQueueItem | No
         evidence_snippet=record.evidence_snippet,
         page_hash=record.page_hash,
         snapshot_url=record.snapshot_url,
+        source_scope=record.source_scope,
+        page_title=record.page_title,
+        final_url=record.final_url,
+        binding_status=record.binding_status,
+        binding_score=record.binding_score,
         extracted_at=record.extracted_at,
         confidence=record.confidence,
         source_priority=record.source_priority,
@@ -219,6 +264,19 @@ def _is_publishable_official_candidate(record: FieldEvidenceRecord) -> bool:
         return False
     if record.source_type == "official_program_index":
         return False
+    if record.source_scope is None:
+        return False
+    scope = record.source_scope.value
+    if scope == "programme_detail":
+        if record.binding_status != "matched" or record.binding_score < 60:
+            return False
+    elif scope == "application_portal":
+        if record.field_name != "application_url":
+            return False
+        if record.binding_status != "matched" or record.binding_score < 60:
+            return False
+    else:
+        return False
     if not record.source_url:
         return False
     if not _is_allowed_official_url(str(record.source_url)):
@@ -234,15 +292,41 @@ def _is_publishable_official_candidate(record: FieldEvidenceRecord) -> bool:
     if record.field_name in {"official_program_url", "application_url"}:
         if not record.value or not _is_allowed_official_url(str(record.value)):
             return False
+    if record.final_url and not _is_allowed_official_url(str(record.final_url)):
+        return False
+    program = next((item for item in load_programs() if item.id == record.program_id), None)
+    if program is None:
+        return False
+    expected_url = str(program.official_program_url or program.source.url or "")
+    actual_url = str(record.final_url or record.source_url or "")
+    if not same_official_institution(actual_url, expected_url):
+        return False
     return True
 
 
 def _is_allowed_official_url(value: str) -> bool:
-    parsed = urlparse(value)
-    host = (parsed.hostname or "").lower().rstrip(".")
-    if parsed.scheme != "https" or not host:
-        return False
-    return any(host == domain or host.endswith("." + domain) for domain in OFFICIAL_SCHOOL_DOMAINS)
+    return is_allowed_official_url(value)
+
+
+def _validate_confirmed_value(item: ReviewQueueItem, value: str | None) -> str | None:
+    if value is None or not str(value).strip():
+        return "审核发布需要一个非空的确认值。"
+    text = str(value).strip()
+    if len(text) > 2000:
+        return "确认值过长，请保留学校原文中的字段内容和必要上下文。"
+    if item.field_name in CURRENT_CYCLE_DATE_FIELDS:
+        year = re.search(r"20\d{2}", item.cycle or "")
+        if not year or year.group(0) not in text:
+            return "截止日期必须包含目标申请季年份，不能把旧季日期覆盖为当前季事实。"
+        if not re.search(r"20\d{2}[-/.年]\s*[01]?\d[-/.月]\s*[0-3]?\d?", text):
+            return "截止日期格式无法核验，请保留官网中的完整日期或轮次原文。"
+    if item.field_name == "tuition_hkd":
+        if not re.search(r"(HK\$|HKD)\s*[0-9][0-9,]{3,}", text, re.IGNORECASE):
+            return "tuition_hkd 只能确认 HKD/HK$ 金额；其他币种必须保留为原币，不能直接混写为港币。"
+    if item.field_name in {"official_program_url", "application_url"}:
+        if not _is_allowed_official_url(text):
+            return "项目页和申请入口只能发布 HTTPS 学校官方域名。"
+    return None
 
 
 def _has_current_cycle_evidence(record: FieldEvidenceRecord) -> bool:

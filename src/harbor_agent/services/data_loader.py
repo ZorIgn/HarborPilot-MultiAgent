@@ -7,7 +7,12 @@ from typing import Any
 
 from harbor_agent.models import Program, SourceRegistry
 from harbor_agent.services.program_store import DB_PATH as PROGRAM_DB_PATH
-from harbor_agent.services.program_store import PROGRAM_JSON, PROGRAM_URL_OVERRIDES, load_programs_from_store
+from harbor_agent.services.program_store import (
+    PROGRAM_JSON,
+    PROGRAM_URL_OVERRIDES,
+    load_programs_from_store,
+    program_catalog_revision,
+)
 
 ROOT = Path(__file__).resolve().parents[3]
 DATA_DIR = ROOT / "data"
@@ -28,7 +33,11 @@ def _load_programs_for_signature(_signature: tuple[tuple[str, int, int], ...]) -
 
 
 def _program_store_signature() -> tuple[tuple[str, int, int], ...]:
-    return tuple(_file_signature(path) for path in (PROGRAM_DB_PATH, PROGRAM_JSON, PROGRAM_URL_OVERRIDES))
+    file_signatures = tuple(
+        _file_signature(path) for path in (PROGRAM_DB_PATH, PROGRAM_JSON, PROGRAM_URL_OVERRIDES)
+    )
+    revision = program_catalog_revision(PROGRAM_DB_PATH)
+    return (*file_signatures, (f"{PROGRAM_DB_PATH}#catalog_revision", revision, 0))
 
 
 def _file_signature(path: Path) -> tuple[str, int, int]:

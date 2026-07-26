@@ -51,6 +51,10 @@ export function ProgramCatalogPage(props: {
   const trustStats = buildPlanTrustStats(editableMatches, props.selectedProgramIds);
   const catalogReadiness = buildCatalogReadinessStats(props.catalog);
   const visibleCatalogSlice = props.catalog.slice(0, catalogLimit);
+  const availableProgramTotal = Math.max(
+    props.catalogTotal,
+    new Set([...props.catalog.map((program) => program.id), ...editableMatches.map((item) => item.program.id)]).size,
+  );
 
   useEffect(() => {
     setBandOverrides(props.programScheme.band_overrides ?? {});
@@ -121,7 +125,7 @@ const tabs = bandKeys.map((band) => ({
       <Metric label="择校方案项目" value={String(editableMatches.length)} detail="先展示 Agent 分档结果，不把全量库铺满首屏" />
       <Metric label="冲刺 / 主申 / 保底" value={bandedMatches.reach.length + "/" + bandedMatches.target.length + "/" + bandedMatches.safe.length} detail="按院校层级、GPA、语言、方向、经历和预算规则" />
       <Metric label="学生已保存" value={String(props.selectedProgramIds.length)} detail="时间线和文书只读取最终申请清单" />
-      <Metric label="项目库总数" value={String(props.catalogTotal)} detail="全量库保留在下方搜索区，按需加载" />
+      <Metric label="当前可用项目" value={String(availableProgramTotal)} detail="项目库与当前 Agent 方案去重；全量库在下方按需加载" />
     </section>
 
     <PlanTrustGate stats={trustStats} />
@@ -240,7 +244,8 @@ function EditablePlanTable({ matches, bandedMatches, selectedIds, onToggle, onIn
   if (!matches.length) return <IslandCard className="panel-card" type="dashed"><PanelTitle icon={<BookOpenCheck size={19} aria-hidden />} title="择校方案表" /><EmptyState text={programCatalogCopy.noPlan} /></IslandCard>;
   return <IslandCard className="panel-card plan-editor"><PanelTitle icon={<BookOpenCheck size={19} aria-hidden />} title="可编辑择校方案（预评估）" />
     <div className="scheme-band-tabs">{bandKeys.map((band) => <button type="button" className={activeBand === band ? "active" : ""} onClick={() => setActiveBand(band)} key={band}><span>{strategyLabel(band)}</span><strong>{bandedMatches[band].length}</strong></button>)}</div>
-    <div className="plan-table-wrap"><table className="plan-table editable"><thead><tr><th>分档</th><th>学校 / 项目</th><th>推荐依据</th><th>主要风险</th><th>关键申请信息</th><th>操作</th></tr></thead><tbody>{visible.map((item) => <tr key={item.program.id}>
+    <p className="plan-table-scroll-hint" id="plan-table-scroll-hint">左右滑动查看完整分档</p>
+    <div className="plan-table-wrap" tabIndex={0} aria-describedby="plan-table-scroll-hint"><table className="plan-table editable"><thead><tr><th>分档</th><th>学校 / 项目</th><th>推荐依据</th><th>主要风险</th><th>关键申请信息</th><th>操作</th></tr></thead><tbody>{visible.map((item) => <tr key={item.program.id}>
       <td><select value={bandKey(item)} onChange={(event) => onBandChange(item.program.id, event.target.value as StrategyBand)}><option value="reach">冲刺</option><option value="target">主申</option><option value="safe">保底</option><option value="candidate">候选</option><option value="blocked">不建议</option></select></td>
       <td><strong>{displayProgram(item.program)}</strong><small>{displayProgramSecondary(item.program)}</small><small>{programMeta(item.program)}</small><small>{formalUseLabel(item)}</small></td>
       <td><p>{item.consultant_note ?? item.explanation?.decision_basis?.[0] ?? item.reasons[0]}</p><small>匹配分 {Math.round(item.fit_score)} / 100</small></td>
@@ -288,8 +293,27 @@ function ProgramTrustPanel({ trust }: { trust?: CatalogProgram["trust_detail"] }
 }
 
 function orderedTrustRecords(records: NonNullable<CatalogProgram["trust_detail"]>["field_records"]) { const order = ["official_program_url", "application_url", "deadline", "language_requirement", "materials", "tuition_hkd"]; return [...records].sort((a, b) => order.indexOf(a.field_name) - order.indexOf(b.field_name)); }
-function ProgramLinks({ program, onRequestSourceUpdate }: { program: ProgramLike; onRequestSourceUpdate?: (id: string) => void }) { const hasDetail = hasProgramDetailPage(program); return <div className="link-row">{hasDetail && program.official_program_url ? <a href={program.official_program_url} target="_blank" rel="noreferrer"><ExternalLink size={13} aria-hidden />{programCatalogCopy.detailPage}</a> : <><span className="link-warning">{programCatalogCopy.missingDetailPage}</span>{onRequestSourceUpdate ? <button className="text-link source-update-button" type="button" onClick={() => onRequestSourceUpdate(program.id)}>{programCatalogCopy.queueSourceUpdate}</button> : null}</>}{program.application_url ? <a href={program.application_url} target="_blank" rel="noreferrer"><ExternalLink size={13} aria-hidden />{programCatalogCopy.applicationEntry}</a> : <span className="link-warning">{programCatalogCopy.missingApplicationEntry}</span>}</div>; }
-function hasProgramDetailPage(program: ProgramLike) { const url = String(program.official_program_url ?? "").toLowerCase(); if (!url) return false; const generic = ["programme-list", "taught-postgraduate-programmes", "/admissions", "/graduate-admissions", "/programmes?", "/programs?", "/programme/index"]; if (url.includes("masters.smu.edu.sg/programmes/") && !url.endsWith("/programmes")) return true; if (url.includes("www.ntu.edu.sg") && url.includes("/admissions/graduate-studies/")) return true; if (url.includes("prog-crs.hkust.edu.hk/pgprog/")) return true; if (url.includes("www.sutd.edu.sg/programme-listing/")) return true; return !generic.some((pattern) => url.includes(pattern)); }
+function ProgramLinks({ program, onRequestSourceUpdate }: { program: ProgramLike; onRequestSourceUpdate?: (id: string) => void }) { const detailUrl = resolvedProgramDetailUrl(program); return <div className="link-row">{detailUrl ? <a href={detailUrl} target="_blank" rel="noreferrer"><ExternalLink size={13} aria-hidden />{programCatalogCopy.detailPage}</a> : <><span className="link-warning">{programCatalogCopy.missingDetailPage}</span>{onRequestSourceUpdate ? <button className="text-link source-update-button" type="button" onClick={() => onRequestSourceUpdate(program.id)}>{programCatalogCopy.queueSourceUpdate}</button> : null}</>}{program.application_url ? <a href={program.application_url} target="_blank" rel="noreferrer"><ExternalLink size={13} aria-hidden />{programCatalogCopy.applicationEntry}</a> : <span className="link-warning">{programCatalogCopy.missingApplicationEntry}</span>}</div>; }
+function resolvedProgramDetailUrl(program: ProgramLike) {
+  const evidence = program.trust_detail?.field_records.find((record) => record.field_name === "official_program_url");
+  const scopedEvidenceUrl = evidence?.source_scope === "programme_detail" && evidence.binding_status === "matched"
+    ? absoluteHttpUrl(evidence.value) ?? absoluteHttpUrl(evidence.final_url) ?? absoluteHttpUrl(evidence.source_url)
+    : null;
+  if (scopedEvidenceUrl) return scopedEvidenceUrl;
+  const catalogUrl = absoluteHttpUrl(program.official_program_url);
+  return catalogUrl && isLikelyProgramDetailUrl(catalogUrl) ? catalogUrl : null;
+}
+function absoluteHttpUrl(value: unknown) { try { const url = new URL(String(value ?? "")); return ["http:", "https:"].includes(url.protocol) ? url.toString() : null; } catch { return null; } }
+function isLikelyProgramDetailUrl(urlValue: string) {
+  const url = urlValue.toLowerCase();
+  if (url.includes("masters.smu.edu.sg/programmes/") && !url.endsWith("/programmes")) return true;
+  if (url.includes("www.ntu.edu.sg") && url.includes("/admissions/graduate-studies/") && url.split("/").length > 6) return true;
+  if (url.includes("prog-crs.hkust.edu.hk/pgprog/")) return true;
+  if (url.includes("www.sutd.edu.sg/programme-listing/")) return true;
+  const generic = ["programme-list", "taught-postgraduate-programmes", "/admissions", "/graduate-admissions", "/programmes?", "/programs?", "/programme/index"];
+  return !generic.some((pattern) => url.includes(pattern));
+}
+function hasProgramDetailPage(program: ProgramLike) { return Boolean(resolvedProgramDetailUrl(program)); }
 function programDetailStatus(program: ProgramLike) { return hasProgramDetailPage(program) ? "项目详情页" : "未找到项目详情页"; }
 function readinessKind(program: ProgramLike): "current" | "reference" | "incomplete" {
   if (program.trust_detail?.production_ready) return "current";

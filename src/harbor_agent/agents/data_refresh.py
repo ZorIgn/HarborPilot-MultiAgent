@@ -1,14 +1,9 @@
 from __future__ import annotations
 
-import hashlib
 import re
-from urllib import robotparser
 from datetime import UTC, datetime
-from pathlib import Path
 from uuid import uuid4
-from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse, urlunparse
-from urllib.request import Request, urlopen
 
 from harbor_agent.core.llm import LLMProvider
 from harbor_agent.models import (
@@ -29,9 +24,14 @@ from harbor_agent.models import (
 from harbor_agent.services.evidence_graph import build_field_evidence_records
 from harbor_agent.services.data_loader import DATA_DIR, load_programs, load_source_registry
 from harbor_agent.services.external_candidates import qs_import_summary_for_programs
-
-
-FETCH_USER_AGENT = "HarborPilotAI/0.1 public admissions source checker (+manual review)"
+from harbor_agent.services.information_store import (
+    _scope_for_source,
+    finish_information_run,
+    latest_source_page_hash,
+    record_fetch_attempt,
+    start_information_run,
+)
+from harbor_agent.services.source_snapshot import snapshot_source
 
 
 class DataRefreshAgent:
@@ -44,9 +44,53 @@ class DataRefreshAgent:
 
     def run(self, request: DataRefreshRequest) -> DataRefreshReport:
         checked_at = datetime.now(UTC)
+        run_id = f"refresh_{uuid4().hex[:12]}"
         programs = _select_programs(load_programs(), request)
         sources = _select_sources(request, programs)[: request.max_sources]
-        source_checks = [self._check_source(source, request.dry_run, checked_at) for source in sources]
+        if not request.dry_run:
+            start_information_run(
+                run_id,
+                mode="live_fetch",
+                selected_program_ids=[program.id for program in programs],
+                planned_source_count=len(sources),
+            )
+        try:
+            source_checks = [
+                self._check_source(
+                    source,
+                    request.dry_run,
+                    checked_at,
+                    run_id=None if request.dry_run else run_id,
+                )
+                for source in sources
+            ]
+        except Exception as exc:
+            if not request.dry_run:
+                finish_information_run(
+                    run_id,
+                    status="FAILED",
+                    attempted_source_count=0,
+                    successful_source_count=0,
+                    failed_source_count=1,
+                    warnings=[f"{type(exc).__name__}: {exc}"],
+                )
+            raise
+        if not request.dry_run:
+            successful_count = sum(check.status == "FETCH_OK" for check in source_checks)
+            failed_count = len(source_checks) - successful_count
+            changed_count = sum(check.content_changed is True for check in source_checks)
+            finish_information_run(
+                run_id,
+                status="NEEDS_REVIEW" if failed_count or changed_count else "COMPLETED",
+                attempted_source_count=len(source_checks),
+                successful_source_count=successful_count,
+                failed_source_count=failed_count,
+                warnings=[
+                    f"{check.source_id}: {check.status}"
+                    for check in source_checks
+                    if check.status != "FETCH_OK"
+                ],
+            )
         findings = [_finding_for_program(program, sources, source_checks) for program in programs]
         extraction_results = _build_extraction_results(sources, source_checks, checked_at)
         qs_import_summary = qs_import_summary_for_programs(programs)
@@ -57,8 +101,10 @@ class DataRefreshAgent:
             for record in build_field_evidence_records(programs)
             if record.status != FieldVerificationStatus.official_verified_current
         ]
-        if not request.dry_run:
-            field_records = _live_field_records(programs, source_checks, checked_at) + field_records
+        # A source-level refresh has no programme binding context. It may
+        # produce snapshots and extraction candidates, but must not copy
+        # catalog values into field evidence. Programme-bound extraction is
+        # handled by ProgramDataAcquisitionAgent.
         official_count = sum(1 for source in sources if source.trust_level == SourceTrustLevel.official)
         community_count = sum(1 for source in sources if source.trust_level == SourceTrustLevel.community)
         stale_ids = [
@@ -89,7 +135,7 @@ class DataRefreshAgent:
             summary, next_actions = self._llm_summarize(summary, next_actions, findings, source_checks)
 
         return DataRefreshReport(
-            run_id=f"refresh_{uuid4().hex[:12]}",
+            run_id=run_id,
             mode="dry_run" if request.dry_run else "live_fetch",
             checked_at=checked_at,
             region=request.region,
@@ -116,6 +162,7 @@ class DataRefreshAgent:
         source: SourcePolicy,
         dry_run: bool,
         checked_at: datetime,
+        run_id: str | None = None,
     ) -> SourceCheckResult:
         if dry_run:
             return SourceCheckResult(
@@ -136,93 +183,73 @@ class DataRefreshAgent:
                 ],
             )
 
-        robots = _robots_decision(str(source.url))
-        if robots["allowed"] is not True:
-            return SourceCheckResult(
+        previous_page_hash = latest_source_page_hash(source.source_id)
+        snapshot = snapshot_source(str(source.url), dry_run=False, checked_at=checked_at)
+        if run_id:
+            record_fetch_attempt(
+                run_id,
+                program_id=None,
                 source_id=source.source_id,
-                name=source.name,
-                url=source.url,
-                category=source.category,
-                trust_level=source.trust_level,
-                status="REVIEW_REQUIRED",
-                checked_at=checked_at,
-                robots_txt_url=robots["robots_url"],
-                robots_allowed=robots["allowed"],
-                robots_status=robots["status"],
-                summary=(
-                    "Live fetch was paused because robots.txt did not explicitly allow this crawler. "
-                    "Keep this source in the human review queue and use manual verification or an approved API."
+                source_scope=_scope_for_source(source),
+                requested_url=str(source.url),
+                snapshot=snapshot,
+                binding_status=(
+                    "index_only"
+                    if _scope_for_source(source).value == "institution_index"
+                    else "not_checked"
                 ),
-                next_actions=[
-                    "Check the school/source terms and robots.txt before fetching this URL again.",
-                    "If access is allowed, rerun live fetch or add an approved source-specific adapter.",
-                ],
             )
-
-        try:
-            request = Request(
-                str(source.url),
-                method="GET",
-                headers={
-                    "User-Agent": FETCH_USER_AGENT,
-                },
+        content_changed = (
+            snapshot.page_hash != previous_page_hash
+            if snapshot.page_hash and previous_page_hash
+            else None
+        )
+        robots_status = "NOT_CHECKED"
+        if snapshot.robots_allowed is True:
+            robots_status = "ALLOWED"
+        elif snapshot.robots_allowed is False:
+            robots_status = "DISALLOWED"
+        elif snapshot.robots_url:
+            robots_status = "ROBOTS_UNAVAILABLE"
+        status = (
+            "FETCH_OK"
+            if snapshot.ok
+            else (
+                "REVIEW_REQUIRED"
+                if snapshot.status in {"ROBOTS_REVIEW_REQUIRED", "CONTENT_REVIEW_REQUIRED"}
+                else "FETCH_FAILED"
             )
-            with urlopen(request, timeout=12) as response:
-                http_status = int(response.status)
-                body = response.read(512_000)
-            page_hash = f"sha256:{hashlib.sha256(body).hexdigest()}"
-            previous_page_hash = _latest_previous_hash(source)
-            content_changed = not page_hash.startswith(previous_page_hash) if previous_page_hash else None
-            snapshot_path = _save_snapshot(source, body, checked_at, page_hash)
-            sample = body[:4096].decode("utf-8", errors="ignore")
-            field_hints = _field_hints_from_sample(sample)
-            return SourceCheckResult(
-                source_id=source.source_id,
-                name=source.name,
-                url=source.url,
-                category=source.category,
-                trust_level=source.trust_level,
-                status="FETCH_OK" if http_status < 400 else "REVIEW_REQUIRED",
-                checked_at=checked_at,
-                http_status=http_status,
-                robots_txt_url=robots["robots_url"],
-                robots_allowed=robots["allowed"],
-                robots_status=robots["status"],
-                page_hash=page_hash,
-                previous_page_hash=previous_page_hash,
-                content_changed=content_changed,
-                snapshot_path=snapshot_path,
-                snapshot_mime=_guess_snapshot_mime(source, body),
-                content_bytes=len(body),
-                changed_fields=field_hints if content_changed is not False else [],
-                summary=(
-                    f"已获取源页面 {len(body)} bytes，保存快照并生成 {page_hash[:19]}...；"
-                    "下一步应提取候选信息、对比页面变化，并由人工确认后发布。"
-                ),
-                next_actions=[
-                    "对项目名、截止日期、学费、材料、语言要求分别绑定学校来源。",
-                    "对社区/目录来源只保留线索，不写入学校正式要求。",
-                ],
-            )
-        except (HTTPError, URLError, TimeoutError, OSError) as exc:
-            return SourceCheckResult(
-                source_id=source.source_id,
-                name=source.name,
-                url=source.url,
-                category=source.category,
-                trust_level=source.trust_level,
-                status="FETCH_FAILED",
-                checked_at=checked_at,
-                http_status=getattr(exc, "code", None),
-                robots_txt_url=robots["robots_url"],
-                robots_allowed=robots["allowed"],
-                robots_status=robots["status"],
-                summary=f"联网检查失败：{type(exc).__name__}。保留为需核验项。",
-                next_actions=[
-                    "打开官方页面人工确认是否改版、限流或需要 JS 渲染。",
-                    "必要时改用学校提供的 PDF、FAQ 或申请系统页面作为官网信息来源。",
-                ],
-            )
+        )
+        return SourceCheckResult(
+            source_id=source.source_id,
+            name=source.name,
+            url=source.url,
+            category=source.category,
+            trust_level=source.trust_level,
+            status=status,
+            checked_at=checked_at,
+            http_status=snapshot.http_status,
+            robots_txt_url=snapshot.robots_url,
+            robots_allowed=snapshot.robots_allowed,
+            robots_status=robots_status,
+            page_hash=snapshot.page_hash,
+            previous_page_hash=previous_page_hash,
+            content_changed=content_changed,
+            snapshot_path=snapshot.snapshot_path,
+            snapshot_mime=snapshot.snapshot_mime,
+            content_bytes=snapshot.content_bytes,
+            changed_fields=_field_hints_from_sample(snapshot.text[:4096]) if content_changed else [],
+            summary=(
+                f"已获取源页面 {snapshot.content_bytes} bytes，保存快照并生成 {str(snapshot.page_hash or '')[:19]}...；"
+                "下一步应提取候选信息、对比页面变化，并由人工确认后发布。"
+                if snapshot.ok
+                else f"联网检查未完成：{snapshot.status}。保留为需核验项。"
+            ),
+            next_actions=[
+                "对项目名、截止日期、学费、材料、语言要求分别绑定学校来源。",
+                "对社区/目录来源只保留线索，不写入学校正式要求。",
+            ],
+        )
 
     def _llm_summarize(
         self,
@@ -333,48 +360,7 @@ def _live_field_records(
     checks: list[SourceCheckResult],
     checked_at: datetime,
 ) -> list[FieldEvidenceRecord]:
-    checks_by_id = {
-        check.source_id: check
-        for check in checks
-        if check.status == "FETCH_OK" and check.page_hash
-    }
-    records: list[FieldEvidenceRecord] = []
-    for program in programs:
-        source_ids = _source_ids_for_programs([program])
-        check = next((checks_by_id[source_id] for source_id in source_ids if source_id in checks_by_id), None)
-        if not check:
-            continue
-        for field_name in _fields_requiring_review(program) or _reviewer_gate_fields():
-            records.append(
-                FieldEvidenceRecord(
-                    program_id=program.id,
-                    field_name=field_name,
-                    value=_field_value(program, field_name),
-                    cycle=program.cycle,
-                    source_url=check.url,
-                    source_type=check.category.value if hasattr(check.category, "value") else str(check.category),
-                    extracted_at=checked_at,
-                    verified_at=None,
-                    page_hash=check.page_hash,
-                    confidence="medium" if field_name in check.changed_fields else "low",
-                    source_priority=_source_priority_from_category(check.category),
-                    status=FieldVerificationStatus.official_previous_cycle,
-                    review_required=True,
-                    evidence_snippet=(
-                        "已保存学校来源快照。该信息需要人工查看原文后才能发布为已确认。"
-                    ),
-                    snapshot_url=check.snapshot_path,
-                    agent_chain=[
-                        "SourceDiscoveryAgent",
-                        "PageFetchAgent",
-                        "SnapshotAgent",
-                        "FieldExtractionAgent",
-                        "CrossCheckAgent",
-                        "HumanReviewAgent",
-                    ],
-                )
-            )
-    return records
+    return []
 
 
 def _build_extraction_results(
@@ -411,7 +397,12 @@ def _build_extraction_results(
 
         text = _read_snapshot_text(check.snapshot_path)
         raw_html = _read_snapshot_html(check.snapshot_path)
-        candidates = _extract_field_candidates(text)
+        source_scope = _scope_for_source(source)
+        candidates = (
+            _extract_field_candidates(text)
+            if source_scope.value == "programme_detail"
+            else []
+        )
         resolved = {candidate.field_name for candidate in candidates}
         unresolved = [field for field in _reviewer_gate_fields() if field not in resolved]
         discovered_links = _discover_program_links(raw_html, source.url)
@@ -434,8 +425,18 @@ def _build_extraction_results(
                     "fields": [candidate.model_dump(mode="json") for candidate in candidates],
                     "unresolved_fields": unresolved,
                     "discovered_program_links": discovered_links[:30],
+                    "source_scope": source_scope.value,
+                    "index_boundary": (
+                        "Institution/index sources may discover programme links but cannot provide programme-level requirement fields."
+                        if source_scope.value == "institution_index"
+                        else None
+                    ),
                     "review_required": True,
                 },
+                fetch_status=check.status,
+                binding_status=(
+                    "index_only" if source_scope.value == "institution_index" else "not_checked"
+                ),
                 agent_chain=[
                     "SourceDiscoveryAgent",
                     "PageFetchAgent",
@@ -509,10 +510,21 @@ def _extract_tuition(text: str) -> FieldExtractionCandidate | None:
     )
     if not snippet:
         return None
-    amount = re.search(r"(HK\$|S\$|SGD|HKD|RMB|CNY|USD)?\s?[0-9][0-9,]{3,}", snippet, re.IGNORECASE)
+    amount = re.search(
+        r"(?P<currency>HK\$|HKD|S\$|SGD|RMB|CNY|USD)\s*(?P<amount>[0-9][0-9,]{3,})",
+        snippet,
+        re.IGNORECASE,
+    )
+    if amount is None:
+        amount = re.search(
+            r"(?P<currency>)(?P<amount>[0-9][0-9,]{3,})(?=\s*(?:per\s+year|tuition|fee|学费|费用))",
+            snippet,
+            re.IGNORECASE,
+        )
+    currency = (amount.group("currency") or "UNSPECIFIED").upper() if amount else None
     return FieldExtractionCandidate(
-        field_name="tuition_hkd",
-        value=_normalize_space(amount.group(0)) if amount else None,
+        field_name="tuition_hkd" if currency in {"HK$", "HKD"} else "tuition_original",
+        value=(f"{currency} {amount.group('amount')}" if amount and currency else None),
         evidence_snippet=snippet,
         confidence="medium" if amount else "low",
     )
@@ -568,7 +580,7 @@ def _extract_application_hint(text: str) -> FieldExtractionCandidate | None:
 def _extract_essay_prompt(text: str) -> FieldExtractionCandidate | None:
     snippet = _first_snippet(
         text,
-        [r"(?P<snippet>.{0,80}(essay|statement of purpose|personal statement|study plan|文书|个人陈述|学习计划).{0,160})"],
+        [r"(?P<snippet>.{0,80}(admission essay|essay question|statement of purpose|personal statement|writing sample|申请文书|文书题目|个人陈述).{0,160})"],
     )
     if not snippet:
         return None
@@ -655,95 +667,6 @@ def _robots_txt_url(url: str) -> str | None:
     if not parsed.scheme or not parsed.netloc:
         return None
     return urlunparse((parsed.scheme, parsed.netloc, "/robots.txt", "", "", ""))
-
-
-def _robots_decision(url: str) -> dict[str, str | bool | None]:
-    robots_url = _robots_txt_url(url)
-    if robots_url is None:
-        return {"robots_url": None, "allowed": None, "status": "ROBOTS_UNAVAILABLE"}
-    try:
-        request = Request(robots_url, headers={"User-Agent": FETCH_USER_AGENT})
-        with urlopen(request, timeout=6) as response:
-            status = int(response.status)
-            raw = response.read(256_000)
-        if status == 404:
-            return {"robots_url": robots_url, "allowed": True, "status": "ROBOTS_NOT_FOUND"}
-        if status >= 400:
-            return {"robots_url": robots_url, "allowed": None, "status": "ROBOTS_UNAVAILABLE"}
-        parser = robotparser.RobotFileParser()
-        parser.set_url(robots_url)
-        parser.parse(raw.decode("utf-8", errors="ignore").splitlines())
-        allowed = parser.can_fetch(FETCH_USER_AGENT, url)
-        return {
-            "robots_url": robots_url,
-            "allowed": allowed,
-            "status": "ALLOWED" if allowed else "DISALLOWED",
-        }
-    except HTTPError as exc:
-        if getattr(exc, "code", None) == 404:
-            return {"robots_url": robots_url, "allowed": True, "status": "ROBOTS_NOT_FOUND"}
-        return {"robots_url": robots_url, "allowed": None, "status": "ROBOTS_UNAVAILABLE"}
-    except (URLError, TimeoutError, OSError):
-        return {"robots_url": robots_url, "allowed": None, "status": "ROBOTS_UNAVAILABLE"}
-
-
-def _latest_previous_hash(source: SourcePolicy) -> str | None:
-    snapshot_root = DATA_DIR / "snapshots"
-    safe_id = _safe_source_id(source.source_id)
-    if not snapshot_root.exists():
-        return None
-    candidates = sorted(
-        snapshot_root.glob(f"*/{safe_id}_*.*"),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
-    for path in candidates:
-        stem = path.stem
-        prefix = f"{safe_id}_"
-        if not stem.startswith(prefix):
-            continue
-        digest = stem[len(prefix):]
-        if digest:
-            return f"sha256:{digest}"
-    return None
-
-
-def _safe_source_id(source_id: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9_.-]+", "_", source_id)[:80]
-
-
-def _snapshot_suffix(source: SourcePolicy, body: bytes) -> str:
-    url = str(source.url).lower()
-    if body[:8].startswith(b"%PDF") or url.endswith(".pdf"):
-        return ".pdf"
-    if _looks_like_html(body):
-        return ".html"
-    return ".bin"
-
-
-def _guess_snapshot_mime(source: SourcePolicy, body: bytes) -> str:
-    suffix = _snapshot_suffix(source, body)
-    if suffix == ".pdf":
-        return "application/pdf"
-    if suffix == ".html":
-        return "text/html"
-    return "application/octet-stream"
-
-
-def _save_snapshot(source: SourcePolicy, body: bytes, checked_at: datetime, page_hash: str) -> str:
-    snapshot_dir = DATA_DIR / "snapshots" / checked_at.strftime("%Y%m%d")
-    snapshot_dir.mkdir(parents=True, exist_ok=True)
-    safe_id = _safe_source_id(source.source_id)
-    digest = page_hash.split(":", 1)[-1][:16]
-    suffix = _snapshot_suffix(source, body)
-    path = snapshot_dir / f"{safe_id}_{digest}{suffix}"
-    path.write_bytes(body)
-    return str(Path("data") / "snapshots" / checked_at.strftime("%Y%m%d") / path.name)
-
-
-def _looks_like_html(body: bytes) -> bool:
-    sample = body[:512].lower()
-    return b"<html" in sample or b"<!doctype html" in sample or b"<body" in sample
 
 
 def _finding_for_program(

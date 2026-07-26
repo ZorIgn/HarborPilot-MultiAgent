@@ -5,6 +5,7 @@ import ipaddress
 import os
 import re
 import socket
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from html import unescape
@@ -15,7 +16,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse, urljoin
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from harbor_agent.models import FieldEvidenceRecord, FieldExtractionCandidate, FieldVerificationStatus, SourceTrustLevel
+from harbor_agent.models import FieldEvidenceRecord, FieldExtractionCandidate, FieldVerificationStatus, SourceScope, SourceTrustLevel
 from harbor_agent.services.data_loader import DATA_DIR
 
 USER_AGENT = "HarborPilotAI/0.1 admissions-source-snapshot (+human review)"
@@ -38,9 +39,14 @@ class SnapshotResult:
     error: str | None = None
     robots_url: str | None = None
     robots_allowed: bool | None = None
+    final_url: str | None = None
+    page_title: str | None = None
+    attempts: int = 0
+    duration_ms: int = 0
+    html: str = ""
 
 
-def _fetch_with_playwright(url: str) -> tuple[int, str, bytes] | None:
+def _fetch_with_playwright(url: str) -> tuple[int, str, bytes, str] | None:
     if os.getenv("HARBORPILOT_USE_PLAYWRIGHT", "0").lower() not in {"1", "true", "yes"}:
         return None
     try:
@@ -60,21 +66,34 @@ def _fetch_with_playwright(url: str) -> tuple[int, str, bytes] | None:
                 raise ValueError("browser navigation redirected to an unsafe URL")
             html = page.content().encode("utf-8", errors="ignore")[:MAX_BYTES]
             status = int(response.status) if response else 200
+            final_url = page.url
             browser.close()
-            return status, "text/html; rendered=playwright", html
+            return status, "text/html; rendered=playwright", html, final_url
     except Exception:
         return None
 
 
-def _fetch_with_urllib(url: str) -> tuple[int, str, bytes]:
+def _fetch_with_urllib(url: str) -> tuple[int, str, bytes, str]:
     request = Request(url, headers={"User-Agent": USER_AGENT}, method="GET")
     opener = build_opener(_SafeRedirectHandler())
     with opener.open(request, timeout=18) as response:
-        return int(getattr(response, "status", 200)), str(response.headers.get("content-type") or "").lower(), response.read(MAX_BYTES)
+        return (
+            int(getattr(response, "status", 200)),
+            str(response.headers.get("content-type") or "").lower(),
+            response.read(MAX_BYTES),
+            str(getattr(response, "url", url) or url),
+        )
 
 
-def snapshot_source(url: str, *, dry_run: bool = False, checked_at: datetime | None = None) -> SnapshotResult:
+def snapshot_source(
+    url: str,
+    *,
+    dry_run: bool = False,
+    checked_at: datetime | None = None,
+    max_attempts: int = 2,
+) -> SnapshotResult:
     checked = checked_at or datetime.now(UTC)
+    started = time.perf_counter()
     unsafe_reason = _unsafe_url_reason(url)
     if unsafe_reason:
         return SnapshotResult(
@@ -83,9 +102,21 @@ def snapshot_source(url: str, *, dry_run: bool = False, checked_at: datetime | N
             status="UNSAFE_URL_REJECTED",
             checked_at=checked,
             error=unsafe_reason,
+            final_url=url,
+            attempts=0,
+            duration_ms=_elapsed_ms(started),
         )
     if dry_run:
-        return SnapshotResult(ok=False, url=url, status="SKIPPED_DRY_RUN", checked_at=checked, robots_url=_robots_url(url))
+        return SnapshotResult(
+            ok=False,
+            url=url,
+            status="SKIPPED_DRY_RUN",
+            checked_at=checked,
+            robots_url=_robots_url(url),
+            final_url=url,
+            attempts=0,
+            duration_ms=_elapsed_ms(started),
+        )
     robots_allowed = _robots_allowed(url)
     if robots_allowed is False:
         return SnapshotResult(
@@ -96,14 +127,35 @@ def snapshot_source(url: str, *, dry_run: bool = False, checked_at: datetime | N
             robots_url=_robots_url(url),
             robots_allowed=False,
             error="robots.txt does not allow automated fetch for this user agent",
+            final_url=url,
+            attempts=0,
+            duration_ms=_elapsed_ms(started),
         )
-    try:
-        rendered = _fetch_with_playwright(url)
-        if rendered is None:
-            http_status, content_type, body = _fetch_with_urllib(url)
-        else:
-            http_status, content_type, body = rendered
-    except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
+    attempts = 0
+    last_error: Exception | None = None
+    http_status = None
+    content_type = ""
+    body = b""
+    final_url = url
+    for attempt in range(1, max(1, min(int(max_attempts), 3)) + 1):
+        attempts = attempt
+        try:
+            rendered = _fetch_with_playwright(url)
+            if rendered is None:
+                http_status, content_type, body, final_url = _fetch_with_urllib(url)
+            else:
+                http_status, content_type, body, final_url = rendered
+            # A redirect is a new trust decision, not merely a transport detail.
+            redirect_reason = _unsafe_url_reason(final_url)
+            if redirect_reason:
+                raise ValueError(f"redirected source is unsafe: {redirect_reason}")
+            break
+        except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
+            last_error = exc
+            if attempt < max(1, min(int(max_attempts), 3)):
+                time.sleep(0.15 * (2 ** (attempt - 1)))
+    if last_error is not None and not body:
+        exc = last_error
         return SnapshotResult(
             ok=False,
             url=url,
@@ -112,15 +164,25 @@ def snapshot_source(url: str, *, dry_run: bool = False, checked_at: datetime | N
             robots_url=_robots_url(url),
             robots_allowed=robots_allowed,
             error=f"{type(exc).__name__}: {exc}",
+            final_url=final_url,
+            attempts=attempts,
+            duration_ms=_elapsed_ms(started),
         )
     page_hash = "sha256:" + hashlib.sha256(body).hexdigest()
     mime = _mime_from(content_type, url, body)
     snapshot_path = _write_snapshot(url, body, checked, page_hash, mime)
     text = _extract_text(body, mime)
+    html = body.decode("utf-8", errors="ignore") if mime != "application/pdf" else ""
+    content_error = _content_rejection_reason(body, mime)
+    transport_ok = bool(http_status is not None and http_status < 400)
     return SnapshotResult(
-        ok=http_status < 400,
+        ok=transport_ok and content_error is None,
         url=url,
-        status="FETCH_OK" if http_status < 400 else "REVIEW_REQUIRED",
+        status=(
+            "CONTENT_REVIEW_REQUIRED"
+            if transport_ok and content_error
+            else ("FETCH_OK" if transport_ok else "REVIEW_REQUIRED")
+        ),
         checked_at=checked,
         http_status=http_status,
         page_hash=page_hash,
@@ -128,8 +190,14 @@ def snapshot_source(url: str, *, dry_run: bool = False, checked_at: datetime | N
         snapshot_mime=mime,
         content_bytes=len(body),
         text=text,
+        error=content_error,
         robots_url=_robots_url(url),
         robots_allowed=robots_allowed,
+        final_url=final_url,
+        page_title=_extract_title(html),
+        attempts=attempts,
+        duration_ms=_elapsed_ms(started),
+        html=html,
     )
 
 
@@ -167,6 +235,23 @@ def _unsafe_url_reason(url: str) -> str | None:
     return None
 
 
+def _content_rejection_reason(body: bytes, mime: str) -> str | None:
+    if mime == "application/pdf":
+        return None
+    sample = body[:200_000].decode("utf-8", errors="ignore").lower()
+    challenge_markers = {
+        "_incapsula_resource": "anti-bot challenge page (Incapsula)",
+        "cf-chl-": "anti-bot challenge page (Cloudflare)",
+        "captcha": "captcha challenge page",
+        "verify you are human": "human-verification challenge page",
+        "access denied": "access-denied response page",
+    }
+    for marker, reason in challenge_markers.items():
+        if marker in sample:
+            return reason
+    return None
+
+
 def extract_field_candidates(text: str) -> list[FieldExtractionCandidate]:
     cleaned = _normalize_space(text)
     candidates = [
@@ -189,10 +274,17 @@ def evidence_records_from_candidates(
     snapshot: SnapshotResult,
     candidates: Iterable[FieldExtractionCandidate],
     trust_level: SourceTrustLevel | str,
+    source_scope: SourceScope | None = None,
+    page_title: str | None = None,
+    final_url: str | None = None,
+    binding_status: str = "not_checked",
+    binding_score: int = 0,
 ) -> list[FieldEvidenceRecord]:
     priority = 1 if str(trust_level) == SourceTrustLevel.official.value or trust_level == SourceTrustLevel.official else 8
     records: list[FieldEvidenceRecord] = []
     for candidate in candidates:
+        if candidate.value is None:
+            continue
         records.append(
             FieldEvidenceRecord(
                 program_id=program_id,
@@ -217,6 +309,11 @@ def evidence_records_from_candidates(
                     "FieldCandidateAgent",
                     "HumanReviewGateAgent",
                 ],
+                source_scope=source_scope,
+                page_title=page_title,
+                final_url=final_url,
+                binding_status=binding_status,
+                binding_score=binding_score,
             )
         )
     return records
@@ -254,7 +351,7 @@ def _robots_allowed(url: str) -> bool | None:
     if not robots_url:
         return None
     try:
-        status, _, body = _fetch_with_urllib(robots_url)
+        status, _, body, _ = _fetch_with_urllib(robots_url)
         if status >= 400:
             return None
     except Exception:
@@ -329,6 +426,20 @@ def _normalize_space(text: str) -> str:
     return re.sub(r"\s+", " ", text or "").strip()
 
 
+def _extract_title(html: str) -> str | None:
+    if not html:
+        return None
+    match = re.search(r"(?is)<title[^>]*>(.*?)</title>", html)
+    if not match:
+        return None
+    title = _normalize_space(unescape(match.group(1)))
+    return title[:240] or None
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(0, round((time.perf_counter() - started) * 1000))
+
+
 def _snippet(text: str, pattern: str, window: int = 180) -> str | None:
     match = re.search(pattern, text, re.IGNORECASE)
     if not match:
@@ -350,8 +461,36 @@ def _tuition_candidate(text: str) -> FieldExtractionCandidate | None:
     snippet = _snippet(text, "tuition|programme fee|program fee|application fee|\u5b66\u8d39|\u8d39\u7528")
     if not snippet:
         return None
-    amount = re.search(r"(?:HK\$|S\$|SGD|HKD|USD|RMB|CNY)?\s*[0-9][0-9,]{3,}", snippet, re.IGNORECASE)
-    return FieldExtractionCandidate(field_name="tuition_hkd", value=amount.group(0).strip() if amount else None, evidence_snippet=snippet, confidence="medium" if amount else "low")
+    amount = re.search(
+        r"(?P<currency>HK\$|HKD|S\$|SGD|USD|RMB|CNY)\s*(?P<amount>[0-9][0-9,]{3,})",
+        snippet,
+        re.IGNORECASE,
+    )
+    if amount is None:
+        amount = re.search(
+            r"(?P<currency>)(?P<amount>[0-9][0-9,]{3,})(?=\s*(?:per\s+year|tuition|fee|学费|费用))",
+            snippet,
+            re.IGNORECASE,
+        )
+    if not amount:
+        return FieldExtractionCandidate(
+            field_name="tuition_original",
+            value=None,
+            evidence_snippet=snippet,
+            confidence="low",
+        )
+    currency = (amount.group("currency") or "UNSPECIFIED").upper()
+    value = f"{currency} {amount.group('amount')}"
+    # Never put SGD/USD/RMB or an unspecified amount into a field whose unit
+    # contract is explicitly HKD. Currency conversion requires a separate
+    # rate source and conversion timestamp.
+    field_name = "tuition_hkd" if currency in {"HK$", "HKD"} else "tuition_original"
+    return FieldExtractionCandidate(
+        field_name=field_name,
+        value=value,
+        evidence_snippet=snippet,
+        confidence="medium",
+    )
 
 
 def _language_candidate(text: str) -> FieldExtractionCandidate | None:
@@ -376,7 +515,11 @@ def _application_candidate(text: str) -> FieldExtractionCandidate | None:
 
 
 def _essay_candidate(text: str) -> FieldExtractionCandidate | None:
-    snippet = _snippet(text, "personal statement|statement of purpose|essay|writing sample|study plan|\u4e2a\u4eba\u9648\u8ff0|\u6587\u4e66|\u5b66\u4e60\u8ba1\u5212")
+    snippet = _snippet(
+        text,
+        "personal statement|statement of purpose|admission essay|essay question|writing sample|"
+        "\u4e2a\u4eba\u9648\u8ff0|\u7533\u8bf7\u6587\u4e66|\u6587\u4e66\u9898\u76ee",
+    )
     if not snippet:
         return None
     return FieldExtractionCandidate(field_name="essay_prompts", value=snippet[:260], evidence_snippet=snippet, confidence="medium")
