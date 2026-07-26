@@ -106,6 +106,8 @@ npm run dev
 
 打开 <http://localhost:3001>。后端默认允许 `localhost:3001` 和 `127.0.0.1:3001` 跨端口访问。
 
+前端 `dev` 使用独立的 `next-dev` 输出目录，`build/start` 使用 `next-build`，避免开发服务和生产构建共用 `.next` 后出现缺 chunk 的 500。若 3001 曾经跑过旧进程，先停止旧 Node 进程再重新执行 `npm run dev` 或 `npm run start`。
+
 ### 3. Docker
 
 ```bash
