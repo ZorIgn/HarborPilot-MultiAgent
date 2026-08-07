@@ -41,7 +41,7 @@
   "recommendation_quotas": {
     "reach": 14,
     "target": 14,
-    "safe": 12,
+    "safer": 12,
     "candidate": 10,
     "not_recommended": 12,
     "max_total": 60
@@ -49,7 +49,7 @@
   "application_mix_quotas": {
     "reach": 4,
     "target": 4,
-    "safe": 3,
+    "safer": 3,
     "max_total": 10
   },
   "agent_adjustable_fields": [

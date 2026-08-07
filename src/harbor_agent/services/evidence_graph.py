@@ -240,10 +240,7 @@ def _records_from_existing_evidence(program: Program) -> list[FieldEvidenceRecor
                 != FieldVerificationStatus.official_verified_current,
                 evidence_snippet=evidence.excerpt,
                 snapshot_url=evidence.official_url,
-                agent_chain=_agent_chain_for(
-                    evidence.source_type,
-                    _status_from_legacy(evidence.status, evidence.source_type),
-                ),
+                execution_ref=None,
             )
         )
     return records
@@ -282,7 +279,7 @@ def _synthetic_review_records(program: Program) -> list[FieldEvidenceRecord]:
                 != FieldVerificationStatus.official_verified_current,
                 evidence_snippet=_synthetic_evidence_snippet(program, field_name),
                 snapshot_url=source_url,
-                agent_chain=_agent_chain_for("official_program_index", _field_status(program, field_name, value)),
+                execution_ref=None,
             )
         )
     return records
@@ -341,13 +338,3 @@ def _source_priority(source_type: str) -> int:
         "community_result": 6,
     }
     return priority.get(source_type, 99)
-
-
-def _agent_chain_for(source_type: str, status: FieldVerificationStatus) -> list[str]:
-    chain = ["SourceDiscoveryAgent", "PageFetchAgent", "FieldExtractionAgent"]
-    if source_type.startswith("official"):
-        chain.append("CrossCheckAgent")
-    else:
-        chain.append("CommunitySignalAgent")
-    chain.append("HumanReviewAgent" if status != FieldVerificationStatus.official_verified_current else "AuditAgent")
-    return chain

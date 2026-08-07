@@ -6,6 +6,7 @@
     "dev": "set NEXT_DIST_DIR=next-dev&& next dev -p 3001",
     "build": "set NEXT_DIST_DIR=next-build&& set NEXT_TELEMETRY_DISABLED=1&& set NEXT_IGNORE_INCORRECT_LOCKFILE=1&& set NEXT_TRACE_SPAN_THRESHOLD_MS=2147483647&& next build",
     "start": "set NEXT_DIST_DIR=next-build&& next start -p 3001",
+    "typecheck": "tsc --noEmit",
     "lint": "next lint"
   },
   "dependencies": {

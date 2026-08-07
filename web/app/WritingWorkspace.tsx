@@ -680,7 +680,7 @@ function programMeta(program: ProgramMatch["program"]) {
 }
 
 function tierLabel(tier: ProgramMatch["tier"]) {
-  return ({ reach: "冲刺", target: "主申", safe: "保底", candidate: "候选", not_recommended: "不建议" } as Record<ProgramMatch["tier"], string>)[tier] ?? tier;
+  return ({ reach: "冲刺", target: "主申", safer: "相对稳妥", candidate: "候选", not_recommended: "不建议" } as Record<ProgramMatch["tier"], string>)[tier] ?? tier;
 }
 
 function writingExportGate(writing: WorkflowResult["writing"], rubric: WritingReviewRubric | null, targetProgram: ProgramMatch | null, documentType: DocumentType): WritingExportGateState {

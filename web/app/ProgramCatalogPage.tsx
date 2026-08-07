@@ -14,7 +14,7 @@ type StrategyBand = NonNullable<ProgramMatch["strategy_band"]>;
 type PlanTrustStats = { total: number; currentOfficial: number; previousReference: number; needsReview: number; selectedNeedsReview: number };
 type CatalogReadinessStats = { total: number; currentOfficial: number; referenceReady: number; incomplete: number };
 
-const bandKeys: StrategyBand[] = ["reach", "target", "safe", "candidate", "blocked"];
+const bandKeys: StrategyBand[] = ["reach", "target", "safer", "candidate", "blocked"];
 
 export function ProgramCatalogPage(props: {
   payload: ApplicantPayload;
@@ -123,7 +123,7 @@ const tabs = bandKeys.map((band) => ({
 
     <section className="status-grid">
       <Metric label="择校方案项目" value={String(editableMatches.length)} detail="先展示 Agent 分档结果，不把全量库铺满首屏" />
-      <Metric label="冲刺 / 主申 / 保底" value={bandedMatches.reach.length + "/" + bandedMatches.target.length + "/" + bandedMatches.safe.length} detail="按院校层级、GPA、语言、方向、经历和预算规则" />
+      <Metric label="冲刺 / 主申 / 相对稳妥" value={bandedMatches.reach.length + "/" + bandedMatches.target.length + "/" + bandedMatches.safer.length} detail="按院校层级、GPA、语言、方向、经历和预算规则" />
       <Metric label="学生已保存" value={String(props.selectedProgramIds.length)} detail="时间线和文书只读取最终申请清单" />
       <Metric label="当前可用项目" value={String(availableProgramTotal)} detail="项目库与当前 Agent 方案去重；全量库在下方按需加载" />
     </section>
@@ -218,7 +218,7 @@ function groupByBand(matches: ProgramMatch[]): Record<StrategyBand, ProgramMatch
   return {
     reach: matches.filter((item) => bandKey(item) === "reach"),
     target: matches.filter((item) => bandKey(item) === "target"),
-    safe: matches.filter((item) => bandKey(item) === "safe"),
+    safer: matches.filter((item) => bandKey(item) === "safer"),
     candidate: matches.filter((item) => bandKey(item) === "candidate"),
     blocked: matches.filter((item) => bandKey(item) === "blocked"),
   };
@@ -227,10 +227,10 @@ function groupByBand(matches: ProgramMatch[]): Record<StrategyBand, ProgramMatch
 function bandKey(item: ProgramMatch): StrategyBand {
   if (item.strategy_band) return item.strategy_band;
   if (item.tier === "not_recommended") return "blocked";
-  if (["reach", "target", "safe", "candidate"].includes(item.tier)) return item.tier as StrategyBand;
+  if (["reach", "target", "safer", "candidate"].includes(item.tier)) return item.tier as StrategyBand;
   return "candidate";
 }
-function bandOrder(value: StrategyBand) { return { reach: 0, target: 1, safe: 2, candidate: 3, blocked: 4 }[value]; }
+function bandOrder(value: StrategyBand) { return { reach: 0, target: 1, safer: 2, candidate: 3, blocked: 4 }[value]; }
 function tierForBand(band: StrategyBand): ProgramMatch["tier"] { return band === "blocked" ? "not_recommended" : band; }
 function applyBandOverride(item: ProgramMatch, band?: StrategyBand): ProgramMatch { return band ? { ...item, strategy_band: band, tier: tierForBand(band) } : item; }
 
@@ -246,7 +246,7 @@ function EditablePlanTable({ matches, bandedMatches, selectedIds, onToggle, onIn
     <div className="scheme-band-tabs">{bandKeys.map((band) => <button type="button" className={activeBand === band ? "active" : ""} onClick={() => setActiveBand(band)} key={band}><span>{strategyLabel(band)}</span><strong>{bandedMatches[band].length}</strong></button>)}</div>
     <p className="plan-table-scroll-hint" id="plan-table-scroll-hint">左右滑动查看完整分档</p>
     <div className="plan-table-wrap" tabIndex={0} aria-describedby="plan-table-scroll-hint"><table className="plan-table editable"><thead><tr><th>分档</th><th>学校 / 项目</th><th>推荐依据</th><th>主要风险</th><th>关键申请信息</th><th>操作</th></tr></thead><tbody>{visible.map((item) => <tr key={item.program.id}>
-      <td><select value={bandKey(item)} onChange={(event) => onBandChange(item.program.id, event.target.value as StrategyBand)}><option value="reach">冲刺</option><option value="target">主申</option><option value="safe">保底</option><option value="candidate">候选</option><option value="blocked">不建议</option></select></td>
+      <td><select value={bandKey(item)} onChange={(event) => onBandChange(item.program.id, event.target.value as StrategyBand)}><option value="reach">冲刺</option><option value="target">主申</option><option value="safer">相对稳妥</option><option value="candidate">候选</option><option value="blocked">不建议</option></select></td>
       <td><strong>{displayProgram(item.program)}</strong><small>{displayProgramSecondary(item.program)}</small><small>{programMeta(item.program)}</small><small>{formalUseLabel(item)}</small></td>
       <td><p>{item.consultant_note ?? item.explanation?.decision_basis?.[0] ?? item.reasons[0]}</p><small>匹配分 {Math.round(item.fit_score)} / 100</small></td>
       <td><p>{item.risks[0] ?? programCatalogCopy.defaultRisk}</p><small>{item.actions[0] ?? programCatalogCopy.defaultAction}</small></td>
@@ -344,9 +344,9 @@ function displayProgram(program: ProgramLike) { return program.name_zh || progra
 function displayProgramSecondary(program: ProgramLike) { return program.name_zh && program.name && program.name_zh !== program.name ? program.name : program.institution || programCatalogCopy.fallbackEnglishName; }
 function programMeta(program: ProgramLike) { return [program.institution_zh || program.institution, program.school_zh || program.school || programCatalogCopy.fallbackSchool, regionLabel(program.country)].filter(Boolean).join(" · "); }
 function regionLabel(country: ProgramLike["country"]) { return country === "HK" ? "香港" : "新加坡"; }
-function tierLabel(item: ProgramMatch) { if (item.tier === "not_recommended") return "不建议"; if (!item.formal_recommendation) return "预评估"; return { reach: "冲刺", target: "主申", safe: "保底", candidate: "候选" }[item.tier]; }
+function tierLabel(item: ProgramMatch) { if (item.tier === "not_recommended") return "不建议"; if (!item.formal_recommendation) return "预评估"; return { reach: "冲刺", target: "主申", safer: "相对稳妥", candidate: "候选" }[item.tier]; }
 function formalUseLabel(item: ProgramMatch) { return item.formal_recommendation ? "正式使用前仍建议打开官网复核" : "预评估 / 待官网核验"; }
-function strategyLabel(value?: ProgramMatch["strategy_band"]) { return { reach: "冲刺", target: "主申", safe: "保底", candidate: "候选", blocked: "不建议" }[value ?? "candidate"]; }
+function strategyLabel(value?: ProgramMatch["strategy_band"]) { return { reach: "冲刺", target: "主申", safer: "相对稳妥", candidate: "候选", blocked: "不建议" }[value ?? "candidate"]; }
 function intentLabel(intent: string) { return { "computer science": "计算机", "business analytics": "商业分析", artificial_intelligence: "人工智能", computer_science: "计算机科学", data_science: "数据科学", fintech: "金融科技", software_engineering: "软件工程", cyber_security: "网络安全", finance: "金融", management: "商科管理", education_language: "教育/语言", interdisciplinary: "跨学科" }[intent] ?? intent; }
 function band(value?: number) { if (value === undefined) return "未知"; if (value >= 78) return "高"; if (value >= 62) return "中"; return "低"; }
 function formatMoney(value: number | null | undefined) { return value ? String(Math.round(value / 10000)) + " 万港币" : programCatalogCopy.unverifiedMoney; }

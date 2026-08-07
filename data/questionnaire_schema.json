@@ -59,7 +59,7 @@
       "source_template": "个人陈述调查问卷.docx",
       "fields": [
         {"id": "career_plan", "label": "毕业后的短期目标和三到五年目标分别是什么？", "type": "textarea", "required": true, "placeholder": "尽量具体到岗位、行业、城市/地区、希望解决的问题。"},
-        {"id": "career_transfer", "label": "目标项目如何帮助你从当前背景走向这些目标？", "type": "textarea", "required": false, "placeholder": "写能力、方法、资源或行业理解，不写录取概率。"}
+        {"id": "career_transfer", "label": "目标项目如何帮助你从当前背景走向这些目标？", "type": "textarea", "required": false, "placeholder": "写能力、方法、资源或行业理解，不推测录取结果。"}
       ]
     },
     {

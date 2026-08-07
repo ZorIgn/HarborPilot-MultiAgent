@@ -7,6 +7,7 @@ from typing import Any
 from uuid import uuid4
 
 from harbor_agent.models import AgentStatus
+from harbor_agent.runtime.sanitizer import sanitize_runtime_payload
 from harbor_agent.services.data_loader import DATA_DIR
 
 
@@ -660,7 +661,11 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) 
 
 
 def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA busy_timeout=10000")
+    conn.execute("PRAGMA foreign_keys=ON")
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -707,3 +712,231 @@ def _merge_payload(payload_json: str, patch: dict[str, Any]) -> str:
     payload = json.loads(payload_json or "{}")
     payload.update(patch)
     return json.dumps(payload, ensure_ascii=False)
+
+from contextlib import closing
+
+
+def _ensure_multi_agent_schema() -> None:
+    """Create isolated tables for the supervisor runtime without replacing legacy jobs."""
+    _ensure_schema()
+    with closing(_connect()) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS multi_agent_workflows (
+                workflow_id TEXT PRIMARY KEY,
+                goal TEXT NOT NULL,
+                owner_id TEXT,
+                status TEXT NOT NULL,
+                current_agent TEXT,
+                state_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS agent_checkpoints (
+                checkpoint_id TEXT PRIMARY KEY,
+                workflow_id TEXT NOT NULL,
+                state_schema_version TEXT NOT NULL,
+                state_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                current_agent TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS runtime_trace_events (
+                event_id TEXT PRIMARY KEY,
+                workflow_id TEXT NOT NULL,
+                parent_event_id TEXT,
+                event_type TEXT NOT NULL,
+                agent_name TEXT,
+                tool_name TEXT,
+                tool_call_id TEXT,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                duration_ms INTEGER,
+                model TEXT,
+                provider TEXT,
+                prompt_tokens INTEGER,
+                completion_tokens INTEGER,
+                cached_tokens INTEGER,
+                total_tokens INTEGER,
+                cost_usd REAL,
+                input_summary TEXT,
+                output_summary TEXT,
+                error_type TEXT,
+                error_message TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS llm_usage (
+                usage_id TEXT PRIMARY KEY,
+                workflow_id TEXT NOT NULL,
+                trace_event_id TEXT NOT NULL,
+                model TEXT,
+                provider TEXT,
+                prompt_tokens INTEGER,
+                completion_tokens INTEGER,
+                cached_tokens INTEGER,
+                total_tokens INTEGER,
+                cost_usd REAL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.commit()
+
+
+def create_multi_agent_workflow(
+    workflow_id: str,
+    goal: str,
+    state_json: dict[str, Any],
+    *,
+    owner_id: str | None = None,
+) -> None:
+    _ensure_multi_agent_schema()
+    now = _now()
+    payload = json.dumps(_redact_runtime_payload(state_json), ensure_ascii=False)
+    with closing(_connect()) as conn:
+        conn.execute(
+            """
+            INSERT INTO multi_agent_workflows
+            (workflow_id, goal, owner_id, status, current_agent, state_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (workflow_id, goal, owner_id, str(state_json.get("status", "RUNNING")), state_json.get("current_agent"), payload, now, now),
+        )
+        conn.commit()
+
+
+def update_multi_agent_workflow(state_json: dict[str, Any]) -> None:
+    _ensure_multi_agent_schema()
+    payload = json.dumps(_redact_runtime_payload(state_json), ensure_ascii=False)
+    with closing(_connect()) as conn:
+        conn.execute(
+            """
+            UPDATE multi_agent_workflows
+            SET status = ?, current_agent = ?, state_json = ?, updated_at = ?
+            WHERE workflow_id = ?
+            """,
+            (str(state_json.get("status", "RUNNING")), state_json.get("current_agent"), payload, _now(), state_json["workflow_id"]),
+        )
+        conn.commit()
+
+
+def get_multi_agent_workflow(workflow_id: str) -> dict[str, Any] | None:
+    _ensure_multi_agent_schema()
+    with closing(_connect()) as conn:
+        row = conn.execute("SELECT * FROM multi_agent_workflows WHERE workflow_id = ?", (workflow_id,)).fetchone()
+    if row is None:
+        return None
+    result = dict(row)
+    result["state"] = json.loads(result.pop("state_json") or "{}")
+    return result
+
+
+def list_multi_agent_workflows(limit: int = 80) -> list[dict[str, Any]]:
+    _ensure_multi_agent_schema()
+    with closing(_connect()) as conn:
+        rows = conn.execute(
+            """SELECT workflow_id, goal, owner_id, status, current_agent, created_at, updated_at
+            FROM multi_agent_workflows ORDER BY updated_at DESC LIMIT ?""",
+            (max(1, min(limit, 200)),),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def save_workflow_checkpoint(
+    *,
+    workflow_id: str,
+    state_schema_version: str,
+    state_json: dict[str, Any],
+    status: str,
+    current_agent: str | None,
+) -> str:
+    _ensure_multi_agent_schema()
+    checkpoint_id = f"ckpt_{uuid4().hex[:16]}"
+    created_at = _now()
+    payload = json.dumps(_redact_runtime_payload(state_json), ensure_ascii=False)
+    with closing(_connect()) as conn:
+        conn.execute(
+            """INSERT INTO agent_checkpoints
+            (checkpoint_id, workflow_id, state_schema_version, state_json, status, current_agent, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (checkpoint_id, workflow_id, state_schema_version, payload, status, current_agent, created_at),
+        )
+        conn.execute(
+            """UPDATE multi_agent_workflows SET status = ?, current_agent = ?, state_json = ?, updated_at = ?
+            WHERE workflow_id = ?""",
+            (status, current_agent, payload, created_at, workflow_id),
+        )
+        conn.commit()
+    return checkpoint_id
+
+
+def load_workflow_checkpoint(workflow_id: str) -> dict[str, Any] | None:
+    _ensure_multi_agent_schema()
+    with closing(_connect()) as conn:
+        row = conn.execute(
+            """SELECT checkpoint_id, workflow_id, state_schema_version, state_json, status, current_agent, created_at
+            FROM agent_checkpoints WHERE workflow_id = ? ORDER BY created_at DESC LIMIT 1""",
+            (workflow_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    result = dict(row)
+    result["state"] = json.loads(result.pop("state_json") or "{}")
+    return result
+
+
+def record_runtime_trace_event(event: dict[str, Any]) -> None:
+    _ensure_multi_agent_schema()
+    # Trace rows are a persistence boundary too; sanitize before extracting
+    # scalar columns so secrets cannot survive in summaries or diagnostics.
+    event = sanitize_runtime_payload(event)
+    fields = [
+        "event_id", "workflow_id", "parent_event_id", "event_type", "agent_name", "tool_name", "tool_call_id",
+        "started_at", "finished_at", "duration_ms", "model", "provider", "prompt_tokens", "completion_tokens",
+        "cached_tokens", "total_tokens", "cost_usd", "input_summary", "output_summary", "error_type", "error_message",
+    ]
+    values = [event.get(field) for field in fields]
+    with closing(_connect()) as conn:
+        conn.execute(
+            f"INSERT OR REPLACE INTO runtime_trace_events ({', '.join(fields)}) VALUES ({', '.join('?' for _ in fields)})",
+            values,
+        )
+        if event.get("total_tokens") is not None:
+            conn.execute(
+                """INSERT INTO llm_usage
+                (usage_id, workflow_id, trace_event_id, model, provider, prompt_tokens, completion_tokens, cached_tokens, total_tokens, cost_usd, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    f"usage_{uuid4().hex[:16]}", event.get("workflow_id"), event.get("event_id"), event.get("model"),
+                    event.get("provider"), event.get("prompt_tokens"), event.get("completion_tokens"), event.get("cached_tokens"),
+                    event.get("total_tokens"), event.get("cost_usd"), _now(),
+                ),
+            )
+        conn.commit()
+
+
+def list_runtime_trace_events(workflow_id: str) -> list[dict[str, Any]]:
+    _ensure_multi_agent_schema()
+    with closing(_connect()) as conn:
+        rows = conn.execute(
+            "SELECT * FROM runtime_trace_events WHERE workflow_id = ? ORDER BY started_at ASC, event_id ASC",
+            (workflow_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _redact_runtime_payload(value: Any) -> Any:
+    """Backward-compatible wrapper around the shared recursive sanitizer."""
+
+    return sanitize_runtime_payload(value)

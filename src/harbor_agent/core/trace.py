@@ -54,7 +54,7 @@ class TraceRecorder:
                 output_summary=str(state.get("output_summary", "")),
                 tool_calls=tool_calls or [],
                 model=model,
-                cost_usd=round(elapsed * 0.0001, 6),
+                cost_usd=None,
                 needs_human_reason=str(state.get("needs_human_reason") or "") or None,
             )
             self.events.append(event)

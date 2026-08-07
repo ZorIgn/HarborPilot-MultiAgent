@@ -3,7 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from pathlib import Path
 
-from harbor_agent.agents.profile import ProfileAgent
+from harbor_agent.services.deterministic_profile import normalize_profile
 from harbor_agent.core.rules import check_program_eligibility, evaluate_general_profile, hard_rules_pass, normalized_gpa_100
 from harbor_agent.models import ApplicantProfileInput
 from harbor_agent.services.data_loader import load_programs
@@ -17,7 +17,7 @@ def test_hard_rule_fails_when_language_is_missing() -> None:
     payload.language.test = "NONE"
     payload.language.overall = None
 
-    profile = ProfileAgent().run(payload)
+    profile = normalize_profile(payload)
     program = next(item for item in load_programs() if item.id == "nus-master-of-computing-2027")
     checks = check_program_eligibility(profile, program)
 
@@ -33,7 +33,7 @@ def test_toefl_is_not_reported_as_ielts() -> None:
     payload.language.test = "TOEFL"
     payload.language.overall = 90
 
-    profile = ProfileAgent().run(payload)
+    profile = normalize_profile(payload)
     program = next(item for item in load_programs() if item.id == "nus-master-of-computing-2027")
     checks = check_program_eligibility(profile, program)
 
@@ -56,7 +56,7 @@ def test_chinese_core_courses_satisfy_programming_and_statistics_prerequisites()
     payload.raw_interest_text = ""
     payload.additional_background.core_courses = ["Python 程序设计", "概率论与数理统计", "数据库系统"]
 
-    profile = ProfileAgent().run(payload)
+    profile = normalize_profile(payload)
     program = next(item for item in load_programs() if item.id == "cityu-msc-business-information-systems-2027")
     prerequisite = next(check for check in check_program_eligibility(profile, program) if check.rule_id == "prerequisite_signal")
 
@@ -72,7 +72,7 @@ def test_structured_core_courses_survive_profile_normalization_and_assessment() 
     payload.additional_background.core_courses = ["Linear Algebra 91", "Database Systems 88", "Statistics 90"]
     payload.additional_background.skills = ["Python", "SQL"]
 
-    profile = ProfileAgent().run(payload)
+    profile = normalize_profile(payload)
     assessment = evaluate_general_profile(profile)
     course_finding = assessment.dimension_findings[1]
 
@@ -98,7 +98,7 @@ def test_required_computing_background_blocks_unrelated_major_without_evidence()
     payload.additional_background.awards = []
     payload.experiences = []
 
-    profile = ProfileAgent().run(payload)
+    profile = normalize_profile(payload)
     program = next(item for item in load_programs() if item.id == "hku-master-of-science-in-computer-science-2027")
     checks = check_program_eligibility(profile, program)
     background = next(check for check in checks if check.rule_id == "required_background")
@@ -121,7 +121,7 @@ def test_required_computing_background_can_be_met_by_structured_courses() -> Non
     payload.additional_background.skills = ["SQL", "Python"]
     payload.experiences = []
 
-    profile = ProfileAgent().run(payload)
+    profile = normalize_profile(payload)
     program = next(item for item in load_programs() if item.id == "hku-master-of-science-in-computer-science-2027")
     checks = check_program_eligibility(profile, program)
     background = next(check for check in checks if check.rule_id == "required_background")
@@ -143,7 +143,7 @@ def test_sparse_profile_returns_needs_data_instead_of_competitiveness_grade() ->
     payload.additional_background.core_courses = []
     payload.additional_background.skills = []
 
-    assessment = evaluate_general_profile(ProfileAgent().run(payload))
+    assessment = evaluate_general_profile(normalize_profile(payload))
 
     assert assessment.overall_level == "NEEDS_DATA"
     assert assessment.confidence == "low"
@@ -163,7 +163,7 @@ def test_ai_intention_alone_does_not_satisfy_computing_background() -> None:
     payload.experiences = []
 
     program = next(item for item in load_programs() if item.id == "hku-master-of-science-in-computer-science-2027")
-    checks = check_program_eligibility(ProfileAgent().run(payload), program)
+    checks = check_program_eligibility(normalize_profile(payload), program)
     background = next(check for check in checks if check.rule_id == "required_background")
 
     assert background.passed is False
@@ -175,7 +175,7 @@ def test_tuition_above_budget_is_a_hard_rule_failure() -> None:
     payload.budget_hkd = 200000
     program = next(item for item in load_programs() if item.id == "smu-master-of-it-in-business-2027")
 
-    checks = check_program_eligibility(ProfileAgent().run(payload), program)
+    checks = check_program_eligibility(normalize_profile(payload), program)
     budget = next(check for check in checks if check.rule_id == "tuition_budget")
 
     assert budget.severity == "hard"
@@ -189,7 +189,7 @@ def test_low_language_score_is_reported_as_priority_blocker() -> None:
     payload.language.test = "IELTS"
     payload.language.overall = 5.5
 
-    assessment = evaluate_general_profile(ProfileAgent().run(payload))
+    assessment = evaluate_general_profile(normalize_profile(payload))
 
     assert "低于" in assessment.qualification_status
     assert "重考" in assessment.qualification_status

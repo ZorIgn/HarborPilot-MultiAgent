@@ -1,9 +1,24 @@
+export type ExecutionReference = {
+  workflow_id?: string | null;
+  trace_event_ids: string[];
+  produced_by_agent?: string | null;
+  produced_by_tool?: string | null;
+  tool_call_id?: string | null;
+};
+
 export type AgentContract = {
   agent_name: string;
   responsibility: string;
+  is_autonomous: boolean;
   inputs: string[];
   outputs: string[];
   tools: string[];
+  allowed_tools: string[];
+  decision_schema: string;
+  can_handoff_to: string[];
+  can_ask_user: boolean;
+  can_request_human: boolean;
+  max_tool_rounds: number;
   upstream_agents: string[];
   human_gate: string | null;
   deterministic_guardrails: string[];
@@ -81,6 +96,142 @@ export type AgentRunDetail = {
   events?: AgentRuntimeEvent[];
 };
 
+/**
+ * The Supervisor runtime owns these states. They intentionally do not reuse
+ * legacy queue/step types: a workflow is shared typed state, not a prewritten
+ * chain of display nodes.
+ */
+export type RuntimeWorkflowGoal =
+  | "background_assessment"
+  | "program_recommendation"
+  | "application_planning"
+  | "writing"
+  | "full_application_plan";
+
+export type RuntimeWorkflowStatus =
+  | "RUNNING"
+  | "WAITING_USER"
+  | "WAITING_HUMAN"
+  | "COMPLETED"
+  | "FAILED"
+  | "FAILED_RETRYABLE";
+
+export type RuntimeWorkflowTaskStatus =
+  | "PENDING"
+  | "RUNNING"
+  | "COMPLETED"
+  | "BLOCKED"
+  | "CANCELLED";
+
+export type RuntimeWorkflowTask = {
+  task_id: string;
+  description: string;
+  assigned_agent: string | null;
+  status: RuntimeWorkflowTaskStatus;
+  dependencies: string[];
+  result_ref: string | null;
+  blocker: string | null;
+};
+
+/** A persisted, resumable snapshot returned by /api/agent/workflows/:id. */
+export type RuntimeWorkflowState = {
+  schema_version: string;
+  workflow_id: string;
+  goal: RuntimeWorkflowGoal;
+  status: RuntimeWorkflowStatus;
+  user_request: string;
+  user_messages: Array<Record<string, unknown>>;
+  raw_profile: Record<string, unknown> | null;
+  normalized_profile: Record<string, unknown> | null;
+  questionnaire: Record<string, unknown> | null;
+  selected_program_ids: string[];
+  document_type: string;
+  assessment: Record<string, unknown> | null;
+  evidence_review: Record<string, unknown> | null;
+  missing_profile_fields: string[];
+  evidence_gaps: string[];
+  candidate_program_ids: string[];
+  researched_program_ids: string[];
+  program_matches: Record<string, Record<string, unknown>>;
+  selected_matches: Array<Record<string, unknown>>;
+  blocked_program_ids: string[];
+  fields_needing_verification: Record<string, string[]>;
+  verified_program_fields: Record<string, Record<string, unknown>>;
+  verification_conflicts: Array<Record<string, unknown>>;
+  timeline: Array<Record<string, unknown>>;
+  timeline_ready: boolean;
+  story_cards: Array<Record<string, unknown>>;
+  writing_draft: Record<string, unknown> | null;
+  writing_ready: boolean;
+  tasks: RuntimeWorkflowTask[];
+  current_agent: string | null;
+  previous_agent: string | null;
+  visited_agents: string[];
+  step_count: number;
+  max_steps: number;
+  agent_turn_counts: Record<string, number>;
+  tool_call_count: number;
+  supervisor_replans: number;
+  working_memory: Record<string, unknown>;
+  user_question: string | null;
+  human_review_reason: string | null;
+  errors: string[];
+  final_result: Record<string, unknown> | null;
+};
+
+/** Compact admin list rows from GET /api/agent/workflows. */
+export type RuntimeWorkflowListItem = {
+  workflow_id: string;
+  goal: RuntimeWorkflowGoal;
+  owner_id: string | null;
+  status: RuntimeWorkflowStatus;
+  current_agent: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type RuntimeTraceEventType =
+  | "WORKFLOW_STARTED"
+  | "WORKFLOW_COMPLETED"
+  | "SUPERVISOR_ROUTE"
+  | "AGENT_STARTED"
+  | "AGENT_DECISION"
+  | "TOOL_CALL"
+  | "TOOL_RESULT"
+  | "HANDOFF"
+  | "CHECKPOINT"
+  | "USER_WAIT"
+  | "HUMAN_WAIT"
+  | "RETRY"
+  | "ERROR";
+
+/**
+ * Every item is emitted by the runtime executor or tracer. `cost_usd` remains
+ * null when the active provider/model has no configured pricing.
+ */
+export type RuntimeTraceEvent = {
+  event_id: string;
+  workflow_id: string;
+  parent_event_id: string | null;
+  event_type: RuntimeTraceEventType;
+  agent_name: string | null;
+  tool_name: string | null;
+  tool_call_id: string | null;
+  started_at: string;
+  finished_at: string | null;
+  duration_ms: number | null;
+  model: string | null;
+  provider: string | null;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  cached_tokens: number | null;
+  total_tokens: number | null;
+  cost_usd: number | null;
+  input_summary: string | null;
+  output_summary: string | null;
+  error_type: string | null;
+  error_message: string | null;
+};
 export type AgentQueueRunResponse = {
   ok: boolean;
   message: string;
@@ -230,7 +381,7 @@ export type SourceExtractionResult = {
   extracted_fields: FieldExtractionCandidate[];
   unresolved_fields: string[];
   raw_json: Record<string, unknown>;
-  agent_chain: string[];
+  execution_ref?: ExecutionReference | null;
   fetch_status?: string;
   final_url?: string | null;
   page_title?: string | null;
@@ -334,7 +485,7 @@ export type DataAcquisitionReport = {
   persisted_evidence_count: number;
   summary: string;
   next_actions: string[];
-  agent_chain: string[];
+  execution_ref?: ExecutionReference | null;
   quality_metrics: DataQualityMetric[];
   crawler_capabilities: string[];
   run_status?: "COMPLETED" | "NEEDS_REVIEW" | "FAILED";
@@ -397,7 +548,7 @@ export type CrawlQueueItem = {
   human_review_required: boolean;
   publish_boundary: string;
   next_actions: string[];
-  agent_chain: string[];
+  execution_ref?: ExecutionReference | null;
 };
 
 export type CrawlQueueReport = {
@@ -409,7 +560,7 @@ export type CrawlQueueReport = {
   items: CrawlQueueItem[];
   summary: string;
   warnings: string[];
-  agent_chain: string[];
+  execution_ref?: ExecutionReference | null;
 };
 
 
@@ -447,7 +598,7 @@ export type ScenarioAuditReport = {
   failure_count: number;
   failures: string[];
   cases: ScenarioAuditCase[];
-  agent_chain: string[];
+  execution_ref?: ExecutionReference | null;
 };
 
 export type ReviewQueueItem = {
@@ -475,7 +626,7 @@ export type ReviewQueueItem = {
   reviewed_at: string | null;
   publishable: boolean;
   boundary: string;
-  agent_chain: string[];
+  execution_ref?: ExecutionReference | null;
 };
 
 export type ReviewQueueSummary = {
@@ -530,7 +681,7 @@ export type CatalogAutoUpdateReport = {
   candidates: ProgramUrlCandidate[];
   warnings: string[];
   summary: string;
-  agent_chain: string[];
+  execution_ref?: ExecutionReference | null;
 };
 export type DataRefreshReport = {
   run_id: string;
@@ -572,7 +723,7 @@ export type FieldEvidenceRecord = {
   reviewer_id: string | null;
   evidence_snippet: string | null;
   snapshot_url?: string | null;
-  agent_chain: string[];
+  execution_ref?: ExecutionReference | null;
   source_scope?: SourceScope | null;
   page_title?: string | null;
   final_url?: string | null;
@@ -736,11 +887,25 @@ export type WorkflowResult = {
     programs_requiring_current_cycle_review?: string[];
     timeline_blockers?: Record<string, string[]>;
     previous_cycle_reference_fields?: Record<string, string[]>;
+
     required_timeline_fields?: string[];
     writing_review: string;
     human_gates: string[];
   };
   trace: AgentTrace[];
+};
+
+export type DecisionStatus = "PASS" | "FAIL" | "UNKNOWN";
+
+export type ConstraintCheck = {
+  check_id: string;
+  program_id?: string | null;
+  category: "ADMISSIONS_ELIGIBILITY" | "USER_PREFERENCE" | "FINANCIAL_FEASIBILITY" | "DATA_CONFIDENCE" | "STRATEGY_FIT" | "EVIDENCE_READINESS";
+  status: DecisionStatus;
+  severity: "BLOCKING" | "WARNING" | "INFO";
+  message: string;
+  evidence_level: string;
+  source_url?: string | null;
 };
 
 export type ProgramMatch = {
@@ -762,6 +927,12 @@ export type ProgramMatch = {
     application_fee_hkd?: number | null;
     discipline_tags: string[];
     materials: string[];
+    application_rounds?: Array<{
+      name: string;
+      open_date: string | null;
+      deadline: string | null;
+      applicant_scope?: string | null;
+    }>;
     requirements?: {
       min_gpa: number | null;
       language: Record<string, number>;
@@ -789,7 +960,18 @@ export type ProgramMatch = {
       official_verification_required: boolean;
     }>;
   };
-  tier: "reach" | "target" | "safe" | "candidate" | "not_recommended";
+  tier: "reach" | "target" | "safer" | "candidate" | "not_recommended";
+  admissions_status?: DecisionStatus;
+  admissions_checks?: ConstraintCheck[];
+  academic_fit_score?: number;
+  language_fit_score?: number;
+  discipline_fit_score?: number;
+  experience_fit_score?: number;
+  applicant_fit_score?: number;
+  preference_fit_score?: number;
+  financial_fit_score?: number | null;
+  data_confidence_score?: number;
+  strategy_score?: number;
   fit_score: number;
   score_breakdown: Record<
     "academic" | "language" | "experience" | "discipline_fit" | "budget_fit" | "data_trust",
@@ -805,14 +987,14 @@ export type ProgramMatch = {
   risks: string[];
   actions: string[];
   explanation?: RecommendationExplanation | null;
-  strategy_band?: "reach" | "target" | "safe" | "candidate" | "blocked";
+  strategy_band?: "reach" | "target" | "safer" | "candidate" | "blocked";
   consultant_note?: string;
   source_warning?: string;
 };
 
 export type ConsultantPlanItem = {
   program_id: string;
-  band: "冲刺" | "主申" | "保底" | "候选" | "暂不建议";
+  band: "冲刺" | "主申" | "相对稳妥" | "候选" | "暂不建议";
   institution: string;
   program_name: string;
   why_this_band: string;
@@ -920,7 +1102,7 @@ export type AgentTrace = {
 
 
 export type ProgramSchemeState = {
-  band_overrides: Record<string, "reach" | "target" | "safe" | "candidate" | "blocked">;
+  band_overrides: Record<string, "reach" | "target" | "safer" | "candidate" | "blocked">;
   removed_program_ids: string[];
   extra_candidate_ids: string[];
 };

@@ -34,7 +34,7 @@
       "allowed_fields": ["admission_case", "timeline_experience", "decision_date_signal"],
       "crawler_method": "manual search URL or user-provided public excerpt -> normalized signal -> no official overwrite",
       "rate_limit": "manual review preferred",
-      "policy": "Community self-reports only; never use as admission probability or official requirement."
+      "policy": "Community self-reports only; never use to infer an admissions outcome or an official requirement."
     },
     {
       "source_id": "public_forum_search",
@@ -76,6 +76,6 @@
   "field_boundaries": {
     "official_only": ["deadline", "tuition_hkd", "language_requirement", "materials", "application_url", "essay_prompts"],
     "community_reference_only": ["interview", "written_test", "admission_case", "timeline_experience", "preparation_advice"],
-    "never_infer": ["admission_probability", "guaranteed_offer", "official_waiver", "internal_referral"]
+    "never_infer": ["admissions_outcome", "official_waiver", "internal_referral"]
   }
 }

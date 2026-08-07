@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import re
 from typing import Any
 
 from harbor_agent.core.llm import LLMProvider
@@ -21,6 +22,7 @@ def propose_matching_strategy(
     apply: bool = False,
 ) -> dict[str, Any]:
     current = load_matching_strategy()
+    display_instruction = _display_instruction(instruction)
     proposal = _fallback_patch(current, instruction)
     model_used = "deterministic_fallback"
     if llm.name != "mock":
@@ -29,18 +31,18 @@ def propose_matching_strategy(
                 system=(
                     "You are a cautious admissions strategy agent. Propose only configuration changes for "
                     "Hong Kong/Singapore taught-master programme matching. Do not invent schools, official facts, "
-                    "deadlines, admission probabilities, or programme requirements. Return JSON only."
+                    "deadlines, admissions outcomes, or programme requirements. Return JSON only."
                 ),
                 user=(
                     f"Current strategy JSON: {current}\n\n"
                     f"Consultant instruction: {instruction}\n\n"
-                    "Return a conservative patch. Only these top-level keys may be changed: "
+                    "Return a bounded heuristic patch. Only these top-level keys may be changed: "
                     f"{sorted(ALLOWED_TOP_LEVEL_FIELDS)}. Keep all numeric quota values as integers."
                 ),
                 schema_hint={
                     "patch": {
-                        "recommendation_quotas": {"reach": 0, "target": 0, "safe": 0, "candidate": 0, "not_recommended": 0, "max_total": 0},
-                        "application_mix_quotas": {"reach": 0, "target": 0, "safe": 0, "max_total": 0},
+                        "recommendation_quotas": {"reach": 0, "target": 0, "safer": 0, "candidate": 0, "not_recommended": 0, "max_total": 0},
+                        "application_mix_quotas": {"reach": 0, "target": 0, "safer": 0, "max_total": 0},
                         "profile_tier_base": {"regular": 0.0},
                     },
                     "rationale": ["string"],
@@ -56,16 +58,20 @@ def propose_matching_strategy(
     return {
         "model": model_used,
         "applied": apply,
-        "instruction": instruction,
+        "instruction": display_instruction,
         "patch": proposal,
         "strategy": saved or patched,
-        "rationale": _rationale(instruction, proposal),
+        "rationale": _rationale(display_instruction, proposal),
         "risk_controls": [
             "Hard eligibility rules still run after strategy tuning.",
             "LLM proposals cannot change programme facts, official-source gates, or deadline trust rules.",
             "Admin should run scenario audit before using a new strategy with students.",
         ],
     }
+
+
+def _display_instruction(instruction: str) -> str:
+    return re.sub(r"\bsafe\b", "safer", instruction, flags=re.IGNORECASE).replace("保底", "相对稳妥")
 
 
 def _fallback_patch(current: dict[str, Any], instruction: str) -> dict[str, Any]:
@@ -75,15 +81,15 @@ def _fallback_patch(current: dict[str, Any], instruction: str) -> dict[str, Any]
     mix = dict(current.get("application_mix_quotas", {}))
     tier_base = dict(current.get("profile_tier_base", {}))
     if any(term in text for term in ["safe", "\u4fdd\u5e95", "conservative", "\u4fdd\u5b88"]):
-        quotas["safe"] = min(18, int(quotas.get("safe", 12)) + 3)
+        quotas["safer"] = min(18, int(quotas.get("safer", 12)) + 3)
         quotas["reach"] = max(8, int(quotas.get("reach", 14)) - 2)
-        mix["safe"] = min(5, int(mix.get("safe", 3)) + 1)
+        mix["safer"] = min(5, int(mix.get("safer", 3)) + 1)
         mix["reach"] = max(2, int(mix.get("reach", 4)) - 1)
         tier_base["regular"] = round(float(tier_base.get("regular", 3.15)) - 0.08, 2)
         patch.update({"recommendation_quotas": quotas, "application_mix_quotas": mix, "profile_tier_base": tier_base})
     elif any(term in text for term in ["reach", "\u51b2\u523a", "aggressive", "\u6fc0\u8fdb"]):
         quotas["reach"] = min(18, int(quotas.get("reach", 14)) + 2)
-        quotas["safe"] = max(8, int(quotas.get("safe", 12)) - 2)
+        quotas["safer"] = max(8, int(quotas.get("safer", 12)) - 2)
         mix["reach"] = min(5, int(mix.get("reach", 4)) + 1)
         patch.update({"recommendation_quotas": quotas, "application_mix_quotas": mix})
     else:

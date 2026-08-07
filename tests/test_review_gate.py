@@ -21,7 +21,7 @@ def test_review_gate_blocks_not_published_official_candidate(monkeypatch) -> Non
         status=FieldVerificationStatus.not_published,
         review_required=True,
         evidence_snippet="The application deadline has not been published yet.",
-        agent_chain=["SourceDiscoveryAgent", "PageFetchAgent", "FieldExtractionAgent"],
+        execution_ref=None,
     )
     monkeypatch.setattr(review_gate, "build_field_evidence_records", lambda: [record])
 
@@ -67,7 +67,7 @@ def test_review_store_persists_published_record_to_sqlite(monkeypatch, tmp_path)
         review_required=False,
         reviewer_id="qa_reviewer",
         evidence_snippet="Application deadline: 2027-03-20.",
-        agent_chain=["DataAcquisitionAgent", "HumanReviewGateAgent"],
+        execution_ref=None,
     )
 
     review_store.save_published_field_record(record)
@@ -96,7 +96,7 @@ def _deadline_candidate(source_url: str, value: str, snippet: str) -> FieldEvide
         status=FieldVerificationStatus.official_previous_cycle,
         review_required=True,
         evidence_snippet=snippet,
-        agent_chain=["PageFetchAgent", "FieldExtractionAgent"],
+        execution_ref=None,
     )
 
 

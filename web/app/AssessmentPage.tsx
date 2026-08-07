@@ -185,7 +185,7 @@ export function AssessmentPage({ payload, setPayload, result, loading, profileSa
               <AdviceList title="硬门槛" items={assessment.hard_thresholds} />
               <AdviceList title="补强动作" items={assessment.strengthening_actions} />
             </div>
-          ) : needsDecisionData ? <div className="assessment-detail-grid"><AdviceList title="暂不分档" items={["关键信息不足时不输出冲刺、主申或保底结论，避免制造虚假的确定性。"]} /><AdviceList title="先补齐" items={result?.profile?.missing_fields ?? assessment?.actions ?? []} /></div> : null}
+          ) : needsDecisionData ? <div className="assessment-detail-grid"><AdviceList title="暂不分档" items={["关键信息不足时不输出冲刺、主申或相对稳妥结论，避免制造虚假的确定性。"]} /><AdviceList title="先补齐" items={result?.profile?.missing_fields ?? assessment?.actions ?? []} /></div> : null}
         </IslandCard>
         <IslandCard className="panel-card" type="dashed">
           <PanelTitle icon={<ListChecks size={19} aria-hidden />} title="维度结论" />

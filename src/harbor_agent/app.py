@@ -10,10 +10,15 @@ from starlette.responses import JSONResponse
 from pydantic import BaseModel, Field
 from typing import Any
 
-from harbor_agent.agents.catalog_auto_update import CatalogAutoUpdateAgent
+from harbor_agent.services.catalog_auto_update import CatalogAutoUpdateService
+from harbor_agent.services.data_acquisition import ProgramDataAcquisitionService
+from harbor_agent.services.data_refresh import DataRefreshService
 from harbor_agent.agents.orchestrator import WorkflowOrchestrator
+from harbor_agent.services.source_crawl_queue import SourceCrawlQueueService
+from harbor_agent.services.writing_composer import WritingComposer
 from harbor_agent.config import get_settings
 from harbor_agent.core.llm import MockLLMProvider, OpenAICompatibleLLMProvider, build_llm_provider
+from harbor_agent.llm.provider import OpenAICompatibleToolCallingProvider
 from harbor_agent.models import (
     AgentSystemReport,
     ApplicantProfileInput,
@@ -53,7 +58,7 @@ from harbor_agent.services.program_urls import is_generic_application_url, is_ge
 from harbor_agent.services.profile_store import load_profile, load_workspace_state, profile_store_secret, save_profile, save_workspace_state
 from harbor_agent.services.review_gate import build_review_queue, publish_review_batch, publish_review_item
 from harbor_agent.services.scenario_audit_runner import scenario_audit_summary
-from harbor_agent.services.agent_registry import build_agent_system_report
+from harbor_agent.services.runtime_agent_registry import build_agent_system_report
 from harbor_agent.services.agent_worker import execute_agent_job
 from harbor_agent.services.agent_runtime import (
     claim_next_agent_job,
@@ -346,7 +351,15 @@ def get_llm_config() -> LLMConfigResponse:
 
 @app.get("/api/llm-config", response_model=LLMConfigResponse)
 def get_student_llm_config() -> LLMConfigResponse:
-    return get_llm_config()
+    # Students can see only the active mode; global provider settings and
+    # compatible endpoints are administrator-controlled.
+    return LLMConfigResponse(
+        ok=True,
+        provider=llm_provider.provider,
+        model=llm_provider.name,
+        base_url=None,
+        message="模型由管理员配置；学生资料不会在此接口写入 API Key。",
+    )
 
 
 def _configure_llm_provider(payload: LLMConfigRequest) -> LLMConfigResponse:
@@ -380,7 +393,7 @@ def _configure_llm_provider(payload: LLMConfigRequest) -> LLMConfigResponse:
             schema_hint={"summary": "string"},
         )
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"模型连接失败：{exc}") from exc
+        raise HTTPException(status_code=400, detail="模型连接失败，请检查管理员配置和网络。") from exc
 
     llm_provider = provider
     return LLMConfigResponse(
@@ -399,7 +412,7 @@ def configure_llm(payload: LLMConfigRequest) -> LLMConfigResponse:
 
 @app.post("/api/llm-config", response_model=LLMConfigResponse)
 def configure_student_llm(payload: LLMConfigRequest) -> LLMConfigResponse:
-    return _configure_llm_provider(payload)
+    raise HTTPException(status_code=403, detail="学生端不能修改全局模型配置，请联系管理员。")
 
 
 @app.get("/api/taxonomy")
@@ -729,8 +742,7 @@ def programs(
 
 @app.get("/api/programs/{program_id}/data-package", response_model=ProgramDataPackage)
 def program_data_package(program_id: str) -> ProgramDataPackage:
-    orchestrator = WorkflowOrchestrator(llm_provider)
-    report = orchestrator.run_data_acquisition_stage(
+    report = ProgramDataAcquisitionService().run(
         DataAcquisitionRequest(selected_program_ids=[program_id], dry_run=True, include_community=True)
     )
     if not report.packages:
@@ -744,19 +756,17 @@ def run_data_acquisition_stage(payload: DataAcquisitionRequest, request: Request
         raise HTTPException(status_code=403, detail="联网采集和证据写入只能由受控 operator/worker 触发。")
     if not payload.dry_run:
         _validate_acquisition_scope(payload, request)
-    orchestrator = WorkflowOrchestrator(llm_provider)
-    return orchestrator.run_data_acquisition_stage(payload)
+    return ProgramDataAcquisitionService().run(payload)
 
 
 @app.post("/api/admin/crawl-queue", response_model=CrawlQueueReport)
 def admin_crawl_queue(payload: CrawlQueueRequest) -> CrawlQueueReport:
-    orchestrator = WorkflowOrchestrator(llm_provider)
-    return orchestrator.run_crawl_queue_stage(payload)
+    return SourceCrawlQueueService().run(payload)
 
 
 @app.post("/api/admin/catalog-auto-update", response_model=CatalogAutoUpdateReport)
 def admin_catalog_auto_update(payload: CatalogAutoUpdateRequest) -> CatalogAutoUpdateReport:
-    return CatalogAutoUpdateAgent().run(payload)
+    return CatalogAutoUpdateService().run(payload)
 
 
 @app.get("/api/programs/{program_id}/trust", response_model=ProgramTrustDetail)
@@ -880,16 +890,14 @@ def run_application_plan_stage(payload: SelectedProgramsRequest) -> ApplicationP
 def run_data_refresh_stage(payload: DataRefreshRequest, request: Request) -> DataRefreshReport:
     if not payload.dry_run and not _admin_request_allowed(request):
         raise HTTPException(status_code=403, detail="联网刷新只能由受控 operator/worker 触发。")
-    orchestrator = WorkflowOrchestrator(llm_provider)
-    return orchestrator.run_data_refresh_stage(payload)
+    return DataRefreshService(llm_provider).run(payload)
 
 
 @app.post("/api/workflows/source-refresh", response_model=DataRefreshReport)
 def run_source_refresh_stage(payload: DataRefreshRequest, request: Request) -> DataRefreshReport:
     if not payload.dry_run and not _admin_request_allowed(request):
         raise HTTPException(status_code=403, detail="联网刷新只能由受控 operator/worker 触发。")
-    orchestrator = WorkflowOrchestrator(llm_provider)
-    return orchestrator.run_data_refresh_stage(payload)
+    return DataRefreshService(llm_provider).run(payload)
 
 
 def _validate_acquisition_scope(payload: DataAcquisitionRequest, request: Request) -> None:
@@ -918,17 +926,21 @@ def run_writing_plan_stage(payload: WritingPlanRequest) -> WritingPlanResult:
 @app.post("/api/workflows/writing-interview", response_model=list[WritingInterviewQuestion])
 def run_writing_interview(payload: WritingInterviewRequest) -> list[WritingInterviewQuestion]:
     _validate_selected_program_ids(payload.profile, payload.selected_program_ids)
-    orchestrator = WorkflowOrchestrator(llm_provider)
-    profile, selected = orchestrator.selected_program_matches(payload.profile, payload.selected_program_ids)
-    return orchestrator.writing_agent.interview_questions(profile, selected, payload.document_type)
+    profile, selected = WorkflowOrchestrator(llm_provider).selected_program_matches(
+        payload.profile,
+        payload.selected_program_ids,
+    )
+    return WritingComposer(llm_provider).interview_questions(profile, selected, payload.document_type)
 
 
 @app.post("/api/workflows/writing-outline", response_model=WritingDraft)
 def run_writing_outline(payload: WritingOutlineRequestPayload) -> WritingDraft:
     _validate_selected_program_ids(payload.profile, payload.selected_program_ids)
-    orchestrator = WorkflowOrchestrator(llm_provider)
-    profile, selected = orchestrator.selected_program_matches(payload.profile, payload.selected_program_ids)
-    return orchestrator.writing_agent.outline_from_answers(
+    profile, selected = WorkflowOrchestrator(llm_provider).selected_program_matches(
+        payload.profile,
+        payload.selected_program_ids,
+    )
+    return WritingComposer(llm_provider).outline_from_answers(
         profile,
         selected,
         payload.document_type,
@@ -938,8 +950,7 @@ def run_writing_outline(payload: WritingOutlineRequestPayload) -> WritingDraft:
 
 @app.post("/api/workflows/writing-review", response_model=WritingReviewRubric)
 def run_writing_review(payload: WritingReviewRequest) -> WritingReviewRubric:
-    orchestrator = WorkflowOrchestrator(llm_provider)
-    return orchestrator.writing_agent.review_rubric(payload.draft, payload.story_cards)
+    return WritingComposer(llm_provider).review_rubric(payload.draft, payload.story_cards)
 
 
 @app.post("/api/workflows/assessment", response_model=WorkflowResult)
@@ -956,3 +967,128 @@ def model_smoke_test() -> dict:
         schema_hint={"summary": "string"},
     )
     return {"model": llm_provider.name, "response": response}
+
+
+# Supervisor runtime API. These endpoints are the new primary workflow path;
+# legacy /api/workflows/* remains temporarily available as a compatibility facade.
+from harbor_agent.runtime.state import HumanResolution, WorkflowGoal
+from harbor_agent.runtime.workflow import MultiAgentRuntime, WorkflowResumeRequest, WorkflowStartRequest
+
+
+class AgentWorkflowCreateRequest(BaseModel):
+    goal: WorkflowGoal
+    # The supervisor runtime owns missing-information handling. Keep this
+    # deliberately permissive: a sparse payload should reach AssessmentAgent
+    # and become WAITING_USER, not fail FastAPI validation before a checkpoint
+    # can be created. Legacy workflow endpoints keep ApplicantProfileInput.
+    profile: dict[str, Any] = Field(default_factory=dict)
+    user_request: str = ""
+    questionnaire: QuestionnaireResponse | None = None
+    selected_program_ids: list[str] = Field(default_factory=list, max_length=20)
+    document_type: str = Field(default="PS", pattern="^(PS|SOP|CV|ESSAY|REFERENCE_PACKAGE)$")
+    refresh_official_sources: bool = False
+
+
+class AgentWorkflowResumePayload(BaseModel):
+    user_message: str | None = None
+    human_resolution: HumanResolution | str | None = None
+
+
+def _runtime_workflow_owner(workflow_id: str, request: Request) -> dict[str, Any]:
+    from harbor_agent.services.agent_runtime import get_multi_agent_workflow
+
+    record = get_multi_agent_workflow(workflow_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="未找到该 Agent 工作流。")
+    profile_id = _verify_profile_cookie(request.cookies.get(PROFILE_COOKIE_NAME))
+    if record.get("owner_id") and record.get("owner_id") != profile_id and not _admin_request_allowed(request):
+        # Return 404 rather than leaking whether another student's workflow exists.
+        raise HTTPException(status_code=404, detail="未找到该 Agent 工作流。")
+    return record
+
+
+def _configured_runtime() -> MultiAgentRuntime:
+    """Build the Runtime from the active admin-owned provider, never user input."""
+
+    if not isinstance(llm_provider, OpenAICompatibleLLMProvider):
+        return MultiAgentRuntime()
+
+    authorization = getattr(llm_provider, "_headers", {}).get("authorization")
+    if not isinstance(authorization, str) or not authorization.startswith("Bearer "):
+        raise RuntimeError("configured Runtime model credentials are unavailable")
+    api_key = authorization[len("Bearer ") :].strip()
+    if not api_key:
+        raise RuntimeError("configured Runtime model credentials are unavailable")
+
+    provider = OpenAICompatibleToolCallingProvider(
+        api_key=api_key,
+        model=llm_provider.name,
+        provider=llm_provider.provider,
+        base_url=llm_provider.base_url,
+    )
+    return MultiAgentRuntime(llm=provider, model_driven=True)
+
+def _agent_workflow_snapshot(state) -> dict[str, Any]:
+    return state.model_dump(mode="json")
+
+
+@app.post("/api/agent/workflows")
+def start_agent_workflow(payload: AgentWorkflowCreateRequest, request: Request, response: Response) -> dict[str, Any]:
+    owner_id = _request_profile_id(request, response)
+    runtime = _configured_runtime()
+    state = runtime.start(
+        WorkflowStartRequest(
+            goal=payload.goal,
+            profile=payload.profile,
+            user_request=payload.user_request,
+            questionnaire=payload.questionnaire.model_dump(mode="json") if payload.questionnaire else None,
+            selected_program_ids=payload.selected_program_ids,
+            document_type=payload.document_type,
+            refresh_official_sources=payload.refresh_official_sources,
+        ),
+        owner_id=owner_id,
+    )
+    return _agent_workflow_snapshot(state)
+
+
+@app.get("/api/agent/workflows")
+def list_agent_workflows(request: Request, limit: int = Query(default=40, ge=1, le=200)) -> list[dict[str, Any]]:
+    if not _admin_request_allowed(request):
+        raise HTTPException(status_code=403, detail="工作流历史仅向管理员开放。")
+    return MultiAgentRuntime().list_workflows(limit)
+
+
+@app.get("/api/agent/workflows/{workflow_id}")
+def get_agent_workflow(workflow_id: str, request: Request) -> dict[str, Any]:
+    record = _runtime_workflow_owner(workflow_id, request)
+    return record["state"]
+
+
+@app.post("/api/agent/workflows/{workflow_id}/resume")
+def resume_agent_workflow(workflow_id: str, payload: AgentWorkflowResumePayload, request: Request) -> dict[str, Any]:
+    _runtime_workflow_owner(workflow_id, request)
+    try:
+        state = _configured_runtime().resume(
+            workflow_id,
+            WorkflowResumeRequest(user_message=payload.user_message, human_resolution=payload.human_resolution),
+        )
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _agent_workflow_snapshot(state)
+
+
+@app.get("/api/agent/workflows/{workflow_id}/trace")
+def get_agent_workflow_trace(workflow_id: str, request: Request) -> list[dict[str, Any]]:
+    from harbor_agent.services.agent_runtime import list_runtime_trace_events
+
+    _runtime_workflow_owner(workflow_id, request)
+    return list_runtime_trace_events(workflow_id)
+
+
+@app.get("/api/agent/workflows/{workflow_id}/state")
+def get_agent_workflow_state(workflow_id: str, request: Request) -> dict[str, Any]:
+    _runtime_workflow_owner(workflow_id, request)
+    state = MultiAgentRuntime().get_state(workflow_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="未找到工作流 checkpoint。")
+    return _agent_workflow_snapshot(state)

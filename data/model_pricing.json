@@ -1,0 +1,7 @@
+{
+  "openai/gpt-4.1-mini": {
+    "input_per_1m": 0.4,
+    "cached_input_per_1m": 0.1,
+    "output_per_1m": 1.6
+  }
+}

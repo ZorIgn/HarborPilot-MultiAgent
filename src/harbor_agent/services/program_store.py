@@ -81,7 +81,7 @@ def init_program_store(db_path: Path = DB_PATH) -> None:
                 reviewer_id TEXT,
                 evidence_snippet TEXT,
                 snapshot_url TEXT,
-                agent_chain_json TEXT NOT NULL,
+                execution_ref_json TEXT,
                 source_scope TEXT,
                 page_title TEXT,
                 final_url TEXT,
@@ -99,6 +99,7 @@ def init_program_store(db_path: Path = DB_PATH) -> None:
         _ensure_column(conn, "program_field_evidence", "page_title", "TEXT")
         _ensure_column(conn, "program_field_evidence", "final_url", "TEXT")
         _ensure_column(conn, "program_field_evidence", "binding_status", "TEXT NOT NULL DEFAULT 'not_checked'")
+        _ensure_column(conn, "program_field_evidence", "execution_ref_json", "TEXT")
         _ensure_column(conn, "program_field_evidence", "binding_score", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "program_field_evidence", "reviewer_note", "TEXT")
         _ensure_column(conn, "program_field_evidence", "review_decision_id", "TEXT")
@@ -187,14 +188,14 @@ def upsert_field_evidence_records(
         INSERT INTO program_field_evidence (
             id, program_id, field_name, value, cycle, source_url, source_type, extracted_at,
             verified_at, page_hash, confidence, source_priority, status, review_required,
-            reviewer_id, evidence_snippet, snapshot_url, agent_chain_json,
+            reviewer_id, evidence_snippet, snapshot_url, execution_ref_json,
             source_scope, page_title, final_url, binding_status, binding_score,
             reviewer_note, review_decision_id
         )
         VALUES (
             :id, :program_id, :field_name, :value, :cycle, :source_url, :source_type, :extracted_at,
             :verified_at, :page_hash, :confidence, :source_priority, :status, :review_required,
-            :reviewer_id, :evidence_snippet, :snapshot_url, :agent_chain_json,
+            :reviewer_id, :evidence_snippet, :snapshot_url, :execution_ref_json,
             :source_scope, :page_title, :final_url, :binding_status, :binding_score,
             :reviewer_note, :review_decision_id
         )
@@ -213,7 +214,7 @@ def upsert_field_evidence_records(
             reviewer_id=excluded.reviewer_id,
             evidence_snippet=excluded.evidence_snippet,
             snapshot_url=excluded.snapshot_url,
-            agent_chain_json=excluded.agent_chain_json,
+            execution_ref_json=excluded.execution_ref_json,
             source_scope=excluded.source_scope,
             page_title=excluded.page_title,
             final_url=excluded.final_url,
@@ -248,7 +249,7 @@ def load_field_evidence_records(
             f"""
             SELECT program_id, field_name, value, cycle, source_url, source_type, extracted_at,
                    verified_at, page_hash, confidence, source_priority, status, review_required,
-                   reviewer_id, evidence_snippet, snapshot_url, agent_chain_json,
+                   reviewer_id, evidence_snippet, snapshot_url, execution_ref_json,
                    source_scope, page_title, final_url, binding_status, binding_score,
                    reviewer_note, review_decision_id
             FROM program_field_evidence
@@ -354,12 +355,14 @@ def _program_row(program: Program) -> dict[str, object]:
     evidence = [record.model_dump(mode="json") for record in program.field_evidence.values()]
     rounds = [
         {
-            "round": "main",
-            "open_date": program.open_date.isoformat() if program.open_date else None,
-            "deadline": str(program.deadline),
+            "round": item.name,
+            "open_date": item.open_date.isoformat() if item.open_date else None,
+            "deadline": item.deadline.isoformat() if item.deadline else "NOT_PUBLISHED",
+            "applicant_scope": item.applicant_scope,
             "source": program.official_program_url or program.source.url,
             "status": program.data_status.value,
         }
+        for item in program.application_rounds
     ]
     return {
         "id": program.id,
@@ -412,7 +415,7 @@ def _field_evidence_row(record: FieldEvidenceRecord) -> dict[str, object]:
         "reviewer_id": record.reviewer_id,
         "evidence_snippet": record.evidence_snippet,
         "snapshot_url": str(record.snapshot_url) if record.snapshot_url else None,
-        "agent_chain_json": json.dumps(record.agent_chain, ensure_ascii=False),
+        "execution_ref_json": json.dumps(record.execution_ref.model_dump(mode="json") if record.execution_ref else None, ensure_ascii=False),
         "source_scope": record.source_scope.value if record.source_scope else None,
         "page_title": record.page_title,
         "final_url": str(record.final_url) if record.final_url else None,
@@ -455,7 +458,7 @@ def _field_evidence_record_from_row(row: tuple) -> FieldEvidenceRecord:
         reviewer_id=row[13],
         evidence_snippet=row[14],
         snapshot_url=row[15],
-        agent_chain=json.loads(row[16]) if row[16] else [],
+        execution_ref=json.loads(row[16]) if row[16] else None,
         source_scope=row[17] if row[17] else None,
         page_title=row[18],
         final_url=row[19],

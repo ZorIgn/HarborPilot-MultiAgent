@@ -210,13 +210,14 @@ def save_workspace_state(
 def _normalize_program_scheme(value: dict[str, Any] | None) -> dict[str, Any]:
     raw = value if isinstance(value, dict) else {}
     band_overrides = raw.get("band_overrides") if isinstance(raw.get("band_overrides"), dict) else {}
-    valid_bands = {"reach", "target", "safe", "candidate", "blocked"}
+    valid_bands = {"reach", "target", "safer", "candidate", "blocked"}
+    normalized_overrides: dict[str, str] = {}
+    for program_id, band in band_overrides.items():
+        normalized_band = "safer" if str(band) == "safe" else str(band)
+        if str(program_id).strip() and normalized_band in valid_bands:
+            normalized_overrides[str(program_id)] = normalized_band
     return {
-        "band_overrides": {
-            str(program_id): str(band)
-            for program_id, band in band_overrides.items()
-            if str(program_id).strip() and str(band) in valid_bands
-        },
+        "band_overrides": normalized_overrides,
         "removed_program_ids": _unique_string_list(raw.get("removed_program_ids")),
         "extra_candidate_ids": _unique_string_list(raw.get("extra_candidate_ids")),
     }

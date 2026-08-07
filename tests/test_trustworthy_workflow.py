@@ -8,10 +8,10 @@ from fastapi.testclient import TestClient
 
 from harbor_agent.app import app
 from harbor_agent.agents.orchestrator import WorkflowOrchestrator
-from harbor_agent.agents.profile import ProfileAgent
-from harbor_agent.agents.timeline import TimelineAgent
-from harbor_agent.agents.writing import STYLE_GUIDE, WritingAgent
-from harbor_agent.agents.data_refresh import _extract_field_candidates
+from harbor_agent.services.deterministic_profile import normalize_profile
+from harbor_agent.services.deterministic_timeline import build_timeline_tasks
+from harbor_agent.services.writing_composer import STYLE_GUIDE, WritingComposer
+from harbor_agent.services.data_refresh import _extract_field_candidates
 from harbor_agent.core.llm import MockLLMProvider
 from harbor_agent.models import ApplicantProfileInput, FieldEvidenceRecord, FieldVerificationStatus, ProgramMatch, SourceScope, StoryCard
 from harbor_agent.services import evidence_graph
@@ -34,7 +34,7 @@ def test_extracted_programs_stay_candidate_only() -> None:
     assert result.intent_profile
     assert result.candidate_pool
     assert all(item.formal_recommendation is False for item in result.focus_list)
-    assert {"reach", "target", "safe", "candidate"} & {item.tier for item in result.focus_list}
+    assert {"reach", "target", "safer", "candidate"} & {item.tier for item in result.focus_list}
     assert all(item.tier != "insufficient_info" for item in result.focus_list)
 
 
@@ -153,7 +153,7 @@ def test_timeline_uses_every_student_selected_program() -> None:
         for program in programs
     ]
 
-    timeline = TimelineAgent().run(matches, today=date(2026, 7, 5))
+    timeline = build_timeline_tasks(matches, today=date(2026, 7, 5))
     task_program_ids = {program_id for task in timeline for program_id in task.linked_program_ids}
 
     assert {program.id for program in programs} <= task_program_ids
@@ -289,7 +289,7 @@ def test_published_current_fields_drive_formal_timeline(monkeypatch) -> None:
             reviewer_id="qa_reviewer",
             evidence_snippet=f"Verified current field: {field_name}",
             snapshot_url="data/source_snapshots/current/cuhk-cs.html",
-            agent_chain=["DataAcquisitionAgent", "HumanReviewGateAgent", "AuditAgent"],
+            execution_ref=None,
         )
 
     published_records = [
@@ -319,7 +319,7 @@ def test_published_current_fields_drive_formal_timeline(monkeypatch) -> None:
         actions=[],
         rule_checks=[],
     )
-    timeline = TimelineAgent().run([match], today=date(2026, 7, 7))
+    timeline = build_timeline_tasks([match], today=date(2026, 7, 7))
 
     official_tasks = [
         task for task in timeline
@@ -358,7 +358,7 @@ def test_persisted_review_publish_is_visible_to_student_catalog(monkeypatch) -> 
         final_url="https://www.hku.hk/current/cs",
         binding_status="matched",
         binding_score=92,
-        agent_chain=["DataAcquisitionAgent", "ProgrammeBindingGateAgent", "FieldExtractionAgent"],
+        execution_ref=None,
     )
     published_records: list[FieldEvidenceRecord] = []
 
@@ -512,7 +512,7 @@ def test_writing_style_rules_are_style_only_and_fact_bound() -> None:
 
 def test_writing_agent_respects_document_type_boundaries() -> None:
     payload = _sample()
-    profile = ProfileAgent().run(payload)
+    profile = normalize_profile(payload)
     program = next(item for item in load_programs() if item.id == "hku-master-of-science-in-computer-science-2027")
     match = ProgramMatch(
         program=program,
@@ -524,7 +524,7 @@ def test_writing_agent_respects_document_type_boundaries() -> None:
         actions=[],
         rule_checks=[],
     )
-    agent = WritingAgent(MockLLMProvider())
+    agent = WritingComposer(MockLLMProvider())
 
     cv_draft = agent.run_from_story_cards(profile, [match], [], document_type="CV")
     reference_draft = agent.run_from_story_cards(profile, [match], [], document_type="REFERENCE_PACKAGE")
@@ -542,7 +542,7 @@ def test_writing_agent_respects_document_type_boundaries() -> None:
 def test_local_writing_keeps_chinese_facts_without_fake_english_expansion() -> None:
     payload = _sample()
     payload.career_goal = "希望进入跨境科技公司做产品数据分析。"
-    profile = ProfileAgent().run(payload)
+    profile = normalize_profile(payload)
     program = next(item for item in load_programs() if item.id == "hku-master-of-science-in-computer-science-2027")
     match = ProgramMatch(
         program=program,
@@ -567,7 +567,7 @@ def test_local_writing_keeps_chinese_facts_without_fake_english_expansion() -> N
         evidence_ids=["questionnaire:practice"],
         completeness=100,
     )
-    draft = WritingAgent(MockLLMProvider()).run_from_story_cards(profile, [match], [story], document_type="PS")
+    draft = WritingComposer(MockLLMProvider()).run_from_story_cards(profile, [match], [story], document_type="PS")
 
     assert "[English revision required" in draft.draft_en
     assert "Revision-ready expansion notes" not in draft.draft_en
@@ -588,7 +588,7 @@ def test_explicitly_selected_risky_program_is_not_silently_dropped() -> None:
         rule_checks=[],
     )
 
-    timeline = TimelineAgent().run([selected], today=date(2026, 7, 15))
+    timeline = build_timeline_tasks([selected], today=date(2026, 7, 15))
 
     assert timeline
     assert any(program.id in task.linked_program_ids for task in timeline)
@@ -607,7 +607,7 @@ def test_unverified_catalog_deadline_is_not_accepted_as_previous_cycle_evidence(
 
 def test_writing_agent_removes_unsupported_program_claims_from_live_model_output() -> None:
     payload = _sample()
-    profile = ProfileAgent().run(payload)
+    profile = normalize_profile(payload)
     program = next(item for item in load_programs() if item.id == "hku-master-of-science-in-computer-science-2027")
     match = ProgramMatch(
         program=program,
@@ -620,7 +620,7 @@ def test_writing_agent_removes_unsupported_program_claims_from_live_model_output
         rule_checks=[],
     )
 
-    draft = WritingAgent(UnsafeWritingLLM()).run_from_story_cards(profile, [match], [], document_type="PS")
+    draft = WritingComposer(UnsafeWritingLLM()).run_from_story_cards(profile, [match], [], document_type="PS")
     checked_text = "\n".join([draft.draft_zh, draft.draft_en, *draft.school_customization])
 
     for blocked in ["Professor Ada", "Advanced AI Systems", "98% employment", "admission chance", "\u9648\u6559\u6388"]:
@@ -629,7 +629,7 @@ def test_writing_agent_removes_unsupported_program_claims_from_live_model_output
     assert any("\u5df2\u79fb\u9664" in flag for flag in draft.review_flags)
     assert any("\u5b66\u6821\u5b9a\u5236\u53e5\u8bc1\u636e\u6765\u6e90" in item for item in draft.school_customization)
 
-    rubric = WritingAgent(MockLLMProvider()).review_rubric(draft, [])
+    rubric = WritingComposer(MockLLMProvider()).review_rubric(draft, [])
     assert rubric.unsupported_claims == 0
 
 def test_985_ielts_65_cs_plan_keeps_core_tech_mix() -> None:

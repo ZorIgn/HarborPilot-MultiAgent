@@ -68,7 +68,10 @@ def test_workspace_state_roundtrip_uses_sqlite(tmp_path) -> None:
         questionnaire_values={"opening_motivation": "I want to connect analytics with product decisions."},
         result_snapshot={"workflow_id": "wf_test", "timeline": []},
         program_scheme={
-            "band_overrides": {"hku-master-of-science-in-computer-science-2027": "target"},
+            "band_overrides": {
+                "hku-master-of-science-in-computer-science-2027": "target",
+                "legacy-safe": "safe",
+            },
             "removed_program_ids": ["removed-1", "removed-1"],
             "extra_candidate_ids": ["extra-1"],
         },
@@ -91,6 +94,7 @@ def test_workspace_state_roundtrip_uses_sqlite(tmp_path) -> None:
     assert loaded["result_snapshot"]["workflow_id"] == "wf_test"
     assert loaded["field_sensitivity"]["questionnaire_values"] == "sensitive_writing_material"
     assert loaded["program_scheme"]["band_overrides"]["hku-master-of-science-in-computer-science-2027"] == "target"
+    assert loaded["program_scheme"]["band_overrides"]["legacy-safe"] == "safer"
     assert loaded["program_scheme"]["removed_program_ids"] == ["removed-1"]
     assert loaded["program_scheme"]["extra_candidate_ids"] == ["extra-1"]
     assert loaded["writing_draft_history"][0]["title"] == "NUS PS draft"

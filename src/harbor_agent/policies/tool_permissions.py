@@ -1,0 +1,61 @@
+"""The authoritative per-agent tool allowlist."""
+
+AGENT_TOOL_PERMISSIONS: dict[str, set[str]] = {
+    "SupervisorAgent": set(),
+    "AssessmentAgent": {
+        "normalize_profile",
+        "find_profile_gaps",
+        "inspect_profile_gaps",
+        "inspect_evidence_readiness",
+        "calculate_profile_assessment",
+        "detect_background_gap",
+        "count_verified_facts",
+        "list_required_evidence",
+        "detect_fact_conflicts",
+    },
+    "ResearchAgent": {
+        "search_program_catalog",
+        "get_program_detail",
+        "search_related_programs",
+        "get_program_trust_detail",
+    },
+    "MatchingAgent": {
+        "evaluate_admissions_eligibility",
+        "evaluate_financial_feasibility",
+        "evaluate_user_preference",
+        "calculate_applicant_fit",
+        "build_program_portfolio",
+    },
+    "VerificationAgent": {
+        "get_program_trust_detail",
+        "list_missing_official_fields",
+        "discover_official_sources",
+        "snapshot_official_source",
+        "extract_program_fields",
+        "bind_source_to_program",
+        "compare_evidence_records",
+        "save_review_candidate",
+        "build_source_crawl_plan",
+    },
+    "PlanningAgent": {
+        "inspect_timeline_readiness",
+        "build_preparation_timeline",
+        "build_official_timeline",
+        "merge_shared_tasks",
+    },
+    "WritingAgent": {
+        "retrieve_student_facts",
+        "retrieve_program_evidence",
+        "build_story_cards",
+        "inspect_writing_gaps",
+        "validate_writing_claims",
+        "build_writing_draft",
+    },
+    "CriticAgent": {
+        "formal_gate_check",
+        "validate_recommendation_consistency",
+        "validate_source_grounding",
+        "validate_writing_grounding",
+        "run_review_gate",
+    },
+}

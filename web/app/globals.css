@@ -1206,7 +1206,7 @@ a:focus-visible {
   color: var(--leaf-deep);
 }
 
-.band-pill.safe {
+.band-pill.safer {
   background: #d8f0ff;
   color: #246d91;
 }
@@ -9832,4 +9832,688 @@ a:focus-visible {
 .writing-download-actions button:disabled {
   cursor: not-allowed !important;
   opacity: 0.55 !important;
+}
+
+/* Supervisor Runtime workbench: restrained evidence-first admin surface. */
+.agent-runtime-panel.runtime-workbench {
+  display: grid;
+  gap: 16px;
+  padding: clamp(16px, 2vw, 24px);
+  border: 1px solid oklch(0.89 0.018 155) !important;
+  border-radius: 12px !important;
+  background: oklch(0.992 0.004 150) !important;
+  box-shadow: none !important;
+}
+
+.runtime-workbench-head,
+.runtime-launchbar,
+.runtime-pane-head,
+.runtime-state-header,
+.runtime-trace-row,
+.runtime-workflow-row,
+.runtime-task-board article,
+.runtime-resume {
+  display: flex;
+  align-items: center;
+}
+
+.runtime-workbench-head {
+  justify-content: space-between;
+  gap: 20px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid oklch(0.9 0.016 155);
+}
+
+.runtime-workbench-head > div:first-child {
+  min-width: 0;
+}
+
+.runtime-workbench .mini-label {
+  color: oklch(0.43 0.07 158) !important;
+}
+
+.runtime-workbench h2,
+.runtime-workbench h3,
+.runtime-workbench strong {
+  color: oklch(0.26 0.032 154);
+}
+
+.runtime-workbench-head h2 {
+  margin: 7px 0 4px;
+  font-size: clamp(1.18rem, 1.7vw, 1.42rem);
+  letter-spacing: -0.025em;
+}
+
+.runtime-workbench-head p {
+  max-width: 710px;
+  margin: 0;
+  color: oklch(0.46 0.025 155);
+  font-size: 0.88rem;
+  line-height: 1.62;
+}
+
+.runtime-workbench .runtime-model-badge {
+  min-width: 148px;
+  padding: 10px 12px;
+  border: 1px solid oklch(0.87 0.022 165);
+  border-radius: 8px;
+  background: oklch(0.976 0.012 160);
+  box-shadow: none;
+  text-align: left;
+}
+
+.runtime-workbench .runtime-model-badge span,
+.runtime-workbench .runtime-model-badge small {
+  color: oklch(0.47 0.045 158);
+  font-size: 0.72rem;
+  font-weight: 750;
+}
+
+.runtime-workbench .runtime-model-badge strong {
+  margin: 3px 0;
+  color: oklch(0.3 0.052 158);
+  font-size: 0.88rem;
+}
+
+.runtime-launchbar {
+  justify-content: space-between;
+  gap: 18px;
+  padding: 13px 14px;
+  border: 1px solid oklch(0.89 0.019 158);
+  border-radius: 9px;
+  background: oklch(0.984 0.007 154);
+}
+
+.runtime-launchbar > div:first-child {
+  display: grid;
+  gap: 3px;
+  max-width: 360px;
+}
+
+.runtime-launchbar > div:first-child strong {
+  font-size: 0.86rem;
+}
+
+.runtime-launchbar > div:first-child span {
+  color: oklch(0.49 0.022 155);
+  font-size: 0.77rem;
+  line-height: 1.45;
+}
+
+.runtime-goal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.runtime-start,
+.runtime-text-button,
+.runtime-icon-button {
+  border: 1px solid oklch(0.79 0.045 155);
+  border-radius: 7px;
+  background: oklch(0.998 0.002 155);
+  color: oklch(0.34 0.074 158);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 760;
+  transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease;
+}
+
+.runtime-start {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 10px;
+}
+
+.runtime-start:hover:not(:disabled),
+.runtime-text-button:hover:not(:disabled),
+.runtime-icon-button:hover:not(:disabled) {
+  border-color: oklch(0.54 0.105 158);
+  background: oklch(0.964 0.022 157);
+}
+
+.runtime-start.primary {
+  border-color: oklch(0.42 0.1 157);
+  background: oklch(0.39 0.092 157);
+  color: oklch(0.985 0.009 155);
+}
+
+.runtime-start.primary:hover:not(:disabled) {
+  border-color: oklch(0.34 0.08 157);
+  background: oklch(0.34 0.08 157);
+  color: oklch(0.99 0.005 155);
+}
+
+.runtime-start:disabled,
+.runtime-text-button:disabled,
+.runtime-icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.runtime-overview {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.runtime-workbench .runtime-overview .metric-card {
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid oklch(0.9 0.012 155);
+  border-radius: 8px;
+  background: oklch(1 0 0);
+  box-shadow: none;
+}
+
+.runtime-workbench .runtime-overview .metric-card p,
+.runtime-workbench .runtime-overview .metric-card span {
+  color: oklch(0.48 0.022 155);
+  font-size: 0.72rem;
+}
+
+.runtime-workbench .runtime-overview .metric-card strong {
+  overflow: hidden;
+  display: block;
+  margin: 4px 0;
+  font-size: 0.93rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-feedback {
+  margin: 0;
+  padding: 9px 11px;
+  border-left: 2px solid oklch(0.58 0.095 158);
+  background: oklch(0.975 0.012 158);
+  color: oklch(0.38 0.052 157);
+  font-size: 0.79rem;
+  line-height: 1.45;
+}
+
+.runtime-workbench-grid {
+  display: grid;
+  grid-template-columns: minmax(200px, 0.68fr) minmax(290px, 1fr) minmax(320px, 1.22fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.runtime-pane {
+  min-width: 0;
+  border: 1px solid oklch(0.9 0.012 155);
+  border-radius: 9px;
+  background: oklch(1 0 0);
+}
+
+.runtime-pane-head {
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 12px 10px;
+  border-bottom: 1px solid oklch(0.92 0.01 155);
+}
+
+.runtime-pane-head > div {
+  display: grid;
+  gap: 2px;
+}
+
+.runtime-pane-head > div > span,
+.runtime-section-label,
+.runtime-trace-caption {
+  color: oklch(0.5 0.038 157);
+  font-size: 0.7rem;
+  font-weight: 760;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.runtime-pane-head h3 {
+  margin: 0;
+  font-size: 0.89rem;
+}
+
+.runtime-icon-button {
+  display: inline-grid;
+  width: 31px;
+  height: 31px;
+  padding: 0;
+  place-items: center;
+}
+
+.runtime-text-button {
+  min-height: 30px;
+  padding: 0 8px;
+}
+
+.runtime-workflow-list {
+  display: grid;
+  gap: 1px;
+  padding: 5px;
+}
+
+.runtime-workflow-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 8px;
+  width: 100%;
+  padding: 10px 9px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+
+.runtime-workflow-row:hover,
+.runtime-workflow-row.selected {
+  border-color: oklch(0.85 0.027 158);
+  background: oklch(0.975 0.012 158);
+}
+
+.runtime-workflow-row > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.runtime-workflow-row span:not(.runtime-status) {
+  color: oklch(0.48 0.028 156);
+  font-size: 0.7rem;
+}
+
+.runtime-workflow-row strong {
+  overflow: hidden;
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-workflow-row > small {
+  grid-column: 1 / -1;
+  color: oklch(0.57 0.018 155);
+  font-size: 0.68rem;
+}
+
+.runtime-status {
+  width: fit-content;
+  padding: 3px 6px;
+  border: 1px solid oklch(0.86 0.018 155);
+  border-radius: 999px;
+  background: oklch(0.975 0.008 155);
+  color: oklch(0.46 0.025 155);
+  font-size: 0.68rem;
+  font-weight: 750;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.runtime-status.running,
+.runtime-status.completed {
+  border-color: oklch(0.82 0.05 157);
+  background: oklch(0.96 0.028 157);
+  color: oklch(0.37 0.072 157);
+}
+
+.runtime-status.waiting_user,
+.runtime-status.waiting_human,
+.runtime-status.pending {
+  border-color: oklch(0.86 0.055 85);
+  background: oklch(0.978 0.032 85);
+  color: oklch(0.48 0.083 76);
+}
+
+.runtime-status.failed,
+.runtime-status.failed_retryable,
+.runtime-status.blocked,
+.runtime-status.cancelled {
+  border-color: oklch(0.88 0.05 28);
+  background: oklch(0.98 0.022 30);
+  color: oklch(0.5 0.084 28);
+}
+
+.runtime-state-pane {
+  padding-bottom: 11px;
+}
+
+.runtime-state-header {
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 11px 12px 4px;
+}
+
+.runtime-state-header > span:not(.runtime-status) {
+  color: oklch(0.32 0.05 156);
+  font-size: 0.79rem;
+  font-weight: 760;
+}
+
+.runtime-state-header small {
+  margin-left: auto;
+  color: oklch(0.55 0.018 155);
+  font-size: 0.7rem;
+}
+
+.runtime-callout {
+  display: grid;
+  gap: 3px;
+  margin: 8px 12px;
+  padding: 9px 10px;
+  border-left: 2px solid oklch(0.68 0.085 85);
+  background: oklch(0.982 0.02 88);
+}
+
+.runtime-callout strong {
+  font-size: 0.74rem;
+}
+
+.runtime-callout p {
+  margin: 0;
+  color: oklch(0.43 0.035 80);
+  font-size: 0.77rem;
+  line-height: 1.48;
+}
+
+.runtime-callout.human {
+  border-color: oklch(0.61 0.075 245);
+  background: oklch(0.978 0.013 245);
+}
+
+.runtime-callout.human p {
+  color: oklch(0.4 0.038 245);
+}
+
+.runtime-callout.error {
+  border-color: oklch(0.62 0.12 28);
+  background: oklch(0.982 0.013 28);
+}
+
+.runtime-callout.error p {
+  color: oklch(0.43 0.065 28);
+}
+
+.runtime-task-board {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px 2px;
+}
+
+.runtime-task-board article {
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 7px;
+  padding: 8px 0;
+  border-top: 1px solid oklch(0.93 0.008 155);
+}
+
+.runtime-task-board article > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.runtime-task-board strong {
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
+.runtime-task-board article span:not(.runtime-status),
+.runtime-task-board p,
+.runtime-task-empty {
+  color: oklch(0.52 0.02 155);
+  font-size: 0.7rem;
+  line-height: 1.42;
+}
+
+.runtime-task-board p {
+  width: 100%;
+  margin: 0;
+}
+
+.runtime-task-empty {
+  padding: 14px 12px;
+}
+
+.runtime-resume {
+  align-items: flex-end;
+  gap: 8px;
+  margin: 10px 12px 0;
+  padding-top: 10px;
+  border-top: 1px solid oklch(0.92 0.01 155);
+}
+
+.runtime-resume label {
+  display: grid;
+  flex: 1;
+  gap: 5px;
+  color: oklch(0.42 0.032 155);
+  font-size: 0.73rem;
+  font-weight: 740;
+}
+
+.runtime-resume textarea {
+  min-height: 62px;
+  resize: vertical;
+  padding: 8px;
+  border: 1px solid oklch(0.84 0.02 155);
+  border-radius: 6px;
+  background: oklch(1 0 0);
+  color: oklch(0.28 0.03 155);
+  font: inherit;
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.runtime-resume textarea:focus {
+  border-color: oklch(0.55 0.1 158);
+  outline: 2px solid oklch(0.8 0.06 158 / 0.35);
+  outline-offset: 1px;
+}
+
+.runtime-trace-caption {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.runtime-trace-list {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 4px 9px 9px 30px;
+  list-style: none;
+}
+
+.runtime-trace-list li {
+  position: relative;
+  border-bottom: 1px solid oklch(0.93 0.008 155);
+}
+
+.runtime-trace-list li::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -17px;
+  width: 1px;
+  background: oklch(0.86 0.02 155);
+  content: "";
+}
+
+.runtime-trace-list li:first-child::before {
+  top: 22px;
+}
+
+.runtime-trace-list li:last-child::before {
+  bottom: auto;
+  height: 22px;
+}
+
+.runtime-trace-row {
+  justify-content: space-between;
+  gap: 9px;
+  width: 100%;
+  padding: 9px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.runtime-trace-row:hover .runtime-trace-main strong {
+  color: oklch(0.37 0.09 158);
+}
+
+.runtime-trace-marker {
+  position: absolute;
+  top: 17px;
+  left: -21px;
+  width: 9px;
+  height: 9px;
+  border: 2px solid oklch(0.67 0.055 158);
+  border-radius: 50%;
+  background: oklch(1 0 0);
+}
+
+.runtime-trace-list li.error .runtime-trace-marker {
+  border-color: oklch(0.64 0.11 28);
+}
+
+.runtime-trace-main {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.runtime-trace-main strong {
+  font-size: 0.76rem;
+}
+
+.runtime-trace-main small,
+.runtime-trace-side small {
+  color: oklch(0.56 0.019 155);
+  font-size: 0.68rem;
+}
+
+.runtime-trace-main em {
+  overflow: hidden;
+  color: oklch(0.43 0.021 155);
+  font-size: 0.73rem;
+  font-style: normal;
+  line-height: 1.42;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-trace-side {
+  display: grid;
+  flex: 0 0 auto;
+  gap: 2px;
+  color: oklch(0.48 0.023 155);
+  font-size: 0.68rem;
+  text-align: right;
+}
+
+.runtime-trace-detail {
+  display: grid;
+  gap: 7px;
+  margin: 0 0 9px;
+  padding: 9px;
+  border: 1px solid oklch(0.91 0.012 155);
+  border-radius: 6px;
+  background: oklch(0.985 0.005 155);
+}
+
+.runtime-trace-detail dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px 10px;
+  margin: 0;
+}
+
+.runtime-trace-detail dl div {
+  display: grid;
+  gap: 1px;
+}
+
+.runtime-trace-detail dt,
+.runtime-trace-detail dd,
+.runtime-trace-detail p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.runtime-trace-detail dt {
+  color: oklch(0.55 0.02 155);
+  font-size: 0.66rem;
+}
+
+.runtime-trace-detail dd,
+.runtime-trace-detail p {
+  color: oklch(0.38 0.025 155);
+  font-size: 0.72rem;
+  line-height: 1.48;
+}
+
+.runtime-trace-detail p {
+  display: grid;
+  gap: 2px;
+}
+
+.runtime-trace-detail p strong {
+  color: oklch(0.42 0.045 157);
+  font-size: 0.68rem;
+}
+
+.runtime-trace-detail .trace-error strong,
+.runtime-trace-detail .trace-error {
+  color: oklch(0.48 0.085 28);
+}
+
+@media (max-width: 1180px) {
+  .runtime-workbench-grid {
+    grid-template-columns: minmax(220px, 0.72fr) minmax(300px, 1.1fr);
+  }
+
+  .runtime-trace-pane {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 760px) {
+  .runtime-workbench-head,
+  .runtime-launchbar,
+  .runtime-resume {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .runtime-overview,
+  .runtime-workbench-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .runtime-trace-pane {
+    grid-column: auto;
+  }
+
+  .runtime-goal-actions {
+    justify-content: stretch;
+  }
+
+  .runtime-start {
+    flex: 1 1 calc(50% - 4px);
+    justify-content: center;
+  }
+
+  .runtime-state-header small {
+    width: 100%;
+    margin-left: 0;
+  }
 }

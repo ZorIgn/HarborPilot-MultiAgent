@@ -7,17 +7,10 @@ import {
   Footer,
   Title as IslandTitle,
 } from "animal-island-ui";
-import { AlertTriangle, BookOpenCheck, CheckCircle2, ClipboardList, GraduationCap, KeyRound, Settings, ShieldCheck, Sparkles } from "lucide-react";
+import { AlertTriangle, BookOpenCheck, CheckCircle2, ClipboardList, GraduationCap, Settings, ShieldCheck, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  configureStudentLLM,
-  enqueueAgentJob,
-  getAgentQueue,
-  getAgentRuns,
-  getAgentSystemReport,
-  runNextAgentJob,
-  retryAgentJob,
   getEvidenceGraphSummary,
   getHealth,
   getLocalProfile,
@@ -31,7 +24,8 @@ import {
   getSourceRegistry,
   publishReviewBatch,
   publishReviewItem,
-  queueCatalogRefreshPlan,
+  getRuntimeWorkflows,
+  startRuntimeWorkflow,
   queueStudentCatalogRefreshPlan,
   runApplicationPlan,
   runBackgroundStage,
@@ -46,7 +40,7 @@ import {
   saveLocalProfile,
   saveLocalWorkspace,
 } from "@/lib/api";
-import { adminNavItems, appErrorCopy, dashboardCopy, pageTitles, progressCopy, studentCopy, studentNavItems, studentTrustWarning } from "@/lib/copy";
+import { adminNavItems, appErrorCopy, dashboardCopy, pageTitles, progressCopy, studentNavItems, studentTrustWarning } from "@/lib/copy";
 import { demoPayload } from "@/lib/demoPayload";
 import { AdminDataCenter, ProgramPackageDrawer, SourceRefreshSummary } from "./AdminDataCenter";
 import { AssessmentPage } from "./AssessmentPage";
@@ -54,9 +48,6 @@ import { filterCatalog, ProgramCatalogPage } from "./ProgramCatalogPage";
 import { ProgramMiniList, TimelinePage } from "./TimelinePage";
 import { WritingWorkspace } from "./WritingWorkspace";
 import type {
-  AgentQueueJob,
-  AgentRunSummary,
-  AgentSystemReport,
   ApplicantPayload,
   ApplicationPlanResult,
   CatalogAutoUpdateReport,
@@ -74,6 +65,9 @@ import type {
   ReviewBulkPublishResponse,
   ReviewPublishResponse,
   ReviewQueueSummary,
+  RuntimeWorkflowGoal,
+  RuntimeWorkflowListItem,
+  RuntimeWorkflowState,
   ScenarioAuditReport,
   SourceRegistry,
   SourceHealthSummary,
@@ -89,7 +83,6 @@ import type {
 type ViewMode = "home" | "assessment" | "programs" | "timeline" | "writing" | "agent" | "settings";
 type StageLoading = "background" | "programs" | "timeline" | "writing" | "interview" | "data" | "crawl" | "catalog" | "review" | "scenario" | "package" | "llm" | null;
 type SourceHealthLoadState = "loading" | "ready" | "error";
-type Provider = "mock" | "deepseek" | "openai" | "compatible";
 type DocumentType = "PS" | "SOP" | "CV" | "ESSAY" | "REFERENCE_PACKAGE";
 type QuestionnaireValues = Record<string, string>;
 type AppState = Partial<WorkflowResult & LayeredProgramPlanResult & ApplicationPlanResult & WritingPlanResult> & {
@@ -128,9 +121,9 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
   const [reviewBulkPublishResult, setReviewBulkPublishResult] = useState<ReviewBulkPublishResponse | null>(null);
   const [scenarioAudit, setScenarioAudit] = useState<ScenarioAuditReport | null>(null);
   const [evidenceGraph, setEvidenceGraph] = useState<EvidenceGraphSummary | null>(null);
-  const [agentSystem, setAgentSystem] = useState<AgentSystemReport | null>(null);
-  const [agentRuns, setAgentRuns] = useState<AgentRunSummary[]>([]);
-  const [agentQueue, setAgentQueue] = useState<AgentQueueJob[]>([]);
+  const [runtimeWorkflows, setRuntimeWorkflows] = useState<RuntimeWorkflowListItem[]>([]);
+  const [runtimeBusy, setRuntimeBusy] = useState(false);
+  const [runtimeMessage, setRuntimeMessage] = useState("");
   const [questionnaireSchema, setQuestionnaireSchema] = useState<QuestionnaireSchema | null>(null);
   const [questionnaireValues, setQuestionnaireValues] = useState<QuestionnaireValues>({});
   const [selectedProgramIds, setSelectedProgramIds] = useState<string[]>([]);
@@ -145,12 +138,7 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
   const [programPackage, setProgramPackage] = useState<ProgramDataPackage | null>(null);
   const [packageOpen, setPackageOpen] = useState(false);
   const [filters, setFilters] = useState({ q: "", region: "", discipline: "", verification_status: "", deadline_status: "" });
-  const [provider, setProvider] = useState<Provider>("deepseek");
-  const [model, setModel] = useState("deepseek-chat");
-  const [baseUrl, setBaseUrl] = useState("");
-  const [apiKey, setApiKey] = useState("");
-  const [llmMessage, setLlmMessage] = useState("当前使用示例模式。选择真实模型并填写 API Key 后，解释、文书和 Agent 辅助会调用你连接的模型；Key 只提交给本机后端，不保存在浏览器。")
-  const [agentWorkerMessage, setAgentWorkerMessage] = useState("Agent queue is idle. Source crawling, catalog updates, and planning jobs can run in the background worker.");
+
   const [writingDocumentType, setWritingDocumentType] = useState<DocumentType>("PS");
   const [writingTargetProgramId, setWritingTargetProgramId] = useState("");
   const profileSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -176,9 +164,7 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
       .then((value) => { if (active) { setSourceHealth(value); setSourceHealthLoadState("ready"); } })
       .catch(() => { if (active) { setSourceHealth(null); setSourceHealthLoadState("error"); } });
     getEvidenceGraphSummary().then(setEvidenceGraph).catch(() => setEvidenceGraph(null));
-    getAgentSystemReport().then(setAgentSystem).catch(() => setAgentSystem(null));
-    getAgentRuns(20).then(setAgentRuns).catch(() => setAgentRuns([]));
-    getAgentQueue(20).then(setAgentQueue).catch(() => setAgentQueue([]));
+    getRuntimeWorkflows(20).then(setRuntimeWorkflows).catch(() => setRuntimeWorkflows([]));
     getQuestionnaireSchema().then(setQuestionnaireSchema).catch(() => setQuestionnaireSchema(null));
     return () => {
       active = false;
@@ -307,34 +293,48 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
     saveWorkspace({ writingDraftHistory: history });
   }
 
-  async function queueAgentWorkflow(workflowName: string, payloadSummary: string, payloadData: Record<string, unknown> = {}) {
-    setError(null);
-    try {
-      const job = await enqueueAgentJob({ workflow_name: workflowName, payload_summary: payloadSummary, payload: payloadData });
-      setAgentWorkerMessage(`\u5df2\u52a0\u5165 Agent \u961f\u5217\uff1a${job.workflow_name} / ${job.job_id}`);
-      setAgentQueue(await getAgentQueue(20));
-    } catch (err) { setError("Agent \u961f\u5217\u6682\u65f6\u65e0\u6cd5\u5199\u5165\uff0c\u8bf7\u786e\u8ba4\u540e\u7aef\u670d\u52a1\u5df2\u542f\u52a8\u3002"); }
+  async function refreshRuntimeWorkflows() {
+    const workflows = await getRuntimeWorkflows(20);
+    setRuntimeWorkflows(workflows);
   }
 
-  async function queueFullCatalogRefresh() {
+  async function startSupervisorWorkflow(goal: RuntimeWorkflowGoal): Promise<RuntimeWorkflowState | null> {
+    setRuntimeBusy(true);
+    setRuntimeMessage("");
     setError(null);
+    const userRequest: Record<RuntimeWorkflowGoal, string> = {
+      background_assessment: "请评估当前学生背景、资料完整度与下一步需要补充的信息。",
+      program_recommendation: "请在招生资格、用户偏好和官网证据边界分离的前提下，生成项目推荐方案。",
+      application_planning: "请基于已选项目与经核验的官方要求，生成申请准备规划。",
+      writing: "请基于已确认事实、项目证据和问卷资料，规划文书准备任务。",
+      full_application_plan: "请完成背景评估、项目推荐、官网核验与申请规划；信息不足时先提出问题。",
+    };
     try {
-      const response = await queueCatalogRefreshPlan({
-        selected_program_ids: selectedProgramIds,
-        dry_run: false,
-        include_community: true,
-        max_programs: 48,
-        max_candidates_per_program: 6,
-        max_sources_per_program: 8,
+      const state = await startRuntimeWorkflow({
+        goal,
+        profile: payload,
+        user_request: userRequest[goal],
+        questionnaire: buildQuestionnaireResponse(questionnaireSchema, questionnaireValues),
+        selected_program_ids: selectedProgramIds.slice(0, 20),
+        document_type: writingDocumentType,
       });
-      setAgentWorkerMessage(`Queued source update chain: ${response.jobs.length} jobs. ${response.next_step}`);
-      setAgentQueue(await getAgentQueue(20));
-      setAgentRuns(await getAgentRuns(20));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Catalog refresh plan could not be queued. Check backend and Admin token.");
+      setRuntimeMessage(`Supervisor Runtime 已创建 ${state.workflow_id}，当前状态：${state.status}。`);
+      try {
+        await refreshRuntimeWorkflows();
+      } catch {
+        // The newly-created workflow remains visible through its owner cookie;
+        // the history endpoint itself intentionally requires administrator access.
+      }
+      return state;
+    } catch (runtimeError) {
+      const detail = runtimeError instanceof Error ? runtimeError.message : "无法启动 Supervisor Runtime。";
+      setRuntimeMessage(detail);
+      setError(detail);
+      return null;
+    } finally {
+      setRuntimeBusy(false);
     }
   }
-
   async function requestProgramSourceUpdate(programId: string) {
     setError(null);
     try {
@@ -346,34 +346,11 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
         include_data_acquisition: true,
         include_crawl_queue: true,
       });
-      setAgentWorkerMessage(`已加入信息更新队列：${response.jobs.length} 个任务。`);
-      setAgentQueue(await getAgentQueue(20).catch(() => []));
+      setRuntimeMessage(`信息更新队列已创建：${response.jobs.length} 个任务。`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "信息更新队列暂时无法写入，请确认后端已启动。");
     }
   }
-  async function runAgentWorker() {
-    setError(null);
-    try {
-      const response = await runNextAgentJob();
-      setAgentWorkerMessage(response.message);
-      setAgentRuns(await getAgentRuns(20));
-      setAgentQueue(await getAgentQueue(20));
-    } catch (err) { setError("Agent worker \u6682\u65f6\u6ca1\u6709\u6267\u884c\u6210\u529f\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002"); }
-  }
-
-
-  async function retryAgentWorkflow(jobId: string) {
-    setError(null);
-    try {
-      const response = await retryAgentJob(jobId);
-      setAgentWorkerMessage("Agent job 已重新加入队列：" + response.job_id);
-      setAgentQueue(await getAgentQueue(20));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Agent job 暂时无法重试。");
-    }
-  }
-
   async function runBackground(nextPayload = payload) {
     setLoading("background"); setError(null);
     try { const response = await runBackgroundStage(nextPayload); persistPayload(nextPayload); mergeResult(response); }
@@ -561,19 +538,6 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
     finally { setLoading(null); }
   }
 
-  async function connectLLM() {
-    if (provider !== "mock" && !apiKey.trim()) { setLlmMessage(appErrorCopy.modelKeyRequired); return; }
-    setLoading("llm"); setLlmMessage(appErrorCopy.modelConnecting);
-    try {
-      const request = provider === "mock" ? { provider } : { provider, api_key: apiKey.trim(), model, base_url: provider === "compatible" ? baseUrl.trim() : undefined };
-      const config = await configureStudentLLM(request);
-      setHealth({ status: "ok", llm_mode: config.model, llm_provider: config.provider });
-      setLlmMessage(config.message);
-      setApiKey("");
-    } catch (err) { setLlmMessage(err instanceof Error ? err.message : appErrorCopy.modelConnectFailed); }
-    finally { setLoading(null); }
-  }
-
   async function useSampleProfile() {
     const sample = { ...demoPayload };
     persistPayload(sample);
@@ -599,8 +563,8 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
           {view === "programs" ? <ProgramCatalogPage payload={payload} catalog={visibleCatalog} catalogTotal={catalog.length} catalogError={catalogError} result={result} focusList={focusList} applicationMix={applicationMix} filters={filters} setFilters={setFilters} selectedProgramIds={selectedProgramIds} programScheme={programScheme} onSchemeChange={updateProgramScheme} onToggle={toggleProgram} onInspect={openProgramPackage} onRequestSourceUpdate={requestProgramSourceUpdate} onRun={() => runPrograms()} loading={loading} /> : null}
           {view === "timeline" ? <TimelinePage selectedMatches={selectedMatches} timeline={result?.timeline ?? []} loading={loading} onRun={runTimeline} onRefresh={() => refreshSources(false)} onTaskStatusChange={updateTimelineTaskStatus} /> : null}
           {view === "writing" ? <WritingWorkspace schema={questionnaireSchema} values={questionnaireValues} onChange={updateQuestionnaire} selectedProgramIds={selectedProgramIds} recommendations={writingProgramOptions} documentType={writingDocumentType} setDocumentType={setWritingDocumentType} targetProgramId={writingTargetProgramId} setTargetProgramId={setWritingTargetProgramId} questions={interviewQuestions} storyCards={result?.story_cards ?? []} writing={result?.writing} rubric={writingReview} draftHistory={writingDraftHistory} onDraftHistoryChange={updateWritingDraftHistory} loading={loading} onInterview={runInterview} onRun={runWriting} /> : null}
-          {view === "agent" ? <AdminDataCenter evidenceGraph={evidenceGraph} agentSystem={agentSystem} agentRuns={agentRuns} agentQueue={agentQueue} modelProvider={health?.llm_provider ?? "mock"} modelName={health?.llm_mode ?? "mock"} workerMessage={agentWorkerMessage} onQueueAgentWorkflow={queueAgentWorkflow} onQueueCatalogRefreshPlan={queueFullCatalogRefresh} onRunAgentWorker={runAgentWorker} onRetryAgentJob={retryAgentWorkflow} sourceRegistry={sourceRegistry} sourceRefresh={result?.source_refresh ?? null} sourceAcquisition={sourceAcquisition} crawlQueue={crawlQueue} reviewQueue={reviewQueue} reviewPublishResult={reviewPublishResult} reviewBulkPublishResult={reviewBulkPublishResult} scenarioAudit={scenarioAudit} catalogAutoUpdate={catalogAutoUpdate} selectedProgramCount={selectedProgramIds.length} onRefresh={() => refreshSources(false)} onLiveRefresh={() => refreshSources(true)} onRunAcquisition={runAcquisition} onBuildCrawlQueue={buildCrawlQueue} onRunCatalogAutoUpdate={runCatalogUpdate} onLoadReviewQueue={loadReviewQueue} onLoadScenarioAudit={loadScenarioAudit} onPreviewReviewDecision={publishReviewDecision} onBulkPublishReview={publishReviewBatchDecision} loading={loading} /> : null}
-          {view === "settings" ? <SettingsView provider={provider} model={model} baseUrl={baseUrl} apiKey={apiKey} message={llmMessage} loading={loading === "llm"} currentProvider={health?.llm_provider ?? "mock"} currentModel={health?.llm_mode ?? "mock"} onProviderChange={setProvider} onModelChange={setModel} onBaseUrlChange={setBaseUrl} onApiKeyChange={setApiKey} onConnect={connectLLM} /> : null}
+          {view === "agent" ? <AdminDataCenter evidenceGraph={evidenceGraph} runtimeWorkflows={runtimeWorkflows} modelProvider={health?.llm_provider ?? "mock"} modelName={health?.llm_mode ?? "mock"} runtimeMessage={runtimeMessage} runtimeBusy={runtimeBusy} sourceRegistry={sourceRegistry} sourceRefresh={result?.source_refresh ?? null} sourceAcquisition={sourceAcquisition} crawlQueue={crawlQueue} reviewQueue={reviewQueue} reviewPublishResult={reviewPublishResult} reviewBulkPublishResult={reviewBulkPublishResult} scenarioAudit={scenarioAudit} catalogAutoUpdate={catalogAutoUpdate} selectedProgramCount={selectedProgramIds.length} onRefresh={() => refreshSources(false)} onLiveRefresh={() => refreshSources(true)} onRunAcquisition={runAcquisition} onBuildCrawlQueue={buildCrawlQueue} onRunCatalogAutoUpdate={runCatalogUpdate} onLoadReviewQueue={loadReviewQueue} onLoadScenarioAudit={loadScenarioAudit} onPreviewReviewDecision={publishReviewDecision} onBulkPublishReview={publishReviewBatchDecision} onStartRuntimeWorkflow={startSupervisorWorkflow} onRefreshRuntimeWorkflows={refreshRuntimeWorkflows} loading={loading} /> : null}
+          {view === "settings" ? <SettingsView currentProvider={health?.llm_provider ?? "mock"} currentModel={health?.llm_mode ?? "mock"} /> : null}
         </section>
         <ProgramPackageDrawer open={packageOpen} onClose={() => setPackageOpen(false)} dataPackage={programPackage} />
       </main>
@@ -630,18 +594,17 @@ function DashboardView(props: { result: AppState | null; selectedMatches: Progra
 }
 
 function AdminModelNotice({ onSample }: { onSample: () => void }) {
-  return <IslandCard className="key-card compact" color="app-yellow" pattern="default"><div className="key-card-copy"><span className="mini-label"><ShieldCheck size={16} aria-hidden />AI 连接</span><h2>当前使用示例模式，需要真实模型时可在 AI 设置中连接。</h2><p>{studentCopy.modelManagedByAdmin}</p></div><div className="key-actions"><IslandButton type="default" onClick={onSample}>使用示例档案体验</IslandButton><Link className="text-link" href="/settings">进入 AI 设置</Link></div></IslandCard>;
+  return <IslandCard className="key-card compact" color="app-yellow" pattern="default"><div className="key-card-copy"><span className="mini-label"><ShieldCheck size={16} aria-hidden />运行时策略</span><h2>当前使用确定性示例 Provider。</h2><p>模型供应商、密钥和兼容地址只由管理员在受保护的服务端配置；学生端不会提交或存储 API Key。</p></div><div className="key-actions"><IslandButton type="default" onClick={onSample}>使用示例档案体验</IslandButton><Link className="text-link" href="/settings">查看运行时状态</Link></div></IslandCard>;
 }
 
-function SettingsView(props: { provider: Provider; model: string; baseUrl: string; apiKey: string; message: string; loading: boolean; currentProvider: string; currentModel: string; onProviderChange: (value: Provider) => void; onModelChange: (value: string) => void; onBaseUrlChange: (value: string) => void; onApiKeyChange: (value: string) => void; onConnect: () => void; }) {
+function SettingsView(props: { currentProvider: string; currentModel: string }) {
   const connected = props.currentProvider !== "mock";
   return <div className="page-stack">
-    <IslandCard className="panel-card" color="app-teal"><PanelTitle icon={<Settings size={19} aria-hidden />} title="AI 模型连接" /><p className="form-note">学生可以在这里选择要使用的大模型。背景硬门槛、语言要求、项目来源可信度仍由规则和官网字段判断；模型只用于解释、文书草稿、检索摘要和 Agent 辅助。</p></IslandCard>
-    <IslandCard className="key-card" color="app-yellow" pattern="default"><div className="key-card-copy"><span className="mini-label"><KeyRound size={16} aria-hidden />本机模型设置</span><h2>连接你的 AI 助手</h2><p>API Key 会提交给本机后端用于当前运行时连接，不写入浏览器存储。没有 Key 时可以继续使用示例模式体验完整流程。</p></div><div className="key-form"><label>AI 服务<select value={props.provider} onChange={(event) => props.onProviderChange(event.target.value as Provider)}><option value="deepseek">DeepSeek</option><option value="openai">OpenAI</option><option value="compatible">OpenAI 兼容接口</option><option value="mock">示例模式</option></select></label><label>模型名称<input value={props.model} onChange={(event) => props.onModelChange(event.target.value)} placeholder="例如 deepseek-chat / gpt-4.1-mini" /></label>{props.provider === "compatible" ? <label className="wide-field">接口地址<input value={props.baseUrl} onChange={(event) => props.onBaseUrlChange(event.target.value)} placeholder="https://api.example.com/v1" /></label> : null}{props.provider !== "mock" ? <label className="wide-field">API Key<input value={props.apiKey} type="password" onChange={(event) => props.onApiKeyChange(event.target.value)} placeholder="只发送到本机后端，不保存在浏览器" /></label> : null}<div className="key-actions"><IslandButton type="primary" loading={props.loading} onClick={props.onConnect}>{props.loading ? "连接中" : props.provider === "mock" ? "使用示例模式" : "连接 AI 助手"}</IslandButton></div><p className="form-note">{props.message}</p></div></IslandCard>
-    <IslandCard className="panel-card"><PanelTitle icon={<ShieldCheck size={19} aria-hidden />} title="当前状态" /><section className="status-grid two"><Metric label="AI 服务" value={connected ? providerLabel(props.currentProvider) : "示例模式"} detail={connected ? "已连接真实模型" : "未连接真实模型，流程仍可演示"} /><Metric label="当前模型" value={props.currentModel} detail="用于解释、问卷追问和文书草稿" /></section></IslandCard>
+    <IslandCard className="panel-card" color="app-teal"><PanelTitle icon={<Settings size={19} aria-hidden />} title="AI 运行时状态" /><p className="form-note">为保护所有学生资料，模型 Provider、API Key 与兼容接口地址由管理员在服务端统一管理。该页面仅显示当前运行时，不提供匿名配置入口。</p></IslandCard>
+    <IslandCard className="key-card" color="app-yellow" pattern="default"><div className="key-card-copy"><span className="mini-label"><ShieldCheck size={16} aria-hidden />受保护配置</span><h2>学生端不接触模型密钥</h2><p>Supervisor Runtime 只记录经过脱敏的执行摘要、Token 用量和已配置价格的真实成本；API Key 不会写入浏览器、本地工作区或 Trace。</p></div></IslandCard>
+    <IslandCard className="panel-card"><PanelTitle icon={<ShieldCheck size={19} aria-hidden />} title="当前状态" /><section className="status-grid two"><Metric label="AI 服务" value={connected ? providerLabel(props.currentProvider) : "示例模式"} detail={connected ? "由管理员授权的 Provider" : "无外部密钥的确定性运行"} /><Metric label="当前模型" value={props.currentModel} detail="用于受权限约束的 Agent 决策与工具调用" /></section></IslandCard>
   </div>;
 }
-
 function providerLabel(value: string) {
   return ({ deepseek: "DeepSeek", openai: "OpenAI", compatible: "兼容接口", mock: "示例模式" } as Record<string, string>)[value] ?? value;
 }

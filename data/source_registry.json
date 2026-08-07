@@ -205,7 +205,7 @@
       "region": "COMMUNITY",
       "trust_level": "community",
       "allowed_uses": ["参考录取结果社区信号", "发现项目别名和申请体验关键词"],
-      "forbidden_uses": ["作为官方录取概率、官方要求、截止日期或项目存在性的唯一依据"],
+      "forbidden_uses": ["不得作为官方要求、截止日期、项目存在性或录取结果的唯一依据"],
       "refresh_cadence": "monthly_signal_review",
       "extraction_method": "manual search or user-provided excerpts only",
       "requires_official_confirmation": true

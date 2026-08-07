@@ -7,8 +7,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 
+from harbor_agent.services.data_acquisition import ProgramDataAcquisitionService
 from harbor_agent.agents.orchestrator import WorkflowOrchestrator
-from harbor_agent.agents.scenario_audit import ScenarioAuditAgent, ScenarioAuditExpectation
+from harbor_agent.evals.scenario_suite import ScenarioEvalExpectation, ScenarioEvalSuite
+from harbor_agent.services.source_crawl_queue import SourceCrawlQueueService
 from harbor_agent.core.llm import MockLLMProvider
 from harbor_agent.models import (
     AgentStatus,
@@ -157,11 +159,11 @@ def audit_case(orchestrator: WorkflowOrchestrator, case: ScenarioCase) -> Scenar
     plan = orchestrator.run_program_plan_stage(payload)
     selected_ids = [item.program.id for item in plan.application_mix[:2]]
     application = orchestrator.run_application_plan_stage(payload, selected_ids)
-    crawl_queue = orchestrator.run_crawl_queue_stage(
+    crawl_queue = SourceCrawlQueueService().run(
         CrawlQueueRequest(selected_program_ids=selected_ids, include_community=True, max_sources_per_program=8)
     )
     target_ids = list(case.target_program_ids)
-    data_acquisition = orchestrator.run_data_acquisition_stage(
+    data_acquisition = ProgramDataAcquisitionService().run(
         DataAcquisitionRequest(
             selected_program_ids=target_ids,
             include_community=True,
@@ -170,8 +172,8 @@ def audit_case(orchestrator: WorkflowOrchestrator, case: ScenarioCase) -> Scenar
         )
     )
     review_queues = {program_id: build_review_queue(program_id=program_id, limit=20) for program_id in target_ids}
-    audit_report = ScenarioAuditAgent().run(
-        ScenarioAuditExpectation(
+    audit_report = ScenarioEvalSuite().run(
+        ScenarioEvalExpectation(
             name=case.name,
             expect_strict_intent=case.expect_strict_intent,
             expect_no_reach=case.expect_no_reach,
@@ -187,7 +189,7 @@ def audit_case(orchestrator: WorkflowOrchestrator, case: ScenarioCase) -> Scenar
         review_queues=review_queues,
     )
     failures = audit_report.failures
-    audit_trace = _build_audit_trace(plan, application, crawl_queue, data_acquisition, audit_report)
+    audit_trace = [*plan.trace, *application.trace]
     return ScenarioAuditResult(
         case=case,
         plan=plan,
@@ -200,76 +202,6 @@ def audit_case(orchestrator: WorkflowOrchestrator, case: ScenarioCase) -> Scenar
     )
 
 
-
-def _build_audit_trace(
-    plan: ProgramPlanResult,
-    application: ApplicationPlanResult,
-    crawl_queue: CrawlQueueReport,
-    data_acquisition: DataAcquisitionReport,
-    audit_report,
-) -> list[AgentTraceEvent]:
-    trace: list[AgentTraceEvent] = list(plan.trace)
-    trace.append(
-        _trace_event(
-            "ProgramDataAcquisitionAgent",
-            input_summary=f"packages={len(data_acquisition.packages)}",
-            output_summary=f"source_plan={len(data_acquisition.source_plan)}; human_review_required=True",
-            tool_calls=["data_package_builder", "field_coverage_gate", "community_boundary_gate"],
-            needs_human_reason="Official fields require reviewer publication before formal use.",
-        )
-    )
-    trace.append(
-        _trace_event(
-            "SourceCrawlQueueAgent",
-            input_summary=f"selected={crawl_queue.selected_program_ids}",
-            output_summary=f"jobs={crawl_queue.job_count}; official={crawl_queue.official_job_count}; community={crawl_queue.community_job_count}",
-            tool_calls=["crawl_job_builder", "snapshot_policy_gate", "community_boundary_gate"],
-            needs_human_reason="Crawler jobs only create review candidates.",
-        )
-    )
-    review_event = next((event for event in reversed(application.trace) if event.node == "ReviewAgent"), None)
-    if review_event:
-        trace.append(review_event)
-    else:
-        trace.append(
-            _trace_event(
-                "ReviewAgent",
-                input_summary="application plan",
-                output_summary=str(application.review.get("passed")),
-                tool_calls=["official_field_gate", "timeline_gate"],
-                needs_human_reason="Application review was not present in trace.",
-            )
-        )
-    trace.append(
-        _trace_event(
-            "ScenarioAuditAgent",
-            input_summary=audit_report.scenario_name,
-            output_summary="passed" if audit_report.passed else f"failures={len(audit_report.failures)}",
-            tool_calls=["scenario_matrix", "target_program_drilldown", "data_trust_gate", "agent_trace_gate"],
-            needs_human_reason=None if audit_report.passed else "Scenario audit found quality failures.",
-        )
-    )
-    return trace
-
-
-def _trace_event(
-    node: str,
-    input_summary: str,
-    output_summary: str,
-    tool_calls: list[str],
-    needs_human_reason: str | None = None,
-) -> AgentTraceEvent:
-    now = datetime.now(UTC)
-    return AgentTraceEvent(
-        node=node,
-        status=AgentStatus.needs_human if needs_human_reason else AgentStatus.completed,
-        started_at=now,
-        finished_at=now,
-        input_summary=input_summary,
-        output_summary=output_summary,
-        tool_calls=tool_calls,
-        needs_human_reason=needs_human_reason,
-    )
 
 
 def run_audit() -> list[ScenarioAuditResult]:
@@ -286,17 +218,7 @@ def scenario_audit_summary() -> dict:
         "failure_count": len(failures),
         "failures": failures,
         "cases": [_case_summary(result) for result in results],
-        "agent_chain": [
-            "ProfileAgent",
-            "EvidenceAgent",
-            "EvaluationAgent",
-            "ProgramIntelligenceAgent",
-            "SchoolMatchingAgent",
-            "ProgramDataAcquisitionAgent",
-            "SourceCrawlQueueAgent",
-            "ReviewAgent",
-            "ScenarioAuditAgent",
-        ],
+        "runtime_trace_nodes": sorted({event.node for result in results for event in result.audit_trace}),
     }
 
 

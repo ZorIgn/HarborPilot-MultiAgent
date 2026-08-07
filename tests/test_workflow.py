@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from harbor_agent.agents.orchestrator import WorkflowOrchestrator
-from harbor_agent.agents.profile import ProfileAgent
+from harbor_agent.services.deterministic_profile import normalize_profile
 from harbor_agent.core.llm import MockLLMProvider
 from harbor_agent.models import ApplicantProfileInput
 
@@ -22,7 +22,7 @@ def test_profile_agent_uses_structured_courses_and_skills_for_direction() -> Non
     payload.additional_background.core_courses = ["Machine Learning", "Database Systems"]
     payload.additional_background.skills = ["Python", "SQL"]
 
-    profile = ProfileAgent().run(payload)
+    profile = normalize_profile(payload)
 
     assert {"artificial_intelligence", "data_science", "computer_science"} & set(profile.discipline_tags)
     assert "core courses or prerequisites" not in profile.missing_fields
@@ -34,7 +34,7 @@ def test_assessment_workflow_runs_all_agents() -> None:
     assert result.assessment.overall_level in {"A", "A-", "B+", "B", "C+", "C"}
     assert result.assessment.competitiveness_level in {"强", "中强", "中", "弱"}
     assert result.assessment.application_positioning
-    assert {"冲刺", "主申", "保底"} <= set(result.assessment.application_positioning)
+    assert {"冲刺", "主申", "相对稳妥"} <= set(result.assessment.application_positioning)
     assert result.assessment.hard_thresholds
     assert result.assessment.strengthening_actions
     assert len(result.assessment.strengthening_actions) >= 6
@@ -47,16 +47,10 @@ def test_assessment_workflow_runs_all_agents() -> None:
     assert result.recommendations
     assert result.timeline
     assert result.writing.outline
-    assert [event.node for event in result.trace] == [
-        "ProfileAgent",
-        "EvidenceAgent",
-        "EvaluationAgent",
-        "ProgramIntelligenceAgent",
-        "SchoolMatchingAgent",
-        "TimelineAgent",
-        "WritingAgent",
-        "ReviewAgent",
-    ]
+    trace_nodes = {event.node for event in result.trace}
+    assert {"AssessmentAgent", "ResearchAgent", "MatchingAgent", "VerificationAgent", "PlanningAgent", "WritingAgent", "CriticAgent"} <= trace_nodes
+    assert trace_nodes <= {"AssessmentAgent", "ResearchAgent", "MatchingAgent", "VerificationAgent", "PlanningAgent", "WritingAgent", "CriticAgent"}
+    assert all(event.tool_calls for event in result.trace)
 
 
 def test_recommended_programs_do_not_violate_hard_rules() -> None:

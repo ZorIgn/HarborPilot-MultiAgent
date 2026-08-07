@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, date as CalendarDate
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, model_validator
 
 
 class EvidenceLevel(str, Enum):
@@ -144,6 +144,7 @@ class ApplicantProfileInput(BaseModel):
     experiences: list[Experience] = Field(default_factory=list)
     additional_background: AdditionalBackground = Field(default_factory=AdditionalBackground)
     budget_hkd: int | None = Field(default=None, ge=0)
+    budget_mode: Literal["soft", "hard_cap"] = "soft"
     career_goal: str = ""
     risk_flags: list[str] = Field(default_factory=list)
 
@@ -159,6 +160,7 @@ class NormalizedProfile(BaseModel):
     experiences: list[Experience]
     additional_background: AdditionalBackground = Field(default_factory=AdditionalBackground)
     budget_hkd: int | None = None
+    budget_mode: Literal["soft", "hard_cap"] = "soft"
     career_goal: str = ""
     risk_flags: list[str] = Field(default_factory=list)
     profile_completeness: int
@@ -279,6 +281,20 @@ class ProgramRefreshFinding(BaseModel):
     next_actions: list[str] = Field(default_factory=list)
 
 
+class ExecutionReference(BaseModel):
+    """Provenance for data produced through an actual runtime execution.
+
+    Maintenance services may leave this unset when they run outside a workflow.
+    They must never invent a sequence of agent names to stand in for a trace.
+    """
+
+    workflow_id: str | None = None
+    trace_event_ids: list[str] = Field(default_factory=list)
+    produced_by_agent: str | None = None
+    produced_by_tool: str | None = None
+    tool_call_id: str | None = None
+
+
 class FieldEvidenceRecord(BaseModel):
     program_id: str
     field_name: str
@@ -296,7 +312,7 @@ class FieldEvidenceRecord(BaseModel):
     reviewer_id: str | None = None
     evidence_snippet: str | None = None
     snapshot_url: HttpUrl | str | None = None
-    agent_chain: list[str] = Field(default_factory=list)
+    execution_ref: ExecutionReference | None = None
     source_scope: SourceScope | None = None
     page_title: str | None = None
     final_url: HttpUrl | str | None = None
@@ -326,7 +342,7 @@ class SourceExtractionResult(BaseModel):
     extracted_fields: list[FieldExtractionCandidate] = Field(default_factory=list)
     unresolved_fields: list[str] = Field(default_factory=list)
     raw_json: dict[str, Any] = Field(default_factory=dict)
-    agent_chain: list[str] = Field(default_factory=list)
+    execution_ref: ExecutionReference | None = None
     fetch_status: str = "UNKNOWN"
     final_url: HttpUrl | str | None = None
     page_title: str | None = None
@@ -467,7 +483,7 @@ class DataAcquisitionReport(BaseModel):
     persisted_evidence_count: int = 0
     summary: str
     next_actions: list[str] = Field(default_factory=list)
-    agent_chain: list[str] = Field(default_factory=list)
+    execution_ref: ExecutionReference | None = None
     quality_metrics: list[DataQualityMetric] = Field(default_factory=list)
     crawler_capabilities: list[str] = Field(default_factory=list)
     run_status: Literal["COMPLETED", "NEEDS_REVIEW", "FAILED"] = "NEEDS_REVIEW"
@@ -536,7 +552,7 @@ class CrawlQueueItem(BaseModel):
     human_review_required: bool = True
     publish_boundary: str
     next_actions: list[str] = Field(default_factory=list)
-    agent_chain: list[str] = Field(default_factory=list)
+    execution_ref: ExecutionReference | None = None
 
 
 class CrawlQueueReport(BaseModel):
@@ -548,7 +564,7 @@ class CrawlQueueReport(BaseModel):
     items: list[CrawlQueueItem] = Field(default_factory=list)
     summary: str
     warnings: list[str] = Field(default_factory=list)
-    agent_chain: list[str] = Field(default_factory=list)
+    execution_ref: ExecutionReference | None = None
 
 
 class ReviewQueueItem(BaseModel):
@@ -576,7 +592,7 @@ class ReviewQueueItem(BaseModel):
     reviewed_at: datetime | None = None
     publishable: bool = False
     boundary: str = "Only official public sources can be published as current requirements after human review."
-    agent_chain: list[str] = Field(default_factory=list)
+    execution_ref: ExecutionReference | None = None
 
 
 class ReviewQueueSummary(BaseModel):
@@ -689,8 +705,41 @@ class CatalogAutoUpdateReport(BaseModel):
     candidates: list[ProgramUrlCandidate] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     summary: str
-    agent_chain: list[str] = Field(default_factory=list)
+    execution_ref: ExecutionReference | None = None
 
+
+class ApplicationRound(BaseModel):
+    """A programme can publish different dates for multiple applicant rounds."""
+
+    name: str
+    open_date: date | None = None
+    deadline: date | None = None
+    applicant_scope: str | None = None
+
+
+class ExtractedDeadline(BaseModel):
+    round_name: str | None = None
+    date: CalendarDate | None = None
+    cycle: str | None = None
+    applicant_type: str | None = None
+    confidence: float = Field(ge=0, le=1)
+    excerpt: str
+
+
+class ExtractedLanguageRequirement(BaseModel):
+    test: Literal["IELTS", "TOEFL", "PTE"]
+    overall: float | None = None
+    subscores: dict[str, float] = Field(default_factory=dict)
+    confidence: float = Field(ge=0, le=1)
+    excerpt: str
+
+
+class ExtractedTuition(BaseModel):
+    currency: str
+    amount: float | None = None
+    period: str | None = None
+    confidence: float = Field(ge=0, le=1)
+    excerpt: str
 
 class Program(BaseModel):
     id: str
@@ -710,6 +759,7 @@ class Program(BaseModel):
     application_fee_hkd: int | None = None
     open_date: date | None = None
     deadline: date | Literal["NOT_PUBLISHED"]
+    application_rounds: list[ApplicationRound] = Field(default_factory=list)
     materials: list[str]
     requirements: ProgramRequirement
     source: ProgramSource
@@ -720,6 +770,19 @@ class Program(BaseModel):
     field_evidence: dict[str, ProgramFieldEvidence] = Field(default_factory=dict)
     community_signals: list[CommunitySignal] = Field(default_factory=list)
 
+    @model_validator(mode="after")
+    def _derive_main_application_round(self) -> "Program":
+        """Expose known single-date data as one explicitly named round.
+
+        Older catalogue rows may publish only one window. Keeping it as a
+        named main round preserves that limitation without implying it covers
+        every applicant scope or future round.
+        """
+
+        if not self.application_rounds:
+            self.application_rounds = [ApplicationRound(name="主轮次", open_date=self.open_date, deadline=self.deadline if isinstance(self.deadline, date) else None)]
+        return self
+
 
 class RuleCheck(BaseModel):
     rule_id: str
@@ -729,6 +792,68 @@ class RuleCheck(BaseModel):
     message: str
     evidence_level: EvidenceLevel
 
+
+class ConstraintCategory(str, Enum):
+    """Separate decision dimensions; a budget is never an admissions rule."""
+
+    ADMISSIONS_ELIGIBILITY = "ADMISSIONS_ELIGIBILITY"
+    USER_PREFERENCE = "USER_PREFERENCE"
+    FINANCIAL_FEASIBILITY = "FINANCIAL_FEASIBILITY"
+    DATA_CONFIDENCE = "DATA_CONFIDENCE"
+    STRATEGY_FIT = "STRATEGY_FIT"
+    EVIDENCE_READINESS = "EVIDENCE_READINESS"
+
+
+class DecisionStatus(str, Enum):
+    PASS = "PASS"
+    FAIL = "FAIL"
+    UNKNOWN = "UNKNOWN"
+
+
+class RuleSeverity(str, Enum):
+    BLOCKING = "BLOCKING"
+    WARNING = "WARNING"
+    INFO = "INFO"
+
+
+class ConstraintCheck(BaseModel):
+    """A v2 constraint result with an explicit unknown state."""
+
+    check_id: str
+    program_id: str | None = None
+    category: ConstraintCategory
+    status: DecisionStatus
+    severity: RuleSeverity
+    message: str
+    evidence_level: EvidenceLevel
+    source_url: str | None = None
+
+
+class FinancialFeasibilityStatus(str, Enum):
+    WITHIN_BUDGET = "WITHIN_BUDGET"
+    SLIGHTLY_OVER = "SLIGHTLY_OVER"
+    OVER_BUDGET = "OVER_BUDGET"
+    UNKNOWN = "UNKNOWN"
+
+
+class FinancialFeasibility(BaseModel):
+    program_id: str
+    status: DecisionStatus
+    budget_hkd: int | None = None
+    tuition_hkd: int | None = None
+    gap_hkd: int | None = None
+    budget_mode: Literal["soft", "hard_cap"] = "soft"
+    financial_status: FinancialFeasibilityStatus = FinancialFeasibilityStatus.UNKNOWN
+    blocks_user_selection: bool = False
+    message: str
+
+
+class DataConfidenceAssessment(BaseModel):
+    program_id: str
+    status: DecisionStatus
+    verified_fields: list[str] = Field(default_factory=list)
+    missing_fields: list[str] = Field(default_factory=list)
+    formal_use_ready: bool = False
 
 class AssessmentResult(BaseModel):
     assessment_type: Literal["PRELIMINARY", "VERIFIED"]
@@ -788,7 +913,18 @@ class ProgramIntentProfile(BaseModel):
 
 class ProgramMatch(BaseModel):
     program: Program
-    tier: Literal["reach", "target", "safe", "candidate", "not_recommended"]
+    tier: Literal["reach", "target", "safer", "candidate", "not_recommended"]
+    admissions_status: DecisionStatus = DecisionStatus.UNKNOWN
+    admissions_checks: list[ConstraintCheck] = Field(default_factory=list)
+    academic_fit_score: int = Field(default=0, ge=0, le=100)
+    language_fit_score: int = Field(default=0, ge=0, le=100)
+    discipline_fit_score: int = Field(default=0, ge=0, le=100)
+    experience_fit_score: int = Field(default=0, ge=0, le=100)
+    applicant_fit_score: int = Field(default=0, ge=0, le=100)
+    preference_fit_score: int = Field(default=0, ge=0, le=100)
+    financial_fit_score: int | None = Field(default=None, ge=0, le=100)
+    data_confidence_score: int = Field(default=0, ge=0, le=100)
+    strategy_score: int = Field(default=0, ge=0, le=100)
     fit_score: int
     score_breakdown: dict[str, int] = Field(default_factory=dict)
     match_category: Literal["core", "related", "general", "blocked"] = "general"
@@ -802,7 +938,7 @@ class ProgramMatch(BaseModel):
     actions: list[str]
     rule_checks: list[RuleCheck]
     explanation: RecommendationExplanation | None = None
-    strategy_band: Literal["reach", "target", "safe", "candidate", "blocked"] = "candidate"
+    strategy_band: Literal["reach", "target", "safer", "candidate", "blocked"] = "candidate"
     consultant_note: str = ""
     source_warning: str = ""
 
@@ -915,7 +1051,7 @@ class ProgramCompareRow(BaseModel):
 
 class ConsultantPlanItem(BaseModel):
     program_id: str
-    band: Literal["冲刺", "主申", "保底", "候选", "暂不建议"]
+    band: Literal["冲刺", "主申", "相对稳妥", "候选", "暂不建议"]
     institution: str
     program_name: str
     why_this_band: str
@@ -968,9 +1104,16 @@ class StoryCard(BaseModel):
 class AgentContract(BaseModel):
     agent_name: str
     responsibility: str
+    is_autonomous: bool = True
     inputs: list[str] = Field(default_factory=list)
     outputs: list[str] = Field(default_factory=list)
     tools: list[str] = Field(default_factory=list)
+    allowed_tools: list[str] = Field(default_factory=list)
+    decision_schema: str = "AgentDecision"
+    can_handoff_to: list[str] = Field(default_factory=list)
+    can_ask_user: bool = False
+    can_request_human: bool = False
+    max_tool_rounds: int = 6
     upstream_agents: list[str] = Field(default_factory=list)
     human_gate: str | None = None
     deterministic_guardrails: list[str] = Field(default_factory=list)
@@ -1009,7 +1152,7 @@ class AgentTraceEvent(BaseModel):
     output_summary: str
     tool_calls: list[str] = Field(default_factory=list)
     model: str = "mock"
-    cost_usd: float = 0.0
+    cost_usd: float | None = None
     needs_human_reason: str | None = None
 
 

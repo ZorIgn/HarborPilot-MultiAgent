@@ -532,7 +532,7 @@ def _competitiveness_summary(profile: NormalizedProfile, score: int, level: str)
     return (
         f"当前竞争力为{level}（规则分 {score}/100）：{profile.education.school_tier} 背景，"
         f"{profile.education.major}，GPA {gpa_text}，{language}，目标方向 {direction}。"
-        f"择校可先按冲刺、主申、保底三层筛选：{positioning['冲刺']}{positioning['主申']}{positioning['保底']}"
+        f"择校可先按冲刺、主申、相对稳妥三层筛选：{positioning['冲刺']}{positioning['主申']}{positioning['相对稳妥']}"
     )
 
 def _application_positioning(level: str) -> dict[str, str]:
@@ -540,24 +540,24 @@ def _application_positioning(level: str) -> dict[str, str]:
         return {
             "冲刺": "港三、新二高选择性项目可进入冲刺池，但仍要核对先修课、语言单项和项目详情页。",
             "主申": "港三/城大/理工/SMU 等方向强匹配项目应作为主申核心。",
-            "保底": "选择 1-2 个方向一致、硬门槛明确通过的项目兜底即可。",
+            "相对稳妥": "选择 1-2 个方向一致、硬门槛明确通过且信息可核验的项目作为补充。",
         }
     if level == "中强":
         return {
             "冲刺": "可保留少量港三/新二项目冲刺，优先选与经历和课程高度相关的项目。",
             "主申": "城大、理工、浸会、SMU、SUTD 等匹配项目应作为主申主体。",
-            "保底": "需要配置 2-3 个录取波动更可控、材料要求清晰的保底项目。",
+            "相对稳妥": "需要配置 2-3 个方向匹配、材料要求清晰且信息可核验的项目。",
         }
     if level == "中":
         return {
             "冲刺": "高选择性项目只保留极少数强相关方向，不建议堆数量。",
             "主申": "以方向匹配、硬门槛通过、学费预算可承受的项目为主申。",
-            "保底": "保底项目要优先确保语言、先修课、材料和申请入口清晰。",
+            "相对稳妥": "相对稳妥项目要优先确保语言、先修课、材料和申请入口清晰。",
         }
     return {
         "冲刺": "暂不建议把高选择性项目作为本轮重点，除非补强后重新评估。",
         "主申": "先选择硬门槛明确通过、方向宽容度较高的项目。",
-        "保底": "保底项目应以语言/GPA/专业背景门槛可通过为第一条件。",
+        "相对稳妥": "相对稳妥项目应以语言、GPA、专业背景和申请信息清晰为第一条件。",
     }
 
 

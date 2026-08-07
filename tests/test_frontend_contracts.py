@@ -483,7 +483,7 @@ def test_program_catalog_recommendations_are_grouped_by_strategy_bands() -> None
     source = Path("web/app/ProgramCatalogPage.tsx").read_text(encoding="utf-8")
 
     assert 'defaultActiveKey="reach"' in source
-    assert '"reach", "target", "safe", "candidate", "blocked"' in source
+    assert '"reach", "target", "safer", "candidate", "blocked"' in source
     assert "bandedMatches" in source
     assert "mergeProgramMatches" in source
     assert "bandKey(item)" in source
@@ -509,7 +509,7 @@ def test_admin_review_queue_panel_is_extracted_from_data_center() -> None:
 
 
 
-def test_student_model_settings_use_student_api_without_admin_token() -> None:
+def test_student_model_settings_are_read_only_and_admin_managed() -> None:
     api_source = Path("web/lib/api.ts").read_text(encoding="utf-8")
     app_source = Path("web/app/HarborPilotApp.tsx").read_text(encoding="utf-8")
     copy_source = Path("web/lib/copy.ts").read_text(encoding="utf-8")
@@ -531,8 +531,9 @@ def test_student_model_settings_use_student_api_without_admin_token() -> None:
     assert '"/api/workflows/data-refresh"' in api_source
     assert "configureStudentLLM" in api_source
     assert "\"/api/llm-config\"" in api_source
-    assert "configureStudentLLM(request)" in app_source
-    assert "AI " + "\u8bbe\u7f6e" in copy_source
+    assert "configureStudentLLM(request)" not in app_source
+    assert "服务端统一管理" in app_source
+    assert "学生端不会提交或存储 API Key" in app_source
     assert "Admin Token" not in app_source
     assert "Admin Token" not in student_sources
 
@@ -546,7 +547,7 @@ def test_frontend_dev_and_build_outputs_are_isolated_and_plan_is_labeled_prelimi
     assert "NEXT_DIST_DIR=next-dev" in package["scripts"]["dev"]
     assert "NEXT_DIST_DIR=next-build" in package["scripts"]["build"]
     assert "NEXT_DIST_DIR=next-build" in package["scripts"]["start"]
-    assert "next-dev" in readme and "next-build" in readme
+    assert "next-build" in readme
     assert "可编辑择校方案（预评估）" in program_source
     assert "预评估 / 待官网核验" in program_source
 

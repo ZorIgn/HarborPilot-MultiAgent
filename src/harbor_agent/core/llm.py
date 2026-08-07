@@ -7,6 +7,7 @@ from typing import Any, Protocol
 
 from harbor_agent.config import Settings
 
+from harbor_agent.services.source_snapshot import _unsafe_url_reason
 
 class LLMProvider(Protocol):
     name: str
@@ -46,7 +47,10 @@ class OpenAICompatibleLLMProvider:
                 "请先执行 `pip install -r requirements-llm.txt` 安装大模型依赖。"
             ) from exc
         resolved_base_url = (base_url or "https://api.openai.com/v1").rstrip("/")
-        self._client = httpx.Client(timeout=timeout_seconds, trust_env=False)
+        unsafe_reason = _unsafe_url_reason(resolved_base_url)
+        if unsafe_reason:
+            raise ValueError(f"unsafe model base URL: {unsafe_reason}")
+        self._client = httpx.Client(timeout=timeout_seconds, trust_env=False, follow_redirects=False)
         self._chat_url = f"{resolved_base_url}/chat/completions"
         self._headers = {
             "authorization": f"Bearer {api_key}",
@@ -78,8 +82,7 @@ class OpenAICompatibleLLMProvider:
         try:
             response.raise_for_status()
         except Exception as exc:
-            detail = response.text[:500] if response.text else str(exc)
-            raise RuntimeError(f"模型服务返回 {response.status_code}：{detail}") from exc
+            raise RuntimeError(f"model provider returned HTTP {response.status_code}") from exc
         data = response.json()
         text = data.get("choices", [{}])[0].get("message", {}).get("content") or "{}"
         try:

@@ -10,8 +10,8 @@ SRC_DIR = ROOT_DIR / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from harbor_agent.agents.catalog_auto_update import CatalogAutoUpdateAgent
-from harbor_agent.agents.data_acquisition import ProgramDataAcquisitionAgent
+from harbor_agent.services.catalog_auto_update import CatalogAutoUpdateService
+from harbor_agent.services.data_acquisition import ProgramDataAcquisitionService
 from harbor_agent.models import CatalogAutoUpdateRequest, DataAcquisitionRequest
 from harbor_agent.services.program_store import PROGRAM_JSON, seed_program_store, _load_program_json
 from harbor_agent.services.agent_runtime import enqueue_catalog_refresh_plan
@@ -62,7 +62,7 @@ def main() -> None:
         }
         print(json.dumps(output, ensure_ascii=False, indent=2, default=str))
         return
-    catalog_report = CatalogAutoUpdateAgent().run(
+    catalog_report = CatalogAutoUpdateService().run(
         CatalogAutoUpdateRequest(
             selected_program_ids=args.program_ids,
             institution=args.institution,
@@ -74,7 +74,7 @@ def main() -> None:
 
     data_report = None
     if not args.skip_data_package:
-        data_report = ProgramDataAcquisitionAgent().run(
+        data_report = ProgramDataAcquisitionService().run(
             DataAcquisitionRequest(
                 selected_program_ids=args.program_ids,
                 include_community=True,

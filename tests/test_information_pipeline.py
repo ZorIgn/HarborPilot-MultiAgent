@@ -1,7 +1,7 @@
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
-from harbor_agent.agents import data_acquisition
+from harbor_agent.services import data_acquisition
 from harbor_agent.models import (
     AcquisitionSourcePlan,
     DataQualityMetric,
@@ -445,7 +445,7 @@ def test_source_health_global_review_count_is_not_duplicated_by_category(tmp_pat
                 source_priority=2,
                 status=FieldVerificationStatus.model_inferred,
                 review_required=True,
-                agent_chain=["HumanReviewGateAgent"],
+                execution_ref=None,
             )
         ],
         db_path=db_path,

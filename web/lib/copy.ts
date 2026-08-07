@@ -188,7 +188,7 @@ export const dashboardCopy = {
 
 export const progressCopy = {
   background: { title: "正在生成背景竞争力评估", steps: ["读取申请背景", "判断硬门槛", "识别资料缺口", "生成竞争力评估"] },
-  programs: { title: "正在生成项目分档", steps: ["读取背景", "调用港新项目库", "按院校层级、GPA、语言和经历分档", "输出冲刺、主申、保底、候选和不建议"] },
+  programs: { title: "正在生成项目分档", steps: ["读取背景", "调用港新项目库", "按院校层级、GPA、语言和经历分档", "输出冲刺、主申、相对稳妥、候选和不建议"] },
   timeline: { title: "正在生成时间线", steps: ["读取已选项目", "核对项目来源", "合并通用材料", "生成日期任务"] },
   writing: { title: "正在生成文书草稿", steps: ["整理问卷", "生成故事卡", "绑定目标项目", "输出大纲和段落草稿"] },
   interview: { title: "正在补全素材问题", steps: ["读取目标项目", "发现素材缺口", "生成补充问题"] },
@@ -209,9 +209,9 @@ export const assessmentCopy = {
 export const programCatalogCopy = {
   heroEyebrow: "先看 Agent 择校方案，再搜索全量项目库",
   heroTitle: "生成港新项目清单与申请分档",
-  heroBody: "系统结合院校层级、GPA、语言、专业方向、经历、预算和官网信息，先输出冲刺、主申、保底、候选和不建议。学生可以编辑分档、删除项目，也可以从项目库继续加入。",
+  heroBody: "系统结合院校层级、GPA、语言、专业方向、经历、预算和官网信息，先输出冲刺、主申、相对稳妥、候选和不建议。学生可以编辑分档、删除项目，也可以从项目库继续加入。",
   trustBoundaryTitle: "当前是预评估，不是最终提交依据",
-  trustBoundaryBody: "冲刺、主申、保底用于缩小选择范围；只有字段显示为官网当前季已核验，或明确标注为具体往届参考时，才可进入后续日期安排。",
+  trustBoundaryBody: "冲刺、主申、相对稳妥用于缩小选择范围；只有字段显示为官网当前季已核验，或明确标注为具体往届参考时，才可进入后续日期安排。",
   trustBoundaryAction: "保存项目后，时间线仍会按字段来源区分当前季官方、往届参考和待官网核验。",
   runButton: "生成项目分档",
   runningButton: "正在分档",

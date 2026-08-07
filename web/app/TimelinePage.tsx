@@ -382,7 +382,7 @@ function riskClass(value?: string | null) { const label = riskLabel(value); retu
 function programTitle(program: Program) { return program.name_zh || program.name || "未找到项目名称"; }
 function programInstitution(program: Program) { return program.institution_zh || program.institution || "学校待补充"; }
 function programSchoolLine(program: Program) { return [program.school_zh || program.school, program.name_zh && program.name && program.name_zh !== program.name ? program.name : null, program.country === "HK" ? "香港" : "新加坡"].filter(Boolean).join(" / "); }
-function tierLabel(item: ProgramMatch) { if (item.tier === "not_recommended") return "不建议"; if (!item.formal_recommendation) return "预评估"; return { reach: "冲刺", target: "主申", safe: "保底", candidate: "候选" }[item.tier]; }
+function tierLabel(item: ProgramMatch) { if (item.tier === "not_recommended") return "不建议"; if (!item.formal_recommendation) return "预评估"; return { reach: "冲刺", target: "主申", safer: "相对稳妥", candidate: "候选" }[item.tier]; }
 function taskTypeLabel(value: string) { return value === "source_review" ? "信息更新" : taskTypeLabels[value] ?? value; }
 function normalizeTaskStatus(value?: string | null): TaskStatus { return taskStatusOptions.includes(value as TaskStatus) ? value as TaskStatus : "未开始"; }
 function formatDependency(value: string) { return materialLabels[value] ?? fieldLabels[value] ?? value.replace(/_/g, " "); }

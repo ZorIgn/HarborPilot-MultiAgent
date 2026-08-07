@@ -31,7 +31,7 @@ export const documentFlows: Record<DocumentType, FlowDefinition> = {
     sections: ["ps_academic_ability", "ps_core_courses", "ps_practice_experience", "ps_why_program", "ps_career_plan", "ps_special_prompts"],
     templateBasis: "参考《个人陈述调查问卷》中学术能力、核心课程、实践经历、Why Program 和职业目标问题。",
     writingMethod: "减少泛泛动机，增加问题意识、方法、证据和目标路径。",
-    agentBoundary: "不把兴趣写成研究能力，不编造课程、教授、就业数据或录取概率。",
+    agentBoundary: "不把兴趣写成研究能力，不编造课程、教授、就业数据，也不推测录取结果。",
     outputHint: "输出偏学术和目标导向的大纲、段落草稿、事实绑定表和补充问题。",
   },
   CV: {

@@ -5,10 +5,10 @@ from types import SimpleNamespace
 from datetime import UTC, datetime
 from pathlib import Path
 
-from harbor_agent.agents import catalog_auto_update, data_acquisition
+from harbor_agent.services import catalog_auto_update, data_acquisition
 from harbor_agent.services import data_loader, program_store
-from harbor_agent.agents.catalog_auto_update import CatalogAutoUpdateAgent
-from harbor_agent.agents.data_acquisition import ProgramDataAcquisitionAgent
+from harbor_agent.services.catalog_auto_update import CatalogAutoUpdateService
+from harbor_agent.services.data_acquisition import ProgramDataAcquisitionService
 from harbor_agent.models import CatalogAutoUpdateRequest, DataAcquisitionRequest, FieldEvidenceRecord, FieldVerificationStatus
 from harbor_agent.services.program_store import init_program_store, load_field_evidence_records, load_programs_from_store, upsert_field_evidence_records
 from harbor_agent.services.program_urls import has_application_entry, has_program_detail_page, is_generic_program_url
@@ -61,7 +61,7 @@ def test_program_store_schema_contains_product_fields(tmp_path) -> None:
         "source_url",
         "source_type",
         "evidence_snippet",
-        "agent_chain_json",
+        "execution_ref_json",
     } <= evidence_columns
 def test_program_store_seeds_from_json_and_returns_programs(tmp_path) -> None:
     db_path = tmp_path / "harborpilot.sqlite3"
@@ -252,7 +252,7 @@ def test_program_store_persists_field_level_evidence(tmp_path) -> None:
         review_required=True,
         evidence_snippet="Application deadline: 1 Dec 2026",
         snapshot_url="https://example.edu/program",
-        agent_chain=["SourceDiscoveryAgent", "FieldExtractionAgent", "HumanReviewGateAgent"],
+        execution_ref=None,
     )
 
     assert upsert_field_evidence_records([record], db_path=db_path) == 1
@@ -263,7 +263,7 @@ def test_program_store_persists_field_level_evidence(tmp_path) -> None:
     assert loaded[0].field_name == "deadline"
     assert loaded[0].status == FieldVerificationStatus.official_previous_cycle
     assert loaded[0].review_required is True
-    assert loaded[0].agent_chain[-1] == "HumanReviewGateAgent"
+    assert loaded[0].execution_ref is None
 
 
 def test_program_store_writes_clear_data_loader_cache(tmp_path, monkeypatch) -> None:
@@ -295,7 +295,7 @@ def test_program_store_writes_clear_data_loader_cache(tmp_path, monkeypatch) -> 
         review_required=False,
         evidence_snippet="Application deadline: 1 Dec 2026",
         snapshot_url="https://example.edu/program",
-        agent_chain=["DataAcquisitionAgent", "HumanReviewGateAgent"],
+        execution_ref=None,
     )
     assert program_store.upsert_field_evidence_records([record], db_path=db_path) == 1
     assert calls == ["cleared", "cleared"]
@@ -339,7 +339,7 @@ def test_catalog_replace_preserves_review_evidence(tmp_path) -> None:
         status=FieldVerificationStatus.official_verified_current,
         review_required=False,
         reviewer_id="reviewer-test",
-        agent_chain=["HumanReviewGateAgent"],
+        execution_ref=None,
     )
     upsert_field_evidence_records([record], db_path=db_path)
 
@@ -356,7 +356,7 @@ def test_data_acquisition_live_mode_persists_field_candidates(monkeypatch) -> No
         return len(records)
 
     monkeypatch.setattr(data_acquisition, "upsert_field_evidence_records", fake_upsert)
-    report = ProgramDataAcquisitionAgent().run(
+    report = ProgramDataAcquisitionService().run(
         DataAcquisitionRequest(
             selected_program_ids=["hku-master-of-science-in-computer-science-2027"],
             dry_run=False,
@@ -368,7 +368,7 @@ def test_data_acquisition_live_mode_persists_field_candidates(monkeypatch) -> No
     assert captured
     assert any(record.field_name == "deadline" for record in captured)
     assert "SQLite" in report.summary
-    assert "HumanReviewGateAgent" in report.agent_chain
+    assert report.execution_ref is None
 
 def test_catalog_auto_update_live_mode_persists_url_candidates_for_review(monkeypatch) -> None:
     captured: list[FieldEvidenceRecord] = []
@@ -380,7 +380,7 @@ def test_catalog_auto_update_live_mode_persists_url_candidates_for_review(monkey
     monkeypatch.setattr(catalog_auto_update, "upsert_field_evidence_records", fake_upsert)
     monkeypatch.setattr(catalog_auto_update, "build_review_queue", lambda limit=1: SimpleNamespace(pending_count=len(captured)))
 
-    report = CatalogAutoUpdateAgent().run(
+    report = CatalogAutoUpdateService().run(
         CatalogAutoUpdateRequest(
             selected_program_ids=["cityu-msc-electronic-information-engineering-2027"],
             dry_run=False,
@@ -398,5 +398,5 @@ def test_catalog_auto_update_live_mode_persists_url_candidates_for_review(monkey
     assert str(record.value) == "https://www.cityu.edu.hk/pg/programme/p59"
     assert record.status == FieldVerificationStatus.conflicted
     assert record.review_required is True
-    assert "HumanReviewGateAgent" in record.agent_chain
+    assert record.execution_ref is None
     assert "program_url_overrides" not in report.summary

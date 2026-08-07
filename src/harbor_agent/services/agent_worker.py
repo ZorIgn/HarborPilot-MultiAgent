@@ -3,8 +3,10 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from harbor_agent.agents.catalog_auto_update import CatalogAutoUpdateAgent
+from harbor_agent.services.catalog_auto_update import CatalogAutoUpdateService
+from harbor_agent.services.data_acquisition import ProgramDataAcquisitionService
 from harbor_agent.agents.orchestrator import WorkflowOrchestrator
+from harbor_agent.services.source_crawl_queue import SourceCrawlQueueService
 from harbor_agent.config import get_settings
 from harbor_agent.core.llm import build_llm_provider
 from harbor_agent.models import (
@@ -45,17 +47,17 @@ def execute_agent_job(job: dict[str, Any], llm_provider: Any | None = None) -> d
             complete_agent_job(job_id, "COMPLETED", summary)
             return {"ok": True, "job_id": job_id, "status": "COMPLETED", "summary": summary}
         if workflow_name == "data_acquisition":
-            result = orchestrator.run_data_acquisition_stage(DataAcquisitionRequest.model_validate(payload))
+            result = ProgramDataAcquisitionService().run(DataAcquisitionRequest.model_validate(payload))
             summary = f"data_acquisition packages={len(result.packages)}"
             complete_agent_job(job_id, "COMPLETED", summary)
             return {"ok": True, "job_id": job_id, "status": "COMPLETED", "summary": summary}
         if workflow_name == "crawl_queue":
-            result = orchestrator.run_crawl_queue_stage(CrawlQueueRequest.model_validate(payload))
+            result = SourceCrawlQueueService().run(CrawlQueueRequest.model_validate(payload))
             summary = f"crawl_queue jobs={result.job_count}"
             complete_agent_job(job_id, "COMPLETED", summary)
             return {"ok": True, "job_id": job_id, "status": "COMPLETED", "summary": summary}
         if workflow_name == "catalog_auto_update":
-            result = CatalogAutoUpdateAgent().run(CatalogAutoUpdateRequest.model_validate(payload))
+            result = CatalogAutoUpdateService().run(CatalogAutoUpdateRequest.model_validate(payload))
             summary = f"catalog_auto_update candidates={result.candidate_count}"
             complete_agent_job(job_id, "COMPLETED", summary)
             return {"ok": True, "job_id": job_id, "status": "COMPLETED", "summary": summary}

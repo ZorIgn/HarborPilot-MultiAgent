@@ -1,16 +1,12 @@
 "use client";
 
 import { Button as IslandButton, Card as IslandCard, Tabs as IslandTabs, Title as IslandTitle } from "animal-island-ui";
-import { BookOpenCheck, CalendarDays, CheckCircle2, Database, ExternalLink, ShieldCheck, Sparkles, X } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { ArrowRight, Bot, BookOpenCheck, CalendarDays, CheckCircle2, Clock3, Database, ExternalLink, Play, RefreshCw, ShieldCheck, Sparkles, X } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
 import { dataStatusLabels, fieldLabels } from "@/lib/copy";
-import { getAgentRunDetail, handoffAgentStep, retryAgentStep, rollbackAgentRun } from "@/lib/api";
+import { getRuntimeWorkflow, getRuntimeWorkflowState, getRuntimeWorkflowTrace, resumeRuntimeWorkflow } from "@/lib/api";
 import { ReviewQueuePanel } from "./admin/ReviewQueuePanel";
 import type {
-  AgentQueueJob,
-  AgentRunDetail,
-  AgentRunSummary,
-  AgentSystemReport,
   CatalogAutoUpdateReport,
   CrawlQueueReport,
   DataAcquisitionReport,
@@ -21,6 +17,12 @@ import type {
   ReviewBulkPublishResponse,
   ReviewPublishResponse,
   ReviewQueueSummary,
+  RuntimeTraceEvent,
+  RuntimeWorkflowGoal,
+  RuntimeWorkflowListItem,
+  RuntimeWorkflowState,
+  RuntimeWorkflowStatus,
+  RuntimeWorkflowTask,
   ScenarioAuditReport,
   SourceExtractionResult,
   SourceRegistry,
@@ -28,12 +30,11 @@ import type {
 
 type Props = {
   evidenceGraph: EvidenceGraphSummary | null;
-  agentSystem: AgentSystemReport | null;
-  agentRuns: AgentRunSummary[];
-  agentQueue: AgentQueueJob[];
+  runtimeWorkflows: RuntimeWorkflowListItem[];
   modelProvider: string;
   modelName: string;
-  workerMessage: string;
+  runtimeMessage: string;
+  runtimeBusy: boolean;
   sourceRegistry: SourceRegistry | null;
   sourceRefresh: DataRefreshReport | null;
   sourceAcquisition: DataAcquisitionReport | null;
@@ -53,10 +54,8 @@ type Props = {
   onLoadScenarioAudit: () => void;
   onPreviewReviewDecision: (reviewId: string, decision: "approve" | "reject", persist?: boolean) => void;
   onBulkPublishReview: (limit?: number, persist?: boolean) => void;
-  onQueueAgentWorkflow: (workflowName: string, payloadSummary: string, payloadData?: Record<string, unknown>) => void;
-  onQueueCatalogRefreshPlan: () => void;
-  onRunAgentWorker: () => void;
-  onRetryAgentJob: (jobId: string) => void;
+  onStartRuntimeWorkflow: (goal: RuntimeWorkflowGoal) => Promise<RuntimeWorkflowState | null>;
+  onRefreshRuntimeWorkflows: () => Promise<void>;
   loading: string | null;
 };
 
@@ -90,13 +89,13 @@ export function AdminDataCenter(props: Props) {
         </div>
       </div>
     </IslandCard>
-    <AgentRuntimePanel agentSystem={props.agentSystem} agentRuns={props.agentRuns} agentQueue={props.agentQueue} modelProvider={props.modelProvider} modelName={props.modelName} workerMessage={props.workerMessage} onQueueAgentWorkflow={props.onQueueAgentWorkflow} onQueueCatalogRefreshPlan={props.onQueueCatalogRefreshPlan} onRunAgentWorker={props.onRunAgentWorker} onRetryAgentJob={props.onRetryAgentJob} />
+    <AgentRuntimePanel runtimeWorkflows={props.runtimeWorkflows} modelProvider={props.modelProvider} modelName={props.modelName} runtimeMessage={props.runtimeMessage} runtimeBusy={props.runtimeBusy} onStartRuntimeWorkflow={props.onStartRuntimeWorkflow} onRefreshRuntimeWorkflows={props.onRefreshRuntimeWorkflows} />
     <section className="status-grid">
       <Metric label="Programs" value={`${props.evidenceGraph?.program_count ?? 0}`} detail="Local HK/SG taught-master catalog" />
       <Metric label="Field records" value={`${props.evidenceGraph?.field_record_count ?? 0}`} detail="Field-level source bindings" />
       <Metric label="Current verified" value={`${props.evidenceGraph?.verified_field_count ?? 0}`} detail="Required for formal use" />
       <Metric label="Need review" value={`${props.evidenceGraph?.pending_review_field_count ?? 0}`} detail="Operator must inspect source text" />
-      <Metric label="Workflow contracts" value={`${props.agentSystem?.agents.length ?? 0}`} detail={`${props.agentSystem?.workflows.length ?? 0} workflows`} />
+      <Metric label="Supervisor workflows" value={`${props.runtimeWorkflows.length}`} detail="真实执行状态与 checkpoint" />
       <Metric label="Selected programs" value={`${props.selectedProgramCount}`} detail="Prioritized for crawling" />
     </section>
     <IslandTabs className="animal-tabs" defaultActiveKey="acquisition" items={tabs} />
@@ -162,91 +161,215 @@ export function ProgramPackageDrawer({ open, onClose, dataPackage }: { open: boo
 
 function CoverageAuditList({ items }: { items: ProgramDataPackage["coverage_items"] }) { if (!items.length) return <EmptyState text="No coverage audit generated." />; return <div className="coverage-list">{items.map((item) => <article className={item.blocks_formal_use ? "coverage-item blocked" : "coverage-item ready"} key={item.field_name}><div className="program-title-row"><strong>{fieldLabels[item.field_name] ?? item.field_name}</strong><DataBadge status={item.status} /></div><p>{item.next_action}</p><div className="task-meta"><span>{item.has_value ? "has candidate" : "missing current field"}</span><span>{item.blocks_formal_use ? "blocks formal use" : "planning only"}</span><span>{item.required_source === "official" ? "official source" : "public reference"}</span></div>{item.source_url ? <a className="text-link" href={item.source_url} target="_blank" rel="noreferrer">打开来源</a> : null}</article>)}</div>; }
 
-function AgentRuntimePanel({ agentSystem, agentRuns, agentQueue, modelProvider, modelName, workerMessage, onQueueAgentWorkflow, onQueueCatalogRefreshPlan, onRunAgentWorker, onRetryAgentJob }: { agentSystem: AgentSystemReport | null; agentRuns: AgentRunSummary[]; agentQueue: AgentQueueJob[]; modelProvider: string; modelName: string; workerMessage: string; onQueueAgentWorkflow: (workflowName: string, payloadSummary: string, payloadData?: Record<string, unknown>) => void; onQueueCatalogRefreshPlan: () => void; onRunAgentWorker: () => void; onRetryAgentJob: (jobId: string) => void }) {
-  const liveModel = modelProvider !== "mock";
-  const llmAgents = ["EvaluationAgent", "SchoolMatchingAgent", "DataRefreshAgent", "WritingAgent"];
-  const latestRuns = agentRuns.slice(0, 8);
-  const [runDetail, setRunDetail] = useState<AgentRunDetail | null>(null);
-  const [runtimeMessage, setRuntimeMessage] = useState("");
+const workflowGoals: Array<{ goal: RuntimeWorkflowGoal; label: string; detail: string }> = [
+  { goal: "full_application_plan", label: "完整申请方案", detail: "评估、择校、核验、规划" },
+  { goal: "program_recommendation", label: "项目推荐", detail: "召回、匹配、证据核验" },
+  { goal: "background_assessment", label: "背景评估", detail: "资料完整度与关键缺口" },
+  { goal: "application_planning", label: "申请规划", detail: "已选项目的准备节奏" },
+  { goal: "writing", label: "文书准备", detail: "事实边界与写作任务" },
+];
 
-  async function inspectRun(workflowId: string) {
+function AgentRuntimePanel({ runtimeWorkflows, modelProvider, modelName, runtimeMessage, runtimeBusy, onStartRuntimeWorkflow, onRefreshRuntimeWorkflows }: { runtimeWorkflows: RuntimeWorkflowListItem[]; modelProvider: string; modelName: string; runtimeMessage: string; runtimeBusy: boolean; onStartRuntimeWorkflow: (goal: RuntimeWorkflowGoal) => Promise<RuntimeWorkflowState | null>; onRefreshRuntimeWorkflows: () => Promise<void> }) {
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(runtimeWorkflows[0]?.workflow_id ?? null);
+  const [workflowState, setWorkflowState] = useState<RuntimeWorkflowState | null>(null);
+  const [trace, setTrace] = useState<RuntimeTraceEvent[]>([]);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [message, setMessage] = useState("");
+  const [resumeText, setResumeText] = useState("");
+  const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!runtimeWorkflows.length) {
+      setSelectedWorkflowId(null);
+      setWorkflowState(null);
+      setTrace([]);
+      return;
+    }
+    setSelectedWorkflowId((current) => runtimeWorkflows.some((item) => item.workflow_id === current) ? current : runtimeWorkflows[0].workflow_id);
+  }, [runtimeWorkflows]);
+
+  useEffect(() => {
+    if (!selectedWorkflowId) return;
+    let active = true;
+    setDetailLoading(true);
+    Promise.all([getRuntimeWorkflow(selectedWorkflowId), getRuntimeWorkflowTrace(selectedWorkflowId)])
+      .then(([state, events]) => {
+        if (!active) return;
+        setWorkflowState(state);
+        setTrace(events);
+        setMessage("");
+      })
+      .catch((error: unknown) => {
+        if (active) setMessage(error instanceof Error ? error.message : "无法读取工作流状态。");
+      })
+      .finally(() => { if (active) setDetailLoading(false); });
+    return () => { active = false; };
+  }, [selectedWorkflowId]);
+
+  async function refreshSelectedCheckpoint() {
+    if (!selectedWorkflowId) return;
+    setDetailLoading(true);
     try {
-      const detail = await getAgentRunDetail(workflowId);
-      setRunDetail(detail);
-      setRuntimeMessage("Loaded " + workflowId);
-    } catch (err) {
-      setRuntimeMessage(err instanceof Error ? err.message : "Run detail failed to load.");
+      const [state, events] = await Promise.all([getRuntimeWorkflowState(selectedWorkflowId), getRuntimeWorkflowTrace(selectedWorkflowId)]);
+      setWorkflowState(state);
+      setTrace(events);
+      setMessage("已读取最新 checkpoint 与执行轨迹。");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "无法刷新工作流。");
+    } finally {
+      setDetailLoading(false);
     }
   }
 
-  async function retryStep(stepId: string) {
-    const workflowId = runDetail?.run?.workflow_id;
-    if (!workflowId) return;
+  async function startWorkflow(goal: RuntimeWorkflowGoal) {
+    setMessage("");
     try {
-      await retryAgentStep(workflowId, stepId);
-      setRunDetail(await getAgentRunDetail(workflowId));
-      setRuntimeMessage("Step retry queued: " + stepId);
-    } catch (err) {
-      setRuntimeMessage(err instanceof Error ? err.message : "Step retry failed.");
+      const state = await onStartRuntimeWorkflow(goal);
+      if (!state) return;
+      setSelectedWorkflowId(state.workflow_id);
+      setWorkflowState(state);
+      setResumeText("");
+      setTrace(await getRuntimeWorkflowTrace(state.workflow_id));
+      setMessage(`已启动 ${goalLabel(state.goal)}：${statusLabel(state.status)}。`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "无法启动工作流。");
     }
   }
 
-  async function handoffStep(stepId: string) {
-    const workflowId = runDetail?.run?.workflow_id;
-    if (!workflowId) return;
+  async function resumeWorkflow() {
+    if (!workflowState) return;
+    const waitingForUser = workflowState.status === "WAITING_USER";
+    if (waitingForUser && !resumeText.trim()) {
+      setMessage("请先填写对学生问题的补充，再继续工作流。");
+      return;
+    }
+    setDetailLoading(true);
     try {
-      await handoffAgentStep(workflowId, stepId, "human_reviewer", "Operator requested human handoff from Admin runtime panel.");
-      setRunDetail(await getAgentRunDetail(workflowId));
-      setRuntimeMessage("Step handed off: " + stepId);
-    } catch (err) {
-      setRuntimeMessage(err instanceof Error ? err.message : "Step handoff failed.");
+      const state = await resumeRuntimeWorkflow(workflowState.workflow_id, waitingForUser
+        ? { user_message: resumeText.trim() }
+        : { human_resolution: resumeText.trim() || "管理员确认后继续执行。" });
+      setWorkflowState(state);
+      setResumeText("");
+      setTrace(await getRuntimeWorkflowTrace(state.workflow_id));
+      await onRefreshRuntimeWorkflows();
+      setMessage(`已继续执行：${statusLabel(state.status)}。`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "无法继续该工作流。");
+    } finally {
+      setDetailLoading(false);
     }
   }
 
-  async function rollbackStep(stepId: string) {
-    const workflowId = runDetail?.run?.workflow_id;
-    if (!workflowId) return;
+  async function refreshWorkflowList() {
     try {
-      await rollbackAgentRun({ workflow_id: workflowId, target_step_id: stepId, reason: "Rollback from Admin runtime panel." });
-      setRunDetail(await getAgentRunDetail(workflowId));
-      setRuntimeMessage("Run rolled back to: " + stepId);
-    } catch (err) {
-      setRuntimeMessage(err instanceof Error ? err.message : "Run rollback failed.");
+      await onRefreshRuntimeWorkflows();
+      await refreshSelectedCheckpoint();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "无法刷新工作流列表。");
     }
   }
 
-  return <IslandCard className="panel-card agent-runtime-panel" color="app-blue"><div className="split-head"><div><span className="mini-label"><Sparkles size={16} aria-hidden />AI Agent runtime</span><h2>Agents manage evaluation, matching, source governance, and writing support</h2><p>Students see business output. Admins see workflow nodes, model usage, tool boundaries, retries, and human handoffs.</p></div><div className="runtime-model-badge"><span>{liveModel ? "live model connected" : "mock model mode"}</span><strong>{modelName}</strong><small>{modelProvider}</small></div></div><section className="status-grid three"><Metric label="Agent roles" value={`${agentSystem?.agents.length ?? 0}`} detail="Profile / Evaluation / Matching / Data / Writing / Review" /><Metric label="LLM nodes" value={`${llmAgents.length}`} detail={llmAgents.join(", ")} /><Metric label="Recent runs" value={`${agentRuns.length}`} detail={`${agentQueue.length} queued jobs`} /></section><div className="agent-worker-actions"><p>{workerMessage}</p><div className="card-actions"><IslandButton type="primary" onClick={onQueueCatalogRefreshPlan}>Queue full update</IslandButton><IslandButton type="default" onClick={() => onQueueAgentWorkflow("data_acquisition", "Crawl selected programme sources", {selected_program_ids: []})}>Queue source crawl</IslandButton><IslandButton type="default" onClick={() => onQueueAgentWorkflow("crawl_queue", "Build official crawl queue", {selected_program_ids: []})}>Queue crawl plan</IslandButton><IslandButton type="default" onClick={() => onQueueAgentWorkflow("catalog_auto_update", "Find missing programme detail pages", {dry_run: true, max_programs: 48})}>Queue URL update</IslandButton><IslandButton type="primary" onClick={onRunAgentWorker}>Run next job</IslandButton></div></div><AgentQueueList jobs={agentQueue} onRetry={onRetryAgentJob} /><div className="runtime-columns"><div><h3>Recent agent workflows</h3>{latestRuns.length ? <div className="runtime-list">{latestRuns.map((run) => <article key={run.workflow_id}><div className="program-title-row"><strong>{workflowLabel(run.workflow_name)}</strong><DataBadge status={run.status} /></div><p>{run.workflow_id}</p><div className="task-meta"><span>current node {run.current_step || "complete"}</span><span>{formatDate(run.updated_at)}</span></div><div className="card-actions"><IslandButton type="default" size="small" onClick={() => inspectRun(run.workflow_id)}>Inspect steps</IslandButton></div></article>)}</div> : <EmptyState text="No agent run yet. Start assessment, matching, timeline, or writing." />}</div><div><h3>Selected run steps</h3><AgentRunDetailPanel detail={runDetail} message={runtimeMessage} onRetryStep={retryStep} onHandoffStep={handoffStep} onRollbackStep={rollbackStep} /></div><div><h3>AI capability boundaries</h3><div className="runtime-list compact">{(agentSystem?.agents ?? []).filter((agent) => agent.llm_role && !agent.llm_role.startsWith("none")).map((agent) => <article key={agent.agent_name}><strong>{agent.agent_name}</strong><p>{agent.llm_role}</p>{agent.llm_guardrails?.length ? <small>{agent.llm_guardrails[0]}</small> : null}</article>)}{!(agentSystem?.agents ?? []).some((agent) => agent.llm_role && !agent.llm_role.startsWith("none")) ? <article><strong>Model capability</strong><p>After connecting a live model, Evaluation, Matching, DataRefresh, and Writing call it within their own guardrails.</p></article> : null}</div></div></div></IslandCard>;
+  const pricedEvents = trace.filter((event) => event.cost_usd !== null);
+  const totalCost = pricedEvents.length ? pricedEvents.reduce((total, event) => total + (event.cost_usd ?? 0), 0) : null;
+  const totalTokens = trace.reduce((total, event) => total + (event.total_tokens ?? 0), 0);
+  const currentTask = workflowState?.tasks.find((task) => task.status === "RUNNING") ?? workflowState?.tasks.find((task) => task.status === "BLOCKED") ?? null;
+  const canResume = workflowState?.status === "WAITING_USER" || workflowState?.status === "WAITING_HUMAN" || workflowState?.status === "FAILED_RETRYABLE";
+
+  return <IslandCard className="panel-card agent-runtime-panel runtime-workbench">
+    <div className="runtime-workbench-head">
+      <div>
+        <span className="mini-label"><Bot size={16} aria-hidden />Supervisor Runtime</span>
+        <h2>真实工作流、共享状态与执行证据</h2>
+        <p>这里只展示 Runtime 实际写入的路由、Agent、工具与 checkpoint；不再用预设 Agent 链或估算成本填充界面。</p>
+      </div>
+      <div className="runtime-model-badge">
+        <span>{modelProvider === "mock" ? "deterministic runtime" : "provider connected"}</span>
+        <strong>{modelName}</strong>
+        <small>{modelProvider}</small>
+      </div>
+    </div>
+
+    <section className="runtime-launchbar" aria-label="启动 Supervisor 工作流">
+      <div><strong>从当前学生资料启动</strong><span>每次运行均创建独立 workflow，并在每个 Agent turn 后保存 checkpoint。</span></div>
+      <div className="runtime-goal-actions">
+        {workflowGoals.map((item) => <button key={item.goal} type="button" className={item.goal === "full_application_plan" ? "runtime-start primary" : "runtime-start"} onClick={() => void startWorkflow(item.goal)} disabled={runtimeBusy} title={item.detail}>
+          <Play size={14} aria-hidden />{item.label}
+        </button>)}
+      </div>
+    </section>
+
+    <section className="runtime-overview" aria-label="运行时摘要">
+      <Metric label="工作流历史" value={`${runtimeWorkflows.length}`} detail="来自 /api/agent/workflows" />
+      <Metric label="当前 Agent" value={workflowState?.current_agent ?? "待选择"} detail={currentTask?.description ?? "选择一条工作流查看实时状态"} />
+      <Metric label="实际 Token" value={totalTokens ? totalTokens.toLocaleString("zh-CN") : "—"} detail={trace.length ? `${trace.length} 个 Trace 事件` : "尚未读取 Trace"} />
+      <Metric label="实际成本" value={formatCost(totalCost)} detail={totalCost === null ? "当前模型未配置价格" : "按 Provider usage 与 pricing 计算"} />
+    </section>
+
+    {runtimeMessage || message ? <p className="runtime-feedback" role="status">{message || runtimeMessage}</p> : null}
+
+    <div className="runtime-workbench-grid">
+      <section className="runtime-pane runtime-history-pane">
+        <div className="runtime-pane-head"><div><span>工作流历史</span><h3>最近执行</h3></div><button type="button" className="runtime-icon-button" onClick={() => void refreshWorkflowList()} disabled={detailLoading} aria-label="刷新工作流"><RefreshCw size={16} aria-hidden /></button></div>
+        {runtimeWorkflows.length ? <div className="runtime-workflow-list">{runtimeWorkflows.slice(0, 16).map((workflow) => <button type="button" key={workflow.workflow_id} className={`runtime-workflow-row ${selectedWorkflowId === workflow.workflow_id ? "selected" : ""}`} onClick={() => setSelectedWorkflowId(workflow.workflow_id)}>
+          <div><span>{goalLabel(workflow.goal)}</span><strong>{workflow.current_agent ?? "Supervisor 等待路由"}</strong></div>
+          <RuntimeStatusPill status={workflow.status} />
+          <small>{formatDateTime(workflow.updated_at)} · {workflow.workflow_id.slice(-8)}</small>
+        </button>)}</div> : <EmptyState text="尚无 Runtime 工作流。可直接以当前学生资料启动一条监督式流程。" />}
+      </section>
+
+      <section className="runtime-pane runtime-state-pane">
+        <div className="runtime-pane-head"><div><span>共享状态</span><h3>{workflowState ? goalLabel(workflowState.goal) : "选择工作流"}</h3></div><button type="button" className="runtime-text-button" onClick={() => void refreshSelectedCheckpoint()} disabled={!selectedWorkflowId || detailLoading}>刷新 checkpoint</button></div>
+        {!workflowState ? <EmptyState text={detailLoading ? "正在读取真实 Runtime 状态…" : "选择左侧工作流查看当前 Agent、任务和阻塞原因。"} /> : <>
+          <div className="runtime-state-header"><RuntimeStatusPill status={workflowState.status} /><span>{workflowState.current_agent ?? "Supervisor"}</span><small>步数 {workflowState.step_count}/{workflowState.max_steps} · 工具调用 {workflowState.tool_call_count}</small></div>
+          {workflowState.user_question ? <RuntimeCallout tone="user" title="等待学生补充" text={workflowState.user_question} /> : null}
+          {workflowState.human_review_reason ? <RuntimeCallout tone="human" title="等待人工复核" text={workflowState.human_review_reason} /> : null}
+          {workflowState.errors.length ? <RuntimeCallout tone="error" title="运行错误" text={workflowState.errors.at(-1) ?? "工作流终止。"} /> : null}
+          <RuntimeTaskBoard tasks={workflowState.tasks} />
+          {canResume ? <div className="runtime-resume"><label>{workflowState.status === "WAITING_USER" ? "补充给 Agent 的信息" : "人工处理结论"}<textarea value={resumeText} onChange={(event) => setResumeText(event.target.value)} placeholder={workflowState.status === "WAITING_USER" ? "例如：已取得 IELTS 7.0，单项均不低于 6.5。" : "记录核验结论或授权继续的原因。"} /></label><button type="button" className="runtime-start primary" onClick={() => void resumeWorkflow()} disabled={detailLoading}><ArrowRight size={14} aria-hidden />继续工作流</button></div> : null}
+        </>}
+      </section>
+
+      <section className="runtime-pane runtime-trace-pane">
+        <div className="runtime-pane-head"><div><span>真实 Trace</span><h3>Runtime 事件</h3></div><span className="runtime-trace-caption"><Clock3 size={14} aria-hidden />{trace.length} events</span></div>
+        <RuntimeTraceList events={trace} expandedEventId={expandedEventId} onToggle={(eventId) => setExpandedEventId((current) => current === eventId ? null : eventId)} loading={detailLoading} />
+      </section>
+    </div>
+  </IslandCard>;
 }
 
-function AgentRunDetailPanel({ detail, message, onRetryStep, onHandoffStep, onRollbackStep }: { detail: AgentRunDetail | null; message: string; onRetryStep: (stepId: string) => void; onHandoffStep: (stepId: string) => void; onRollbackStep: (stepId: string) => void }) {
-  if (!detail?.run) return <div className="runtime-list compact"><article><strong>No run selected</strong><p>Click Inspect steps on a recent workflow to manage retry, handoff, or rollback.</p>{message ? <small>{message}</small> : null}</article></div>;
-  return <div className="runtime-list compact">
-    <article><div className="program-title-row"><strong>{workflowLabel(detail.run.workflow_name)}</strong><DataBadge status={detail.run.status} /></div><p>{detail.run.workflow_id}</p>{message ? <small>{message}</small> : null}</article>
-    {detail.steps.map((step) => <article key={step.step_id}>
-      <div className="program-title-row"><strong>{step.node}</strong><DataBadge status={step.status} /></div>
-      <p>{step.output_summary || step.input_summary}</p>
-      <div className="task-meta"><span>attempt {step.attempt}/{step.max_attempts}</span><span>{step.assigned_to}</span><span>{step.payload?.model ? String(step.payload.model) : "no model"}</span></div>
-      {step.payload?.needs_human_reason ? <small>{String(step.payload.needs_human_reason)}</small> : null}
-      <div className="card-actions"><IslandButton type="default" size="small" onClick={() => onRetryStep(step.step_id)}>Retry</IslandButton><IslandButton type="default" size="small" onClick={() => onHandoffStep(step.step_id)}>Handoff</IslandButton><IslandButton type="default" size="small" onClick={() => onRollbackStep(step.step_id)}>Rollback</IslandButton></div>
-    </article>)}
-    {(detail.events ?? []).slice(0, 5).map((event) => <article key={event.event_id}><strong>{event.event_type}</strong><p>{event.summary}</p><small>{formatDate(event.created_at)}</small></article>)}
-  </div>;
+function RuntimeStatusPill({ status }: { status: RuntimeWorkflowStatus | RuntimeWorkflowTask["status"] }) {
+  return <span className={`runtime-status ${status.toLowerCase()}`}>{statusLabel(status)}</span>;
 }
 
-function AgentQueueList({ jobs, onRetry }: { jobs: AgentQueueJob[]; onRetry: (jobId: string) => void }) {
-  const visible = jobs.slice(0, 8);
-  if (!visible.length) return <div className="runtime-list compact"><article><strong>No queued jobs</strong><p>Queue source crawl, crawl plan, or URL update to test the worker.</p></article></div>;
-  return <div className="runtime-list compact">{visible.map((job) => <article key={job.job_id}>
-    <div className="program-title-row"><strong>{workflowLabel(job.workflow_name)}</strong><DataBadge status={job.status} /></div>
-    <p>{job.payload_summary || job.job_id}</p>
-    <div className="task-meta"><span>attempt {job.attempts ?? 0}/{job.max_attempts ?? 1}</span><span>priority {job.priority}</span><span>{job.assigned_to || "unassigned"}</span></div>
-    {job.worker_summary ? <small>{job.worker_summary}</small> : null}
-    {job.last_error ? <small>{job.last_error}</small> : null}
-    {job.can_retry ? <div className="card-actions"><IslandButton type="default" size="small" onClick={() => onRetry(job.job_id)}>Retry job</IslandButton></div> : null}
-  </article>)}</div>;
+function RuntimeCallout({ tone, title, text }: { tone: "user" | "human" | "error"; title: string; text: string }) {
+  return <div className={`runtime-callout ${tone}`}><strong>{title}</strong><p>{text}</p></div>;
 }
 
-function workflowLabel(value: string) { return { background: "Background", program_plan: "Matching plan", application_plan: "Timeline", writing_plan: "Writing", assessment: "Full plan", selected_program_matches: "Selected matches", data_acquisition: "Source acquisition", catalog_auto_update: "URL discovery", crawl_queue: "Crawl queue" }[value] ?? value; }
+function RuntimeTaskBoard({ tasks }: { tasks: RuntimeWorkflowTask[] }) {
+  if (!tasks.length) return <div className="runtime-task-empty">Supervisor 尚未分配可见任务。</div>;
+  return <div className="runtime-task-board"><div className="runtime-section-label">工作流任务</div>{tasks.map((task) => <article key={task.task_id}><div><strong>{task.description}</strong><span>{task.assigned_agent ?? "待 Supervisor 分配"}</span></div><RuntimeStatusPill status={task.status} />{task.blocker ? <p>{task.blocker}</p> : null}</article>)}</div>;
+}
+
+function RuntimeTraceList({ events, expandedEventId, onToggle, loading }: { events: RuntimeTraceEvent[]; expandedEventId: string | null; onToggle: (eventId: string) => void; loading: boolean }) {
+  if (!events.length) return <EmptyState text={loading ? "正在加载执行轨迹…" : "该 workflow 尚未记录 Trace 事件。"} />;
+  return <ol className="runtime-trace-list">{events.map((event) => {
+    const expanded = expandedEventId === event.event_id;
+    const summary = event.output_summary ?? event.input_summary ?? event.error_message ?? "Runtime 已记录该动作。";
+    return <li key={event.event_id} className={event.error_message ? "error" : ""}><button type="button" className="runtime-trace-row" onClick={() => onToggle(event.event_id)} aria-expanded={expanded}>
+      <span className="runtime-trace-marker" aria-hidden />
+      <span className="runtime-trace-main"><strong>{traceEventLabel(event.event_type)}</strong><small>{event.agent_name ?? "Runtime"}{event.tool_name ? ` · ${event.tool_name}` : ""}</small><em>{summary}</em></span>
+      <span className="runtime-trace-side"><time dateTime={event.started_at}>{formatClock(event.started_at)}</time><small>{formatDuration(event.duration_ms)}</small></span>
+    </button>{expanded ? <div className="runtime-trace-detail"><dl><div><dt>事件</dt><dd>{event.event_type}</dd></div><div><dt>模型</dt><dd>{event.model ?? "—"}{event.provider ? ` · ${event.provider}` : ""}</dd></div><div><dt>Token</dt><dd>{event.total_tokens?.toLocaleString("zh-CN") ?? "—"}</dd></div><div><dt>成本</dt><dd>{formatCost(event.cost_usd)}</dd></div></dl>{event.input_summary ? <p><strong>输入摘要</strong>{event.input_summary}</p> : null}{event.output_summary ? <p><strong>输出摘要</strong>{event.output_summary}</p> : null}{event.error_message ? <p className="trace-error"><strong>{event.error_type ?? "错误"}</strong>{event.error_message}</p> : null}</div> : null}</li>;
+  })}</ol>;
+}
+
+function goalLabel(goal: RuntimeWorkflowGoal) { return { background_assessment: "背景评估", program_recommendation: "项目推荐", application_planning: "申请规划", writing: "文书准备", full_application_plan: "完整申请方案" }[goal]; }
+function statusLabel(status: RuntimeWorkflowStatus | RuntimeWorkflowTask["status"]) { return ({ RUNNING: "运行中", WAITING_USER: "等待学生", WAITING_HUMAN: "等待人工", COMPLETED: "已完成", FAILED: "失败", FAILED_RETRYABLE: "可重试", PENDING: "待执行", BLOCKED: "受阻", CANCELLED: "已取消" } as Record<string, string>)[status] ?? status; }
+function traceEventLabel(eventType: RuntimeTraceEvent["event_type"]) { return ({ WORKFLOW_STARTED: "工作流启动", WORKFLOW_COMPLETED: "工作流结束", SUPERVISOR_ROUTE: "Supervisor 路由", AGENT_STARTED: "Agent 开始", AGENT_DECISION: "Agent 决策", TOOL_CALL: "工具调用", TOOL_RESULT: "工具结果", HANDOFF: "交接", CHECKPOINT: "状态保存", USER_WAIT: "等待学生", HUMAN_WAIT: "等待人工", RETRY: "重试", ERROR: "错误" } as Record<string, string>)[eventType] ?? eventType; }
+function formatCost(value: number | null) { return value === null ? "未计价" : `$${value.toFixed(value < 0.01 ? 4 : 2)}`; }
+function formatDuration(value: number | null) { return value === null ? "—" : value < 1000 ? `${value} ms` : `${(value / 1000).toFixed(1)} s`; }
+function formatClock(value: string) { const date = new Date(value); return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }); }
+function formatDateTime(value: string) { const date = new Date(value); return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }); }
 function PanelTitle({ icon, title }: { icon: ReactNode; title: string }) { return <div className="panel-title">{icon}<IslandTitle size="small" color="app-yellow">{title}</IslandTitle></div>; }
 function AdviceList({ title, items }: { title: string; items: string[] }) { if (!items.length) return null; return <div className="advice-list"><h3>{title}</h3>{items.slice(0, 8).map((item) => <Rule text={item} key={item} />)}</div>; }
 function Rule({ text }: { text: string }) { return <div><CheckCircle2 size={15} aria-hidden /><span>{text}</span></div>; }

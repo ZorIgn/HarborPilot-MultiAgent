@@ -156,7 +156,7 @@ def publish_review_item(request: ReviewPublishRequest) -> ReviewPublishResponse:
         binding_score=item.binding_score,
         reviewer_note=request.reviewer_note,
         review_decision_id=decision_id,
-        agent_chain=[*item.agent_chain, "HumanReviewGateAgent", "AuditAgent"],
+        execution_ref=item.execution_ref,
     )
     if request.persist:
         save_published_field_record(record)
@@ -255,7 +255,7 @@ def _queue_item_from_record(record: FieldEvidenceRecord) -> ReviewQueueItem | No
             if publishable
             else "Not publishable as an official current field; keep it as preparation/reference only."
         ),
-        agent_chain=record.agent_chain,
+        execution_ref=record.execution_ref,
     )
 
 

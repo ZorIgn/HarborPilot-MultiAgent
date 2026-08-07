@@ -25,8 +25,10 @@ def test_api_assessment_endpoint() -> None:
 
     assert response.status_code == 200
     data = response.json()
-    assert data["workflow_id"].startswith("wf_")
-    assert len(data["trace"]) == 8
+    assert data["workflow_id"].startswith("maf_")
+    assert {"AssessmentAgent", "ResearchAgent", "MatchingAgent", "VerificationAgent", "PlanningAgent", "WritingAgent", "CriticAgent"} <= {
+        event["node"] for event in data["trace"]
+    }
     assert data["evidence"]["recommended_uploads"]
 
 
@@ -153,7 +155,8 @@ def test_questionnaire_schema_and_stage_endpoints() -> None:
     assert background_data["assessment"]["competitiveness_level"] in {"强", "中强", "中", "弱"}
     assert background_data["assessment"]["application_positioning"]
     assert background_data["assessment"]["hard_thresholds"]
-    assert len(background_data["trace"]) == 3
+    assert {event["node"] for event in background_data["trace"]} == {"AssessmentAgent", "CriticAgent"}
+    assert any(event["tool_calls"] for event in background_data["trace"])
 
     program_plan = client.post("/api/workflows/program-plan", json=payload)
     assert program_plan.status_code == 200
@@ -164,9 +167,9 @@ def test_questionnaire_schema_and_stage_endpoints() -> None:
     assert all("programme-list" not in str(item["program"].get("official_program_url") or "") for item in program_data["recommendations"])
     assert any(item["program"].get("official_program_url") is None for item in program_data["recommendations"])
     tiers = {item["tier"] for item in program_data["recommendations"]}
-    assert {"reach", "target", "safe", "candidate", "not_recommended"} <= tiers
+    assert {"reach", "target", "safer", "candidate", "not_recommended"} <= tiers
     assert "insufficient_info" not in tiers
-    assert all(item["tier"] in {"reach", "target", "safe", "candidate", "not_recommended"} for item in program_data["recommendations"])
+    assert all(item["tier"] in {"reach", "target", "safer", "candidate", "not_recommended"} for item in program_data["recommendations"])
 
     first_match = program_data["recommendations"][0]
     assert first_match["score_breakdown"]
@@ -203,7 +206,12 @@ def test_questionnaire_schema_and_stage_endpoints() -> None:
     first_record = application_data["source_refresh"]["field_evidence_records"][0]
     assert first_record["cycle"] == payload["target_cycle"]
     assert first_record["review_required"] is True
-    assert first_record["agent_chain"]
+    execution_ref = first_record["execution_ref"]
+    assert execution_ref["workflow_id"] == application_data["workflow_id"]
+    assert execution_ref["produced_by_agent"] == "VerificationAgent"
+    assert execution_ref["produced_by_tool"] == "get_program_trust_detail"
+    assert execution_ref["tool_call_id"]
+    assert len(execution_ref["trace_event_ids"]) == 2
     assert application_data["source_refresh"]["parser_plan"]
     assert any(task.get("basis") for task in application_data["timeline"])
     assert any(task.get("source_url") for task in application_data["timeline"])
@@ -278,7 +286,7 @@ def test_questionnaire_schema_and_stage_endpoints() -> None:
     for raw_status in ["VERIFIED", "PENDING_REVIEW", "MODEL_INFERRED", "OFFICIAL_VERIFIED_CURRENT", "OFFICIAL_PREVIOUS_CYCLE"]:
         assert raw_status not in writing_payload_text
     risk_control_text = " ".join(writing_data["writing"]["risk_controls"])
-    for blocked_claim in ["课程", "教授", "就业数据", "录取概率"]:
+    for blocked_claim in ["课程", "教授", "就业数据", "录取结果"]:
         assert blocked_claim in risk_control_text
 
 
@@ -294,14 +302,13 @@ def test_admin_scenario_audit_endpoint_exposes_multiagent_self_audit() -> None:
     assert data["passed"] is True
     assert data["case_count"] >= 3
     assert data["failure_count"] == 0
-    assert data["agent_chain"][-1] == "ScenarioAuditAgent"
-    assert "ProgramDataAcquisitionAgent" in data["agent_chain"]
-    assert "SourceCrawlQueueAgent" in data["agent_chain"]
-    assert "ReviewAgent" in data["agent_chain"]
+    runtime_nodes = set(data["runtime_trace_nodes"])
+    assert {"AssessmentAgent", "MatchingAgent", "VerificationAgent", "PlanningAgent", "CriticAgent"} <= runtime_nodes
+    assert "ScenarioAuditAgent" not in runtime_nodes
 
     first = data["cases"][0]
     assert first["targets"]
-    assert first["trace_nodes"][-1] == "ScenarioAuditAgent"
+    assert first["trace_nodes"][-1] == "CriticAgent"
     assert first["crawl_queue"]["official_job_count"] >= 1
     assert first["crawl_queue"]["community_job_count"] >= 1
     assert all(target["formal_recommendation"] is False for target in first["targets"])
@@ -346,7 +353,8 @@ def test_source_registry_and_data_refresh() -> None:
     assert "deadline" in evidence_data["field_breakdown"]
     assert "official_application_system" in evidence_data["official_priority"]
     assert evidence_data["sample_records"]
-    assert evidence_data["sample_records"][0]["agent_chain"]
+    assert "execution_ref" in evidence_data["sample_records"][0]
+    assert evidence_data["sample_records"][0]["execution_ref"] is None
 
     program_plan = client.post("/api/workflows/program-plan", json=payload)
     assert program_plan.status_code == 200
@@ -367,7 +375,7 @@ def test_source_registry_and_data_refresh() -> None:
     assert data["program_findings"]
     assert data["field_evidence_records"]
     assert data["extraction_results"]
-    assert data["extraction_results"][0]["agent_chain"]
+    assert data["extraction_results"][0]["execution_ref"] is None
     assert data["extraction_results"][0]["unresolved_fields"]
     assert data["review_queue_size"] >= 1
     assert data["parser_plan"]
@@ -398,7 +406,8 @@ def test_program_catalog_exposes_field_level_trust_detail(monkeypatch) -> None:
     assert {"official_program_url", "deadline", "tuition_hkd", "materials", "language_requirement", "application_url"} & {
         record["field_name"] for record in trust["field_records"]
     }
-    assert all(record["agent_chain"] for record in trust["field_records"])
+    assert all("execution_ref" in record for record in trust["field_records"])
+    assert all(record["execution_ref"] is None for record in trust["field_records"])
 
     detail = client.get(f"/api/programs/{program['id']}/trust")
     assert detail.status_code == 200
@@ -440,8 +449,7 @@ def test_program_data_package_exposes_official_and_community_acquisition_plan() 
     data = report.json()
     assert data["mode"] == "dry_run"
     assert data["packages"][0]["program_id"] == program_id
-    assert "OfficialCrawlerAgent" in data["agent_chain"]
-    assert "CommunitySignalAgent" in data["agent_chain"]
+    assert data["execution_ref"] is None
     assert any("社区经验" in action for action in data["next_actions"])
 
 
@@ -463,7 +471,7 @@ def test_crawl_queue_separates_official_and_community_jobs() -> None:
     assert data["job_count"] >= 2
     assert data["official_job_count"] >= 1
     assert data["community_job_count"] >= 1
-    assert "SourceCrawlQueueAgent" in data["agent_chain"]
+    assert data["execution_ref"] is None
     assert any("review" in warning.lower() for warning in data["warnings"])
 
     official_jobs = [item for item in data["items"] if item["trust_level"] == "official"]
@@ -503,8 +511,7 @@ def test_admin_catalog_auto_update_dry_run_discovers_reviewable_candidates() -> 
     assert data["candidate_count"] >= 2
     assert data["persisted_candidate_count"] == 0
     assert data["review_queue_size"] == 0
-    assert "CatalogAutoUpdateAgent" in data["agent_chain"]
-    assert "HumanReviewGateAgent" in data["agent_chain"]
+    assert data["execution_ref"] is None
     assert all("taught-postgraduate-programmes" not in item["candidate_url"] for item in data["candidates"])
     assert all(item["evidence_record"]["field_name"] == "official_program_url" for item in data["candidates"])
     assert all(item["evidence_record"]["review_required"] is True for item in data["candidates"])
@@ -651,12 +658,7 @@ def test_qs_master_applications_import_is_available_and_review_gated() -> None:
         if item["source_id"] == "qs_master_applications_github"
     )
     assert qs_result["raw_json"]["matched_candidate_count"] >= 3
-    assert qs_result["agent_chain"] == [
-        "SourceDiscoveryAgent",
-        "RepositoryImportAgent",
-        "OfficialLinkCandidateAgent",
-        "ReviewerGateAgent",
-    ]
+    assert qs_result["execution_ref"] is None
     assert all(
         field["status"] != "OFFICIAL_VERIFIED_CURRENT"
         for field in qs_result["extracted_fields"]
@@ -751,7 +753,7 @@ def test_agent_run_rollback_marks_later_steps_and_enqueues_retry() -> None:
     workflow_id = "wf_pytest_rollback_" + uuid4().hex[:8]
     start_agent_run(workflow_id, "pytest_rollback")
     base = datetime.now(UTC)
-    for index, node in enumerate(["ProfileAgent", "EvaluationAgent", "MatchingAgent"]):
+    for index, node in enumerate(["AssessmentAgent", "MatchingAgent", "CriticAgent"]):
         started = base + timedelta(seconds=index)
         record_agent_step(
             workflow_id=workflow_id,
@@ -766,7 +768,7 @@ def test_agent_run_rollback_marks_later_steps_and_enqueues_retry() -> None:
         )
 
     detail = client.get(f"/api/admin/agent-runs/{workflow_id}").json()
-    target_step_id = next(step["step_id"] for step in detail["steps"] if step["node"] == "EvaluationAgent")
+    target_step_id = next(step["step_id"] for step in detail["steps"] if step["node"] == "MatchingAgent")
     rollback = client.post(
         f"/api/admin/agent-runs/{workflow_id}/rollback",
         json={"target_step_id": target_step_id, "reviewer_id": "pytest", "reason": "bad matching output"},
@@ -774,14 +776,14 @@ def test_agent_run_rollback_marks_later_steps_and_enqueues_retry() -> None:
     assert rollback.status_code == 200
     data = rollback.json()
     assert data["status"] == "ROLLED_BACK"
-    assert data["current_step"] == "EvaluationAgent"
+    assert data["current_step"] == "MatchingAgent"
     assert data["rolled_back_step_count"] >= 1
-    assert data["retry_job"]["workflow_name"] == "retry:EvaluationAgent"
+    assert data["retry_job"]["workflow_name"] == "retry:MatchingAgent"
 
     after = client.get(f"/api/admin/agent-runs/{workflow_id}").json()
     statuses = {step["node"]: step["status"] for step in after["steps"]}
-    assert statuses["EvaluationAgent"] == "ROLLBACK_TARGET"
-    assert statuses["MatchingAgent"] == "ROLLED_BACK"
+    assert statuses["MatchingAgent"] == "ROLLBACK_TARGET"
+    assert statuses["CriticAgent"] == "ROLLED_BACK"
     assert after["run"]["status"] == "ROLLED_BACK"
     assert any(event["event_type"] == "RUN_ROLLED_BACK" for event in after["events"])
 

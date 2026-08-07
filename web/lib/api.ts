@@ -22,6 +22,10 @@ import type {
   QuestionnaireSchema,
   ReviewBulkPublishResponse, ReviewPublishResponse,
   ReviewQueueSummary,
+  RuntimeTraceEvent,
+  RuntimeWorkflowGoal,
+  RuntimeWorkflowListItem,
+  RuntimeWorkflowState,
   ScenarioAuditReport,
   SourceRegistry,
   SourceHealthSummary,
@@ -50,6 +54,7 @@ export function setStoredAdminToken(token: string): void {
 
 const ADMIN_AUTH_PATH_PREFIXES = [
   "/api/admin/",
+  "/api/agent/workflows",
   "/api/workflows/data-acquisition",
   "/api/workflows/data-refresh",
   "/api/workflows/source-refresh",
@@ -121,6 +126,38 @@ function putJson(body: unknown): RequestInit {
   return { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
 }
 
+export type StartRuntimeWorkflowPayload = {
+  goal: RuntimeWorkflowGoal;
+  profile: ApplicantPayload;
+  user_request?: string;
+  questionnaire?: QuestionnaireResponse | null;
+  selected_program_ids?: string[];
+  document_type?: "PS" | "SOP" | "CV" | "ESSAY" | "REFERENCE_PACKAGE";
+};
+
+export function startRuntimeWorkflow(payload: StartRuntimeWorkflowPayload): Promise<RuntimeWorkflowState> {
+  return apiJson<RuntimeWorkflowState>("/api/agent/workflows", postJson(payload), "Agent workflow API");
+}
+
+export async function getRuntimeWorkflows(limit = 20): Promise<RuntimeWorkflowListItem[]> {
+  return apiQueryJson<RuntimeWorkflowListItem[]>("/api/agent/workflows", { limit }, "Agent workflow list API");
+}
+
+export function getRuntimeWorkflow(workflowId: string): Promise<RuntimeWorkflowState> {
+  return apiJson<RuntimeWorkflowState>("/api/agent/workflows/" + encodeURIComponent(workflowId), { cache: "no-store" }, "Agent workflow API");
+}
+
+export function resumeRuntimeWorkflow(workflowId: string, payload: { user_message?: string | null; human_resolution?: Record<string, unknown> | string | null }): Promise<RuntimeWorkflowState> {
+  return apiJson<RuntimeWorkflowState>("/api/agent/workflows/" + encodeURIComponent(workflowId) + "/resume", postJson(payload), "Agent workflow resume API");
+}
+
+export function getRuntimeWorkflowTrace(workflowId: string): Promise<RuntimeTraceEvent[]> {
+  return apiJson<RuntimeTraceEvent[]>("/api/agent/workflows/" + encodeURIComponent(workflowId) + "/trace", { cache: "no-store" }, "Agent workflow trace API");
+}
+
+export function getRuntimeWorkflowState(workflowId: string): Promise<RuntimeWorkflowState> {
+  return apiJson<RuntimeWorkflowState>("/api/agent/workflows/" + encodeURIComponent(workflowId) + "/state", { cache: "no-store" }, "Agent workflow state API");
+}
 export function runAssessment(payload: ApplicantPayload): Promise<WorkflowResult> {
   return apiJson<WorkflowResult>("/api/workflows/assessment", postJson(payload), "Assessment API");
 }
