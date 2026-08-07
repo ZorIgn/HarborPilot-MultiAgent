@@ -42,6 +42,16 @@ def test_source_fetch_eval_records_a_safe_rejection() -> None:
     assert result["operation_data"]["error_type"] == "ToolExecutionError"
 
 
+def test_previous_cycle_eval_is_self_contained() -> None:
+    runner = AgentEvalRunner()
+    case = next(item for item in runner.load_cases() if item.case_id == "previous_cycle_evidence")
+
+    result = runner.run_case(case)
+
+    assert result["passed"] is True
+    assert "scholarship_deadline" in result["operation_data"]["previous_cycle_fields"]
+
+
 def test_high_risk_tool_proposal_is_traced_before_human_gate() -> None:
     runner = AgentEvalRunner()
     case = next(item for item in runner.load_cases() if item.case_id == "human_escalation")

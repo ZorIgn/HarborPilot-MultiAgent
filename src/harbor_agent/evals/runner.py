@@ -239,15 +239,50 @@ class AgentEvalRunner:
                 )
         elif case.operation == "previous_cycle_evidence":
             program_id = "cityu-ma-communication-and-new-media-2027"
-            registry = build_default_tool_registry()
-            result = registry.execute(
-                agent_name="VerificationAgent",
-                allowed_tools={"get_program_trust_detail"},
-                state=state,
-                tool_name="get_program_trust_detail",
-                arguments={"program_id": program_id},
-                tracer=tracer,
+            # Keep this evaluation independent of ignored local SQLite state.
+            from datetime import UTC, datetime
+            from harbor_agent.models import FieldEvidenceRecord, FieldVerificationStatus
+            from harbor_agent.services import evidence_graph
+
+            fixture = FieldEvidenceRecord(
+                program_id=program_id,
+                field_name="scholarship_deadline",
+                value="2026-12-01",
+                cycle="2026-fall",
+                source_url="https://www.cityu.edu.hk/pg/taught-postgraduate-programmes",
+                source_type="official_program_index",
+                extracted_at=datetime(2026, 6, 1, tzinfo=UTC),
+                page_hash="sha256:agent-eval-previous-cycle",
+                confidence="medium",
+                source_priority=2,
+                status=FieldVerificationStatus.official_previous_cycle,
+                review_required=True,
+                evidence_snippet="Fixed repository fixture for previous-cycle evidence evaluation.",
+                snapshot_url="https://www.cityu.edu.hk/pg/taught-postgraduate-programmes",
             )
+            original_loader = evidence_graph.load_field_evidence_records
+            original_published_loader = evidence_graph.load_published_field_records
+
+            def _load_eval_fixture(program_ids=None):
+                if program_ids and program_id not in set(program_ids):
+                    return []
+                return [fixture]
+
+            evidence_graph.load_field_evidence_records = _load_eval_fixture
+            evidence_graph.load_published_field_records = lambda: []
+            registry = build_default_tool_registry()
+            try:
+                result = registry.execute(
+                    agent_name="VerificationAgent",
+                    allowed_tools={"get_program_trust_detail"},
+                    state=state,
+                    tool_name="get_program_trust_detail",
+                    arguments={"program_id": program_id},
+                    tracer=tracer,
+                )
+            finally:
+                evidence_graph.load_field_evidence_records = original_loader
+                evidence_graph.load_published_field_records = original_published_loader
             trust = result.output.get("trust", {})
             previous_fields = [
                 item.get("field_name")
