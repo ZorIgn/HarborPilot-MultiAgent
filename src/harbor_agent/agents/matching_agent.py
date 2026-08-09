@@ -20,6 +20,7 @@ class MatchingAgent(BaseAgent):
         "selected_program_ids",
         "blocked_program_ids",
         "selected_matches",
+        "working_memory",
     )
     deterministic_boundaries = (
         "budget is not admissions eligibility",
@@ -28,30 +29,26 @@ class MatchingAgent(BaseAgent):
 
     def step(self, state: AgentState) -> AgentDecision:
         results = state.working_memory.get("tool_results", {})
-        fit = results.get("calculate_applicant_fit")
-        if not fit:
+        dimension_tools = (
+            "evaluate_admissions_eligibility",
+            "evaluate_financial_feasibility",
+            "evaluate_user_preference",
+            "calculate_applicant_fit",
+        )
+        missing_dimensions = [name for name in dimension_tools if results.get(name) is None]
+        if missing_dimensions:
             return AgentDecision(
                 decision=DecisionType.CALL_TOOL,
                 reasoning_summary="Evaluate each decision dimension separately before building a portfolio.",
                 tool_calls=[
                     ToolCallRequest(
-                        tool_name="evaluate_admissions_eligibility",
+                        tool_name=name,
                         arguments={"program_ids": state.candidate_program_ids},
-                    ),
-                    ToolCallRequest(
-                        tool_name="evaluate_financial_feasibility",
-                        arguments={"program_ids": state.candidate_program_ids},
-                    ),
-                    ToolCallRequest(
-                        tool_name="evaluate_user_preference",
-                        arguments={"program_ids": state.candidate_program_ids},
-                    ),
-                    ToolCallRequest(
-                        tool_name="calculate_applicant_fit",
-                        arguments={"program_ids": state.candidate_program_ids},
-                    ),
+                    )
+                    for name in missing_dimensions
                 ],
             )
+        fit = results.get("calculate_applicant_fit")
         if not state.program_matches:
             typed_matches = [ProgramMatch.model_validate(item) for item in fit.get("matches", [])]
             matches = [

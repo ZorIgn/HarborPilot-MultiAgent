@@ -4,18 +4,14 @@ import hashlib
 import hmac
 import re
 import secrets
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request, Response
-from fastapi.middleware.cors import CORSMiddleware
-from starlette.responses import JSONResponse
-from pydantic import BaseModel, Field
 from typing import Any
 
-from harbor_agent.services.catalog_auto_update import CatalogAutoUpdateService
-from harbor_agent.services.data_acquisition import ProgramDataAcquisitionService
-from harbor_agent.services.data_refresh import DataRefreshService
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+from starlette.responses import JSONResponse
+
 from harbor_agent.agents.orchestrator import WorkflowOrchestrator
-from harbor_agent.services.source_crawl_queue import SourceCrawlQueueService
-from harbor_agent.services.writing_composer import WritingComposer
 from harbor_agent.config import get_settings
 from harbor_agent.core.llm import MockLLMProvider, OpenAICompatibleLLMProvider, build_llm_provider
 from harbor_agent.llm.provider import OpenAICompatibleToolCallingProvider
@@ -23,69 +19,96 @@ from harbor_agent.models import (
     AgentSystemReport,
     ApplicantProfileInput,
     ApplicationPlanResult,
+    BackgroundStageResult,
     CatalogAutoUpdateReport,
     CatalogAutoUpdateRequest,
-    DataAcquisitionReport,
-    DataAcquisitionRequest,
     CrawlQueueReport,
     CrawlQueueRequest,
+    DataAcquisitionReport,
+    DataAcquisitionRequest,
+    DataRefreshReport,
+    DataRefreshRequest,
+    EvidenceGraphSummary,
     ProgramDataPackage,
+    ProgramPlanResult,
+    ProgramTrustDetail,
+    QuestionnaireAnswer,
+    QuestionnaireResponse,
     ReviewBulkPublishRequest,
     ReviewBulkPublishResponse,
     ReviewPublishRequest,
     ReviewPublishResponse,
     ReviewQueueSummary,
     SourceHealthSummary,
-    BackgroundStageResult,
-    DataRefreshReport,
-    DataRefreshRequest,
-    EvidenceGraphSummary,
-    QuestionnaireAnswer,
-    ProgramPlanResult,
-    ProgramTrustDetail,
-    QuestionnaireResponse,
     StoryCard,
+    WorkflowResult,
     WritingDraft,
     WritingInterviewQuestion,
-    WorkflowResult,
     WritingPlanResult,
     WritingReviewRubric,
 )
-from harbor_agent.services.evidence_graph import build_evidence_graph_summary, build_program_trust_detail
-from harbor_agent.services.formal_gate import accepted_url
-from harbor_agent.services.external_candidates import load_qs_master_applications_import
-from harbor_agent.services.program_urls import is_generic_application_url, is_generic_program_url, student_application_url, student_program_url
-from harbor_agent.services.profile_store import load_profile, load_workspace_state, profile_store_secret, save_profile, save_workspace_state
-from harbor_agent.services.review_gate import build_review_queue, publish_review_batch, publish_review_item
-from harbor_agent.services.scenario_audit_runner import scenario_audit_summary
-from harbor_agent.services.runtime_agent_registry import build_agent_system_report
-from harbor_agent.services.agent_worker import execute_agent_job
 from harbor_agent.services.agent_runtime import (
     claim_next_agent_job,
     enqueue_agent_job,
     enqueue_catalog_refresh_plan,
     get_agent_run,
     handoff_step,
+    list_agent_events,
     list_agent_jobs,
     list_agent_runs,
     request_step_retry,
     resolve_handoff_step,
-    rollback_agent_run,
     retry_agent_job,
-    list_agent_events,
+    rollback_agent_run,
 )
-from harbor_agent.services.matching_strategy import load_matching_strategy, save_matching_strategy, strategy_source
-from harbor_agent.services.matching_strategy_agent import propose_matching_strategy
+from harbor_agent.services.agent_worker import execute_agent_job
+from harbor_agent.services.catalog_auto_update import CatalogAutoUpdateService
+from harbor_agent.services.data_acquisition import ProgramDataAcquisitionService
 from harbor_agent.services.data_loader import (
     load_community_sources,
+    load_cv_profile_schema,
     load_form_definition,
     load_programs,
     load_questionnaire_schema,
     load_source_registry,
     load_taxonomy,
-    load_cv_profile_schema,
 )
+from harbor_agent.services.data_refresh import DataRefreshService
+from harbor_agent.services.evidence_graph import (
+    build_evidence_graph_summary,
+    build_program_trust_detail,
+)
+from harbor_agent.services.external_candidates import load_qs_master_applications_import
+from harbor_agent.services.formal_gate import accepted_url
 from harbor_agent.services.information_store import source_health_summary
+from harbor_agent.services.matching_strategy import (
+    load_matching_strategy,
+    save_matching_strategy,
+    strategy_source,
+)
+from harbor_agent.services.matching_strategy_agent import propose_matching_strategy
+from harbor_agent.services.profile_store import (
+    load_profile,
+    load_workspace_state,
+    profile_store_secret,
+    save_profile,
+    save_workspace_state,
+)
+from harbor_agent.services.program_urls import (
+    is_generic_application_url,
+    is_generic_program_url,
+    student_application_url,
+    student_program_url,
+)
+from harbor_agent.services.review_gate import (
+    build_review_queue,
+    publish_review_batch,
+    publish_review_item,
+)
+from harbor_agent.services.runtime_agent_registry import build_agent_system_report
+from harbor_agent.services.scenario_audit_runner import scenario_audit_summary
+from harbor_agent.services.source_crawl_queue import SourceCrawlQueueService
+from harbor_agent.services.writing_composer import WritingComposer
 
 settings = get_settings()
 llm_provider = build_llm_provider(settings)
@@ -972,7 +995,11 @@ def model_smoke_test() -> dict:
 # Supervisor runtime API. These endpoints are the new primary workflow path;
 # legacy /api/workflows/* remains temporarily available as a compatibility facade.
 from harbor_agent.runtime.state import HumanResolution, WorkflowGoal
-from harbor_agent.runtime.workflow import MultiAgentRuntime, WorkflowResumeRequest, WorkflowStartRequest
+from harbor_agent.runtime.workflow import (
+    MultiAgentRuntime,
+    WorkflowResumeRequest,
+    WorkflowStartRequest,
+)
 
 
 class AgentWorkflowCreateRequest(BaseModel):
@@ -991,7 +1018,20 @@ class AgentWorkflowCreateRequest(BaseModel):
 
 class AgentWorkflowResumePayload(BaseModel):
     user_message: str | None = None
-    human_resolution: HumanResolution | str | None = None
+    human_resolution: HumanResolution | None = None
+
+
+def _admin_reviewer_id(request: Request) -> str:
+    """Derive an audit identity from authenticated server-side request context."""
+
+    if settings.admin_token:
+        supplied = request.headers.get("x-harbor-admin-token") or _bearer_token(
+            request.headers.get("authorization")
+        )
+        digest = hashlib.sha256(str(supplied or "").encode("utf-8")).hexdigest()[:12]
+        return f"admin_token:{digest}"
+    client_host = request.client.host if request.client else "unknown"
+    return "test_admin" if client_host == "testclient" else "local_admin"
 
 
 def _runtime_workflow_owner(workflow_id: str, request: Request) -> dict[str, Any]:
@@ -1066,13 +1106,23 @@ def get_agent_workflow(workflow_id: str, request: Request) -> dict[str, Any]:
 
 @app.post("/api/agent/workflows/{workflow_id}/resume")
 def resume_agent_workflow(workflow_id: str, payload: AgentWorkflowResumePayload, request: Request) -> dict[str, Any]:
+    from harbor_agent.runtime.errors import AgentRuntimeError
+
     _runtime_workflow_owner(workflow_id, request)
+    reviewer_id: str | None = None
+    if payload.human_resolution is not None:
+        if not _admin_request_allowed(request):
+            raise HTTPException(status_code=403, detail="人工审核只允许独立管理员提交。")
+        reviewer_id = _admin_reviewer_id(request)
     try:
         state = _configured_runtime().resume(
             workflow_id,
             WorkflowResumeRequest(user_message=payload.user_message, human_resolution=payload.human_resolution),
+            reviewer_id=reviewer_id,
         )
-    except (KeyError, ValueError) as exc:
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except (KeyError, ValueError, AgentRuntimeError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return _agent_workflow_snapshot(state)
 

@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from harbor_agent.models import FieldEvidenceRecord, FieldVerificationStatus, ReviewPublishRequest, SourceScope
+from harbor_agent.models import (
+    FieldEvidenceRecord,
+    FieldVerificationStatus,
+    ReviewPublishRequest,
+    SourceScope,
+)
 from harbor_agent.services import review_gate
 
 
@@ -49,7 +54,11 @@ def test_review_store_persists_published_record_to_sqlite(monkeypatch, tmp_path)
 
     persisted: list[FieldEvidenceRecord] = []
     monkeypatch.setattr(review_store, "STORE_PATH", tmp_path / "published.json")
-    monkeypatch.setattr(review_store, "upsert_field_evidence_records", lambda records: persisted.extend(records) or len(records))
+    monkeypatch.setattr(
+        review_store,
+        "upsert_field_evidence_records",
+        lambda records, **_: persisted.extend(records) or len(records),
+    )
 
     record = FieldEvidenceRecord(
         program_id="demo-program",

@@ -22,6 +22,7 @@ class ToolExecution(BaseModel):
 
     tool_name: str
     tool_call_id: str
+    approval_id: str | None = None
     output: dict[str, Any]
 
 

@@ -21,14 +21,26 @@ class WritingWorkflowAgent(BaseAgent):
         results = state.working_memory.get("tool_results", {})
         stories = results.get("build_story_cards")
         if not state.story_cards and stories is None:
+            prerequisites = (
+                "retrieve_student_facts",
+                "retrieve_program_evidence",
+            )
+            missing_prerequisites = [
+                name for name in prerequisites if results.get(name) is None
+            ]
+            if missing_prerequisites:
+                return AgentDecision(
+                    decision=DecisionType.CALL_TOOL,
+                    reasoning_summary="Retrieve bounded student and programme evidence before building story cards.",
+                    tool_calls=[
+                        ToolCallRequest(tool_name=name, arguments={})
+                        for name in missing_prerequisites
+                    ],
+                )
             return AgentDecision(
                 decision=DecisionType.CALL_TOOL,
-                reasoning_summary="Retrieve bounded student/program evidence and build typed story cards.",
-                tool_calls=[
-                    ToolCallRequest(tool_name="retrieve_student_facts", arguments={}),
-                    ToolCallRequest(tool_name="retrieve_program_evidence", arguments={}),
-                    ToolCallRequest(tool_name="build_story_cards", arguments={}),
-                ],
+                reasoning_summary="The evidence prerequisites are ready; build typed story cards.",
+                tool_calls=[ToolCallRequest(tool_name="build_story_cards", arguments={})],
             )
         cards = list(stories.get("story_cards", [])) if stories else []
         if not state.story_cards and not cards and not results.get("build_writing_draft"):

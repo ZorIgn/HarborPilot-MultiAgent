@@ -13,7 +13,7 @@ class ResearchAgent(BaseAgent):
     description = "Recalls and narrows catalogue programmes using the normalized profile and stated direction."
     allowed_tools = AGENT_TOOL_PERMISSIONS[name]
     input_state_fields = ("normalized_profile", "assessment", "candidate_program_ids")
-    output_state_fields = ("candidate_program_ids", "researched_program_ids")
+    output_state_fields = ("candidate_program_ids", "researched_program_ids", "working_memory")
     deterministic_boundaries = ("catalogue search is deterministic", "does not claim official facts without evidence")
 
     def step(self, state: AgentState) -> AgentDecision:

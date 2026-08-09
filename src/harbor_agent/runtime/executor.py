@@ -24,11 +24,38 @@ from harbor_agent.runtime.state import (
     AgentState,
     WorkflowStatus,
     WorkflowTaskStatus,
+    annotate_conflict,
     append_tool_result,
     apply_state_patch,
 )
 from harbor_agent.tools.base import ToolExecution
 from harbor_agent.tools.registry import ToolRegistry
+
+_RUNTIME_OWNED_STATE_FIELDS = {
+    "workflow_id",
+    "schema_version",
+    "goal",
+    "status",
+    "current_agent",
+    "previous_agent",
+    "visited_agents",
+    "step_count",
+    "max_steps",
+    "agent_turn_counts",
+    "tool_call_count",
+    "human_review_reason",
+    "human_resolution",
+    "pending_tool_approval",
+    "active_tool_approval",
+    "resolved_conflicts",
+    "errors",
+}
+_SUPERVISOR_OWNED_STATE_FIELDS = {
+    "tasks",
+    "supervisor_replans",
+    "user_question",
+    "final_result",
+}
 
 
 @dataclass
@@ -66,19 +93,22 @@ class AgentExecutor:
             except Exception as exc:  # noqa: BLE001 - runtime boundary must persist unexpected agent failures.
                 tracer.emit(TraceEventType.ERROR, agent_name=agent.name, error=exc)
                 return finish(self._fail(state, str(exc)), AgentDecision(decision=DecisionType.FAIL, reasoning_summary="Agent decision failed validation or provider execution."))
-            if decision.decision == DecisionType.HANDOFF:
-                try:
-                    self._validate_handoff(agent, decision.next_agent)
-                except AgentDecisionValidationError as exc:
-                    tracer.emit(TraceEventType.ERROR, agent_name=agent.name, error=exc)
-                    failed = self._fail(state, str(exc))
-                    return finish(
-                        failed,
-                        AgentDecision(decision=DecisionType.FAIL, reasoning_summary="Agent requested an invalid handoff target."),
-                    )
+            try:
+                self._validate_decision_contract(agent, decision)
+            except AgentDecisionValidationError as exc:
+                tracer.emit(TraceEventType.ERROR, agent_name=agent.name, error=exc)
+                failed = self._fail(state, str(exc))
+                return finish(
+                    failed,
+                    AgentDecision(decision=DecisionType.FAIL, reasoning_summary="Agent decision violated its runtime contract."),
+                )
             tracer.emit(TraceEventType.AGENT_DECISION, agent_name=agent.name, output_summary=f"{decision.decision.value}: {decision.reasoning_summary}")
             if decision.state_patch:
-                state = apply_state_patch(state, decision.state_patch)
+                state = apply_state_patch(
+                    state,
+                    decision.state_patch,
+                    allowed_fields=agent.output_state_fields,
+                )
             if decision.decision == DecisionType.CALL_TOOL:
                 try:
                     if conversation is not None:
@@ -91,6 +121,16 @@ class AgentExecutor:
                             tracer=tracer,
                         )
                         state = append_tool_result(state, execution.tool_name, execution.output)
+                        if execution.approval_id:
+                            state = apply_state_patch(
+                                state,
+                                {
+                                    "pending_tool_approval": None,
+                                    "active_tool_approval": None,
+                                    "human_resolution": None,
+                                    "human_review_reason": None,
+                                },
+                            )
                         if conversation is not None:
                             append_model_tool_result(
                                 conversation,
@@ -102,9 +142,25 @@ class AgentExecutor:
                             raise WorkflowLimitExceeded("maximum total tool calls reached")
                     continue
                 except HumanReviewRequired as exc:
-                    return finish(self._wait_human(state, str(exc)), AgentDecision(decision=DecisionType.HUMAN_REVIEW, reasoning_summary="A high-risk tool is gated.", human_review_reason=str(exc)))
+                    return finish(
+                        self._wait_human(
+                            state,
+                            str(exc),
+                            pending_approval=exc.pending_approval,
+                        ),
+                        AgentDecision(
+                            decision=DecisionType.HUMAN_REVIEW,
+                            reasoning_summary="A high-risk tool is gated by an exact pending approval.",
+                            human_review_reason=str(exc),
+                        ),
+                    )
                 except Exception as exc:  # noqa: BLE001 - runtime boundary must persist unexpected tool failures.
                     tracer.emit(TraceEventType.ERROR, agent_name=agent.name, error=exc)
+                    if state.active_tool_approval is not None:
+                        state = apply_state_patch(
+                            state,
+                            {"active_tool_approval": None, "pending_tool_approval": None},
+                        )
                     return finish(self._fail(state, str(exc)), AgentDecision(decision=DecisionType.FAIL, reasoning_summary="Tool execution failed."))
             if decision.decision == DecisionType.ASK_USER:
                 return finish(self._wait_user(state, decision.user_question or "请补充继续所需的信息。"), decision)
@@ -178,18 +234,19 @@ class AgentExecutor:
         last_error: Exception | None = None
         for attempt in range(1, max_attempts + 1):
             started = perf_counter()
+            model_tools = agent.model_tool_names(state)
             tracer.emit(
                 TraceEventType.LLM_REQUEST,
                 agent_name=agent.name,
                 model=getattr(agent.llm, "name", None),
                 provider=getattr(agent.llm, "provider", None),
-                input_summary=f"structured_decision; allowed_tools={len(agent.allowed_tools)}; attempt={attempt}",
+                input_summary=f"structured_decision; policy_tools={len(model_tools)}; attempt={attempt}",
                 started_perf=started,
             )
             try:
                 decision = agent.model_decision(
                     state,
-                    self.registry.tool_schemas(agent.allowed_tools),
+                    self.registry.tool_schemas(model_tools),
                     messages=conversation,
                 )
             except (LLMTimeoutError, LLMStructuredOutputError) as exc:
@@ -203,6 +260,17 @@ class AgentExecutor:
                     started_perf=started,
                 )
                 if attempt < max_attempts:
+                    if conversation is not None:
+                        conversation.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "The previous proposal was rejected by the runtime policy: "
+                                    f"{str(exc)[:500]}. Return a fresh proposal using only the "
+                                    "current policy envelope and no state_patch."
+                                ),
+                            }
+                        )
                     tracer.emit(
                         TraceEventType.RETRY,
                         agent_name=agent.name,
@@ -242,6 +310,50 @@ class AgentExecutor:
         if not can_handoff(agent.name, target):
             raise AgentDecisionValidationError(f"handoff edge {agent.name} -> {target} is not registered")
 
+    @classmethod
+    def _validate_decision_contract(
+        cls,
+        agent: BaseAgent,
+        decision: AgentDecision,
+    ) -> None:
+        """Enforce capabilities, terminal ownership and declared state outputs."""
+
+        unauthorized = set(decision.state_patch) - set(agent.output_state_fields)
+        if unauthorized:
+            raise AgentDecisionValidationError(
+                f"{agent.name} cannot write state fields: {sorted(unauthorized)}"
+            )
+        protected = set(decision.state_patch) & _RUNTIME_OWNED_STATE_FIELDS
+        if agent.name != "SupervisorAgent":
+            protected |= set(decision.state_patch) & _SUPERVISOR_OWNED_STATE_FIELDS
+        if protected:
+            raise AgentDecisionValidationError(
+                f"{agent.name} cannot write runtime-owned state fields: {sorted(protected)}"
+            )
+        if decision.decision == DecisionType.COMPLETE and agent.name != "SupervisorAgent":
+            raise AgentDecisionValidationError(
+                "only SupervisorAgent may complete the workflow"
+            )
+        if decision.decision == DecisionType.ASK_USER and not agent.can_ask_user:
+            raise AgentDecisionValidationError(
+                f"{agent.name} does not have the ASK_USER capability"
+            )
+        if decision.decision == DecisionType.HUMAN_REVIEW and not agent.can_request_human:
+            raise AgentDecisionValidationError(
+                f"{agent.name} does not have the HUMAN_REVIEW capability"
+            )
+        if decision.decision == DecisionType.HANDOFF:
+            cls._validate_handoff(agent, decision.next_agent)
+        if decision.decision == DecisionType.CALL_TOOL:
+            forbidden = {
+                call.tool_name for call in decision.tool_calls
+                if call.tool_name not in agent.allowed_tools
+            }
+            if forbidden:
+                raise AgentDecisionValidationError(
+                    f"{agent.name} requested forbidden tools: {sorted(forbidden)}"
+                )
+
     @staticmethod
     def _complete_task(state: AgentState, agent_name: str) -> AgentState:
         tasks = []
@@ -259,8 +371,23 @@ class AgentExecutor:
         return apply_state_patch(state, {"status": WorkflowStatus.WAITING_USER.value, "user_question": question, "human_review_reason": None})
 
     @staticmethod
-    def _wait_human(state: AgentState, reason: str) -> AgentState:
-        return apply_state_patch(state, {"status": WorkflowStatus.WAITING_HUMAN.value, "human_review_reason": reason})
+    def _wait_human(
+        state: AgentState,
+        reason: str,
+        *,
+        pending_approval=None,
+    ) -> AgentState:
+        patch: dict[str, Any] = {
+            "status": WorkflowStatus.WAITING_HUMAN.value,
+            "human_review_reason": reason,
+            "verification_conflicts": [
+                annotate_conflict(item) for item in state.verification_conflicts
+            ],
+        }
+        if pending_approval is not None:
+            patch["pending_tool_approval"] = pending_approval
+            patch["active_tool_approval"] = None
+        return apply_state_patch(state, patch)
 
     @staticmethod
     def _complete(state: AgentState) -> AgentState:

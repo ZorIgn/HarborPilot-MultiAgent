@@ -8,6 +8,7 @@ from pydantic import BaseModel, ValidationError
 
 from harbor_agent.observability.events import TraceEventType
 from harbor_agent.observability.trace import RuntimeTracer
+from harbor_agent.runtime.approval import canonical_tool_arguments
 from harbor_agent.runtime.errors import (
     HumanReviewRequired,
     ToolArgumentValidationError,
@@ -16,6 +17,10 @@ from harbor_agent.runtime.errors import (
     ToolPermissionError,
 )
 from harbor_agent.runtime.state import AgentState
+from harbor_agent.services.tool_approval_store import (
+    consume_tool_approval,
+    create_pending_tool_approval,
+)
 from harbor_agent.tools.base import ToolDefinition, ToolExecution
 
 
@@ -66,18 +71,11 @@ class ToolRegistry:
         if tool_name not in allowed_tools:
             raise ToolPermissionError(f"{agent_name} is not allowed to call {tool_name}")
         definition = self.definition(tool_name)
-        call_id = tool_call_id or f"tool_{uuid4().hex[:12]}"
-        call_event = tracer.emit(
-            TraceEventType.TOOL_CALL,
-            agent_name=agent_name,
-            tool_name=tool_name,
-            tool_call_id=call_id,
-            input_summary=_summary(arguments),
+        call_id = (
+            f"tool_{uuid4().hex[:12]}"
+            if definition.requires_human_review
+            else tool_call_id or f"tool_{uuid4().hex[:12]}"
         )
-        if definition.requires_human_review:
-            approved = set(state.working_memory.get("human_approved_tools", []))
-            if tool_name not in approved:
-                raise HumanReviewRequired(f"{tool_name} requires human approval before execution")
         try:
             parsed = definition.input_model.model_validate(arguments)
         except ValidationError as exc:
@@ -89,6 +87,56 @@ class ToolRegistry:
                 error=exc,
             )
             raise ToolArgumentValidationError(f"invalid arguments for {tool_name}: {exc}") from exc
+        canonical_arguments = parsed.model_dump(mode="json")
+        arguments_json, arguments_sha256 = canonical_tool_arguments(canonical_arguments)
+        approval_id: str | None = None
+        pending = None
+        active = state.active_tool_approval
+        if definition.requires_human_review and active is not None:
+            if (
+                active.workflow_id != state.workflow_id
+                or active.agent_name != agent_name
+                or active.tool_name != tool_name
+                or active.arguments_sha256 != arguments_sha256
+            ):
+                raise ToolPermissionError(
+                    "the active one-shot approval does not authorize this exact tool call"
+                )
+            call_id = active.tool_call_id
+            approval_id = active.approval_id
+        elif definition.requires_human_review:
+            pending = create_pending_tool_approval(
+                workflow_id=state.workflow_id,
+                agent_name=agent_name,
+                tool_name=tool_name,
+                tool_call_id=call_id,
+                arguments=canonical_arguments,
+                arguments_json=arguments_json,
+                arguments_sha256=arguments_sha256,
+            )
+            call_id = pending.tool_call_id
+        call_event = tracer.emit(
+            TraceEventType.TOOL_CALL,
+            agent_name=agent_name,
+            tool_name=tool_name,
+            tool_call_id=call_id,
+            input_summary=_summary(canonical_arguments),
+        )
+        if definition.requires_human_review:
+            if active is None:
+                assert pending is not None
+                raise HumanReviewRequired(
+                    f"{tool_name} requires approval {pending.approval_id} for this exact call",
+                    pending_approval=pending,
+                )
+            consume_tool_approval(
+                active.approval_id,
+                workflow_id=state.workflow_id,
+                agent_name=agent_name,
+                tool_name=tool_name,
+                tool_call_id=call_id,
+                arguments_sha256=arguments_sha256,
+            )
         try:
             output = definition.handler(state, parsed)
             typed_output = definition.output_model.model_validate(output)
@@ -120,7 +168,12 @@ class ToolRegistry:
             tool_call_id=call_id,
             trace_event_ids=[call_event.event_id, result_event.event_id],
         )
-        return ToolExecution(tool_name=tool_name, tool_call_id=call_id, output=serialized)
+        return ToolExecution(
+            tool_name=tool_name,
+            tool_call_id=call_id,
+            approval_id=approval_id,
+            output=serialized,
+        )
 
 
 def _attach_execution_reference(

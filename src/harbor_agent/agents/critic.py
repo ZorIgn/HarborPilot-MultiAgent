@@ -26,7 +26,7 @@ class CriticAgent(BaseAgent):
     can_ask_user = True
     can_request_human = True
     input_state_fields = ("assessment", "selected_matches", "verification_conflicts", "timeline", "writing_draft")
-    output_state_fields = ("working_memory", "final_result")
+    output_state_fields = ("working_memory",)
     deterministic_boundaries = ("formal gate is deterministic", "critic never overwrites conflicting official evidence")
 
     def step(self, state: AgentState) -> AgentDecision:
@@ -38,12 +38,14 @@ class CriticAgent(BaseAgent):
         required = ("validate_recommendation_consistency", "validate_source_grounding")
         if state.goal.value in {"writing", "full_application_plan"}:
             required = (*required, "validate_writing_grounding")
+        if state.goal.value in {"application_planning", "full_application_plan"}:
+            required = (*required, "formal_gate_check")
         if not all(results.get(item) for item in required):
-            calls = [ToolCallRequest(tool_name="validate_recommendation_consistency", arguments={}), ToolCallRequest(tool_name="validate_source_grounding", arguments={})]
-            if "validate_writing_grounding" in required:
-                calls.append(ToolCallRequest(tool_name="validate_writing_grounding", arguments={}))
-            if state.goal.value in {"application_planning", "full_application_plan"}:
-                calls.append(ToolCallRequest(tool_name="formal_gate_check", arguments={}))
+            calls = [
+                ToolCallRequest(tool_name=name, arguments={})
+                for name in required
+                if not results.get(name)
+            ]
             return AgentDecision(decision=DecisionType.CALL_TOOL, reasoning_summary="Run deterministic critic gates against real runtime outputs.", tool_calls=calls)
         recommendation = results.get("validate_recommendation_consistency", {})
         source = results.get("validate_source_grounding", {})

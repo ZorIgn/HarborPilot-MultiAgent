@@ -9,9 +9,10 @@ def test_human_conflict_resolution_is_typed_and_does_not_rewait() -> None:
 
     workflow_id = f"human_resolution_{uuid4().hex}"
     conflict = {
-        "program_id": "program-a",
+        "program_id": "cityu-ma-communication-and-new-media-2027",
         "field_name": "deadline",
         "record_id": "official-record-a",
+        "source_type": "official_program_page",
         "status": "CONFLICTED",
     }
     state = AgentState(
@@ -21,9 +22,9 @@ def test_human_conflict_resolution_is_typed_and_does_not_rewait() -> None:
         raw_profile={},
         normalized_profile={},
         assessment={},
-        candidate_program_ids=["program-a"],
-        program_matches={"program-a": {}},
-        selected_program_ids=["program-a"],
+        candidate_program_ids=["cityu-ma-communication-and-new-media-2027"],
+        program_matches={"cityu-ma-communication-and-new-media-2027": {}},
+        selected_program_ids=["cityu-ma-communication-and-new-media-2027"],
         verification_conflicts=[conflict],
         human_review_reason="Choose the authoritative deadline record.",
         working_memory={
@@ -46,8 +47,9 @@ def test_human_conflict_resolution_is_typed_and_does_not_rewait() -> None:
         f"/api/agent/workflows/{workflow_id}/resume",
         json={
             "human_resolution": {
+                "action": "resolve_conflicts",
                 "conflict_resolutions": [
-                    {"record_id": "official-record-a", "decision": "accept", "note": "Current official page selected."}
+                    {"conflict_id": "official-record-a", "action": "reject", "reviewer_note": "The record is not authoritative."}
                 ]
             }
         },
@@ -59,7 +61,7 @@ def test_human_conflict_resolution_is_typed_and_does_not_rewait() -> None:
     assert resumed.verification_conflicts == []
     assert resumed.human_review_reason is None
     assert resumed.resolved_conflicts[0].conflict_id == "official-record-a"
-    assert resumed.resolved_conflicts[0].action == "accept"
+    assert resumed.resolved_conflicts[0].action == "reject"
     comparison = resumed.working_memory["tool_results"]["compare_evidence_records"]
     assert comparison["conflicts"] == []
     assert comparison["human_review_required"] is False
@@ -138,7 +140,11 @@ from harbor_agent.app import app
 from harbor_agent.runtime.decision import AgentDecision, DecisionType
 from harbor_agent.runtime.errors import ToolPermissionError
 from harbor_agent.runtime.state import AgentState, WorkflowGoal, apply_state_patch
-from harbor_agent.runtime.workflow import MultiAgentRuntime, WorkflowResumeRequest, WorkflowStartRequest
+from harbor_agent.runtime.workflow import (
+    MultiAgentRuntime,
+    WorkflowResumeRequest,
+    WorkflowStartRequest,
+)
 from harbor_agent.tools import build_default_tool_registry
 
 
@@ -285,6 +291,8 @@ def test_matching_marks_only_financial_hard_cap_portfolios_for_budget_choice() -
         working_memory={
             "tool_results": {
                 "calculate_applicant_fit": {"matches": []},
+                "evaluate_admissions_eligibility": {"assessments": []},
+                "evaluate_user_preference": {"assessments": []},
                 "build_program_portfolio": {"selected_program_ids": [], "blocked_program_ids": [], "portfolio": []},
                 "evaluate_financial_feasibility": {
                     "assessments": [
@@ -349,7 +357,11 @@ def test_model_decision_trace_uses_provider_tokens_and_retries_structured_output
         allowed_tools: set[str] = set()
 
         def step(self, state: AgentState) -> AgentDecision:
-            raise AssertionError("deterministic step must not run in this test")
+            return AgentDecision(
+                decision=DecisionType.HANDOFF,
+                reasoning_summary="The deterministic policy permits only a Supervisor handoff.",
+                next_agent="SupervisorAgent",
+            )
 
     workflow_id = f"model_trace_{uuid4().hex}"
     state = AgentState(workflow_id=workflow_id, goal=WorkflowGoal.BACKGROUND_ASSESSMENT)
@@ -486,14 +498,14 @@ def test_retryable_tool_retries_only_transient_execution_failures() -> None:
     from uuid import uuid4
 
     from pydantic import BaseModel
+
+    from harbor_agent.agents.base import BaseAgent
     from harbor_agent.observability.events import TraceEventType
     from harbor_agent.observability.trace import RuntimeTracer
+    from harbor_agent.runtime.decision import ToolCallRequest
     from harbor_agent.runtime.executor import AgentExecutor
     from harbor_agent.runtime.limits import RuntimeLimits
     from harbor_agent.services.agent_runtime import list_runtime_trace_events
-
-    from harbor_agent.agents.base import BaseAgent
-    from harbor_agent.runtime.decision import ToolCallRequest
     from harbor_agent.tools.base import ToolDefinition
     from harbor_agent.tools.registry import ToolRegistry
 

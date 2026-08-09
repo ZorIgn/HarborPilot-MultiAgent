@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import hashlib
+import json
+from collections.abc import Collection
 from copy import deepcopy
 from enum import Enum
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
+from harbor_agent.runtime.approval import ToolApprovalRecord
 from harbor_agent.runtime.errors import AgentDecisionValidationError
 from harbor_agent.runtime.sanitizer import sanitize_runtime_payload
 
@@ -64,13 +68,10 @@ class ConflictResolution(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    conflict_id: str | None = None
-    program_id: str | None = None
-    field_name: str | None = None
-    action: Literal["accept", "reject", "dismiss", "resolve"] = "resolve"
+    conflict_id: str
+    action: Literal["accept", "reject"]
     selected_record_id: str | None = None
     reviewer_note: str | None = None
-    all_conflicts: bool = False
 
     @model_validator(mode="before")
     @classmethod
@@ -80,11 +81,8 @@ class ConflictResolution(BaseModel):
         data = dict(value)
         aliases = {
             "conflict_id": ("id", "conflictId"),
-            "program_id": ("programId",),
-            "field_name": ("field", "fieldName"),
             "selected_record_id": ("record_id", "recordId", "selectedRecordId"),
             "reviewer_note": ("note", "reviewerNote"),
-            "all_conflicts": ("all", "resolve_all", "resolveAll"),
         }
         for canonical, alternatives in aliases.items():
             if canonical not in data:
@@ -106,14 +104,12 @@ class ConflictResolution(BaseModel):
             data["action"] = "accept"
         elif action in {"deny", "rejected", "decline"}:
             data["action"] = "reject"
-        elif action in {"resolved", "resolve_conflict", "resolve-conflict"}:
-            data["action"] = "resolve"
         return data
 
     @model_validator(mode="after")
     def _require_selector(self) -> "ConflictResolution":
-        if not (self.all_conflicts or self.conflict_id or self.selected_record_id or self.program_id or self.field_name):
-            raise ValueError("a conflict resolution must identify a conflict, programme, field, or all_conflicts")
+        if self.action == "accept" and not self.selected_record_id:
+            raise ValueError("accept requires selected_record_id")
         return self
 
 
@@ -122,17 +118,14 @@ class HumanResolution(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    action: Literal["resume", "resolve_conflicts", "resolve", "approve", "accept", "reject", "complete", "fail"] = "resume"
-    approved_tools: list[str] = Field(default_factory=list, max_length=40)
+    action: Literal["approve_tool", "reject_tool", "resolve_conflicts"]
+    approval_id: str | None = Field(default=None, min_length=1, max_length=128)
     conflict_resolutions: list[ConflictResolution] = Field(default_factory=list, max_length=200)
-    resolve_conflicts: bool = False
     note: str | None = None
 
     @model_validator(mode="before")
     @classmethod
     def _normalize_payload(cls, value: object) -> object:
-        if isinstance(value, str):
-            return {"action": "resolve_conflicts", "resolve_conflicts": True, "note": value}
         if not isinstance(value, dict):
             return value
         data = dict(value)
@@ -140,22 +133,9 @@ class HumanResolution(BaseModel):
         # compact list/object of typed conflict decisions.
         if "conflict_resolutions" not in data and isinstance(data.get("resolution"), (dict, list)):
             data["conflict_resolutions"] = data.pop("resolution")
-        direct_aliases = {
-            "conflict_id": ("id", "conflictId"),
-            "program_id": ("programId",),
-            "field_name": ("field", "fieldName"),
-            "selected_record_id": ("record_id", "recordId", "selectedRecordId"),
-            "all_conflicts": ("all", "resolveAll"),
-        }
-        for canonical, alternatives in direct_aliases.items():
-            if canonical not in data:
-                for alternative in alternatives:
-                    if alternative in data:
-                        data[canonical] = data.pop(alternative)
-                        break
         aliases = {
-            "approved_tools": ("approvedTools", "approved_tool", "approvedTool"),
             "conflict_resolutions": ("resolutions", "resolved_conflicts", "resolvedConflicts", "conflicts", "conflict_resolution"),
+            "approval_id": ("approvalId",),
             "note": ("message", "comment", "reviewer_note", "reviewerNote"),
         }
         for canonical, alternatives in aliases.items():
@@ -166,8 +146,6 @@ class HumanResolution(BaseModel):
                         break
             for alternative in alternatives:
                 data.pop(alternative, None)
-        if "approved_tools" in data and isinstance(data["approved_tools"], str):
-            data["approved_tools"] = [data["approved_tools"]]
         if "conflict_resolutions" in data:
             raw_resolutions = data["conflict_resolutions"]
             if isinstance(raw_resolutions, (str, dict)):
@@ -177,39 +155,35 @@ class HumanResolution(BaseModel):
                     {"conflict_id": item} if isinstance(item, str) else item
                     for item in raw_resolutions
                 ]
-        selector_keys = {"conflict_id", "id", "conflictId", "program_id", "field_name", "field", "selected_record_id", "record_id", "all_conflicts", "all"}
-        if "conflict_resolutions" not in data and selector_keys.intersection(data):
-            resolution = {key: data.pop(key) for key in list(data) if key in selector_keys}
-            if "action" in data and data["action"] in {"accept", "approve", "reject", "dismiss", "resolve"}:
-                resolution["action"] = data["action"]
-                data["action"] = "resolve_conflicts"
-            data["conflict_resolutions"] = [resolution]
-        if "action" not in data:
-            for alternative in ("decision", "resolution"):
-                if alternative in data and isinstance(data[alternative], str):
-                    data["action"] = data[alternative]
-                    break
         for alternative in ("decision", "resolution"):
             data.pop(alternative, None)
-        if data.get("resolve_conflicts"):
-            data["action"] = "resolve_conflicts"
-        action = str(data.get("action", "resume")).lower()
-        if action in {"resolve_conflict", "resolve-conflict", "resolved"}:
-            data["action"] = "resolve_conflicts"
+        action = str(data.get("action", "")).lower()
+        if action in {"approve", "accept"} and data.get("approval_id"):
+            data["action"] = "approve_tool"
+        elif action == "reject" and data.get("approval_id"):
+            data["action"] = "reject_tool"
         return data
 
     @model_validator(mode="after")
     def _normalize_action(self) -> "HumanResolution":
-        if self.resolve_conflicts or self.conflict_resolutions:
-            if self.action == "resume":
-                self.action = "resolve_conflicts"
+        if self.action in {"approve_tool", "reject_tool"}:
+            if not self.approval_id:
+                raise ValueError(f"{self.action} requires approval_id")
+            if self.conflict_resolutions:
+                raise ValueError("tool approval cannot include conflict resolutions")
+        elif not self.conflict_resolutions:
+            raise ValueError("resolve_conflicts requires explicit conflict_resolutions")
+        if self.action == "resolve_conflicts" and self.approval_id:
+            raise ValueError("conflict resolution cannot include approval_id")
         return self
+
+
 class AgentState(BaseModel):
     """Typed shared state exchanged by every real agent through the runtime."""
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
-    schema_version: str = "agent-state-v1"
+    schema_version: str = "agent-state-v2"
     workflow_id: str
     goal: WorkflowGoal
     status: WorkflowStatus = WorkflowStatus.RUNNING
@@ -259,6 +233,8 @@ class AgentState(BaseModel):
     user_question: str | None = None
     human_review_reason: str | None = None
     human_resolution: HumanResolution | None = None
+    pending_tool_approval: ToolApprovalRecord | None = None
+    active_tool_approval: ToolApprovalRecord | None = None
     resolved_conflicts: list[ConflictResolution] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     final_result: dict[str, Any] | None = None
@@ -268,6 +244,19 @@ class AgentState(BaseModel):
     def _sanitize_runtime_state(cls, value: object, info: ValidationInfo) -> object:
         """Ensure direct AgentState construction is as safe as checkpoint writes."""
 
+        if isinstance(value, dict):
+            value = deepcopy(value)
+            memory = value.get("working_memory")
+            if isinstance(memory, dict):
+                memory.pop("human_approved_tools", None)
+            if value.get("schema_version") in {None, "agent-state-v1"}:
+                value["schema_version"] = "agent-state-v2"
+                legacy_resolution = value.get("human_resolution")
+                if isinstance(legacy_resolution, (str, dict)) and not (
+                    isinstance(legacy_resolution, dict)
+                    and legacy_resolution.get("action") in {"approve_tool", "reject_tool", "resolve_conflicts"}
+                ):
+                    value["human_resolution"] = None
         if info.context and info.context.get("trusted_runtime_state") is True:
             return value
         return sanitize_runtime_payload(value)
@@ -280,10 +269,16 @@ class AgentState(BaseModel):
         return value
 
 
-_IMMUTABLE_STATE_FIELDS = {"workflow_id", "schema_version"}
+_IMMUTABLE_STATE_FIELDS = {"workflow_id", "schema_version", "goal"}
 
 
-def apply_state_patch(state: AgentState, patch: dict[str, Any], *, trusted_patch: bool = False) -> AgentState:
+def apply_state_patch(
+    state: AgentState,
+    patch: dict[str, Any],
+    *,
+    trusted_patch: bool = False,
+    allowed_fields: Collection[str] | None = None,
+) -> AgentState:
     """Validate and atomically merge a top-level state patch.
 
     Agents never mutate ``state.__dict__``. A full Pydantic validation after
@@ -296,6 +291,12 @@ def apply_state_patch(state: AgentState, patch: dict[str, Any], *, trusted_patch
     immutable = _IMMUTABLE_STATE_FIELDS & set(patch)
     if immutable:
         raise AgentDecisionValidationError(f"state patch cannot modify: {sorted(immutable)}")
+    if allowed_fields is not None:
+        unauthorized = set(patch) - set(allowed_fields)
+        if unauthorized:
+            raise AgentDecisionValidationError(
+                f"state patch exceeds agent output contract: {sorted(unauthorized)}"
+            )
 
     safe_patch = patch if trusted_patch else sanitize_runtime_payload(patch)
     merged = state.model_dump(mode="json")
@@ -305,6 +306,35 @@ def apply_state_patch(state: AgentState, patch: dict[str, Any], *, trusted_patch
         return AgentState.model_validate(merged, context={"trusted_runtime_state": True})
     except Exception as exc:  # Pydantic produces useful detail for the caller.
         raise AgentDecisionValidationError(f"invalid state patch: {exc}") from exc
+
+
+def conflict_fingerprint(conflict: dict[str, Any]) -> str:
+    """Return the exact stable identity used by API and reviewer decisions."""
+
+    for key in ("conflict_id", "id", "record_id", "review_decision_id"):
+        value = conflict.get(key)
+        if value:
+            return str(value)
+    identity = {
+        key: conflict.get(key)
+        for key in (
+            "program_id",
+            "field_name",
+            "source_url",
+            "final_url",
+            "page_hash",
+            "value",
+            "evidence_snippet",
+        )
+    }
+    encoded = json.dumps(identity, ensure_ascii=False, sort_keys=True, default=str)
+    return "conflict_" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24]
+
+
+def annotate_conflict(conflict: Any) -> dict[str, Any]:
+    item = dict(conflict) if isinstance(conflict, dict) else {"value": str(conflict)}
+    item.setdefault("conflict_id", conflict_fingerprint(item))
+    return item
 
 
 def compact_value(value: Any, *, max_items: int = 12, max_chars: int = 1200) -> Any:

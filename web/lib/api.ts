@@ -147,7 +147,7 @@ export function getRuntimeWorkflow(workflowId: string): Promise<RuntimeWorkflowS
   return apiJson<RuntimeWorkflowState>("/api/agent/workflows/" + encodeURIComponent(workflowId), { cache: "no-store" }, "Agent workflow API");
 }
 
-export function resumeRuntimeWorkflow(workflowId: string, payload: { user_message?: string | null; human_resolution?: Record<string, unknown> | string | null }): Promise<RuntimeWorkflowState> {
+export function resumeRuntimeWorkflow(workflowId: string, payload: { user_message?: string | null; human_resolution?: Record<string, unknown> | null }): Promise<RuntimeWorkflowState> {
   return apiJson<RuntimeWorkflowState>("/api/agent/workflows/" + encodeURIComponent(workflowId) + "/resume", postJson(payload), "Agent workflow resume API");
 }
 

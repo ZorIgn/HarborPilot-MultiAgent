@@ -12,7 +12,6 @@ from harbor_agent.runtime.decision import AgentDecision, DecisionType
 from harbor_agent.runtime.errors import LLMStructuredOutputError
 from harbor_agent.runtime.state import AgentState, WorkflowGoal, WorkflowTask, WorkflowTaskStatus
 
-
 RouteTarget = Literal[
     "AssessmentAgent",
     "ResearchAgent",
@@ -44,7 +43,22 @@ class SupervisorAgent(BaseAgent):
     can_request_human = True
     possible_handoffs = {"AssessmentAgent", "ResearchAgent", "MatchingAgent", "VerificationAgent", "PlanningAgent", "WritingAgent", "CriticAgent"}
     input_state_fields = ("goal", "tasks", "assessment", "candidate_program_ids", "program_matches", "timeline", "writing_draft")
-    output_state_fields = ("tasks", "current_agent", "status", "final_result")
+    output_state_fields = (
+        "tasks",
+        "candidate_program_ids",
+        "researched_program_ids",
+        "program_matches",
+        "selected_matches",
+        "selected_program_ids",
+        "fields_needing_verification",
+        "verification_conflicts",
+        "writing_draft",
+        "writing_ready",
+        "working_memory",
+        "supervisor_replans",
+        "user_question",
+        "final_result",
+    )
     deterministic_boundaries = ("never executes tools directly", "never skips admissions eligibility checks", "never turns community data into official evidence")
     def build_system_prompt(self) -> str:
         """Describe the Supervisor control contract to a model without exposing internals."""
@@ -129,7 +143,7 @@ class SupervisorAgent(BaseAgent):
         verification work.
         """
 
-        decision = super().model_decision(state, tool_schemas, messages=messages)
+        decision = self._model_proposal(state, tool_schemas, messages=messages)
         if decision is None:
             return None
 

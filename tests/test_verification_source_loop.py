@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from harbor_agent.agents.verification import VerificationAgent
 from harbor_agent.runtime.decision import DecisionType
-from harbor_agent.runtime.state import AgentState, WorkflowGoal, append_tool_result, apply_state_patch
+from harbor_agent.runtime.state import (
+    AgentState,
+    WorkflowGoal,
+    append_tool_result,
+    apply_state_patch,
+)
 
 
 def _state() -> AgentState:
@@ -20,7 +25,7 @@ def _state() -> AgentState:
             "tool_results": {
                 "get_program_trust_detail": {"program_id": program_id, "trust": {}},
                 "list_missing_official_fields": {"program_id": program_id, "missing_fields": ["deadline"]},
-                "compare_evidence_records": {"consistent": True, "conflicts": [], "human_review_required": False},
+                "compare_evidence_records": {"program_id": program_id, "consistent": True, "conflicts": [], "human_review_required": False},
             },
         },
     )
@@ -53,9 +58,14 @@ def test_verification_source_refresh_is_a_real_multi_round_human_gated_loop() ->
     state = _apply(state, extraction)
     state = append_tool_result(state, "extract_program_fields", {"program_id": "program-a", "source_url": "https://example.edu/program", "fields": [{"field_name": "deadline", "value": "2027-12-01"}]})
 
-    review = agent.step(state)
-    assert review.decision == DecisionType.HUMAN_REVIEW
-    assert "review" in (review.human_review_reason or "").lower()
+    binding = agent.step(state)
+    assert binding.decision == DecisionType.CALL_TOOL
+    assert binding.tool_calls[0].tool_name == "bind_source_to_program"
+    assert binding.tool_calls[0].arguments == {
+        "program_id": "program-a",
+        "source_url": "https://example.edu/program",
+        "field_names": ["deadline"],
+    }
     assert state.fields_needing_verification["program-a"] == ["deadline"]
     assert "official" not in state.verified_program_fields
-    assert review.state_patch["working_memory"]["verification_sources"]["program-a"]["candidate_fields"]
+    assert binding.state_patch["working_memory"]["verification_sources"]["program-a"]["candidate_fields"]

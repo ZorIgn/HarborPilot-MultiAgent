@@ -35,15 +35,20 @@ class AssessmentAgent(BaseAgent):
                 )
             normalized = results.get("normalize_profile")
             if normalized:
+                required_tools = (
+                    "find_profile_gaps",
+                    "inspect_evidence_readiness",
+                    "calculate_profile_assessment",
+                    "detect_background_gap",
+                )
                 return AgentDecision(
                     decision=DecisionType.CALL_TOOL,
                     reasoning_summary="The profile is normalized; now inspect gaps, evidence readiness and assessment.",
                     state_patch={"normalized_profile": normalized},
                     tool_calls=[
-                        ToolCallRequest(tool_name="find_profile_gaps", arguments={}),
-                        ToolCallRequest(tool_name="inspect_evidence_readiness", arguments={}),
-                        ToolCallRequest(tool_name="calculate_profile_assessment", arguments={}),
-                        ToolCallRequest(tool_name="detect_background_gap", arguments={}),
+                        ToolCallRequest(tool_name=name, arguments={})
+                        for name in required_tools
+                        if results.get(name) is None
                     ],
                 )
             return AgentDecision(
@@ -55,14 +60,20 @@ class AssessmentAgent(BaseAgent):
         gap_result = results.get("find_profile_gaps") or results.get("inspect_profile_gaps")
         evidence = results.get("inspect_evidence_readiness")
         assessment = results.get("calculate_profile_assessment")
-        if not (gap_result and evidence and assessment):
+        required_tools = (
+            "find_profile_gaps",
+            "inspect_evidence_readiness",
+            "calculate_profile_assessment",
+            "detect_background_gap",
+        )
+        missing_tools = [name for name in required_tools if results.get(name) is None]
+        if missing_tools:
             return AgentDecision(
                 decision=DecisionType.CALL_TOOL,
                 reasoning_summary="Complete the missing deterministic assessment checks.",
                 tool_calls=[
-                    ToolCallRequest(tool_name="find_profile_gaps", arguments={}),
-                    ToolCallRequest(tool_name="inspect_evidence_readiness", arguments={}),
-                    ToolCallRequest(tool_name="calculate_profile_assessment", arguments={}),
+                    ToolCallRequest(tool_name=name, arguments={})
+                    for name in missing_tools
                 ],
             )
         missing = list(gap_result.get("missing_fields", []))

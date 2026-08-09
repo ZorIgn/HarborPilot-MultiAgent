@@ -6,7 +6,12 @@ import sqlite3
 from pathlib import Path
 from typing import Iterable
 
-from harbor_agent.models import FieldEvidenceRecord, FieldVerificationStatus, Program, ProgramFieldEvidence
+from harbor_agent.models import (
+    FieldEvidenceRecord,
+    FieldVerificationStatus,
+    Program,
+    ProgramFieldEvidence,
+)
 
 ROOT = Path(__file__).resolve().parents[3]
 DATA_DIR = ROOT / "data"
@@ -89,6 +94,7 @@ def init_program_store(db_path: Path = DB_PATH) -> None:
                 binding_score INTEGER NOT NULL DEFAULT 0,
                 reviewer_note TEXT,
                 review_decision_id TEXT,
+                agent_chain_json TEXT NOT NULL DEFAULT '[]',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(program_id) REFERENCES program_catalog(id)
@@ -103,6 +109,15 @@ def init_program_store(db_path: Path = DB_PATH) -> None:
         _ensure_column(conn, "program_field_evidence", "binding_score", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "program_field_evidence", "reviewer_note", "TEXT")
         _ensure_column(conn, "program_field_evidence", "review_decision_id", "TEXT")
+        # Older databases retain this NOT NULL compatibility column.  Keep an
+        # empty value so new evidence writes never invent an agent chain while
+        # remaining writable without a destructive table rebuild.
+        _ensure_column(
+            conn,
+            "program_field_evidence",
+            "agent_chain_json",
+            "TEXT NOT NULL DEFAULT '[]'",
+        )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_program_field_evidence_program ON program_field_evidence(program_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_program_field_evidence_field ON program_field_evidence(field_name)")
         conn.execute('CREATE INDEX IF NOT EXISTS idx_program_field_evidence_status ON program_field_evidence(status)')
@@ -190,14 +205,14 @@ def upsert_field_evidence_records(
             verified_at, page_hash, confidence, source_priority, status, review_required,
             reviewer_id, evidence_snippet, snapshot_url, execution_ref_json,
             source_scope, page_title, final_url, binding_status, binding_score,
-            reviewer_note, review_decision_id
+            reviewer_note, review_decision_id, agent_chain_json
         )
         VALUES (
             :id, :program_id, :field_name, :value, :cycle, :source_url, :source_type, :extracted_at,
             :verified_at, :page_hash, :confidence, :source_priority, :status, :review_required,
             :reviewer_id, :evidence_snippet, :snapshot_url, :execution_ref_json,
             :source_scope, :page_title, :final_url, :binding_status, :binding_score,
-            :reviewer_note, :review_decision_id
+            :reviewer_note, :review_decision_id, :agent_chain_json
         )
         ON CONFLICT(id) DO UPDATE SET
             value=excluded.value,
@@ -423,6 +438,7 @@ def _field_evidence_row(record: FieldEvidenceRecord) -> dict[str, object]:
         "binding_score": record.binding_score,
         "reviewer_note": record.reviewer_note,
         "review_decision_id": record.review_decision_id,
+        "agent_chain_json": "[]",
     }
 
 

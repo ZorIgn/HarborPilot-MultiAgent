@@ -7,6 +7,7 @@ from harbor_agent.policies.tool_permissions import AGENT_TOOL_PERMISSIONS
 from harbor_agent.runtime.decision import AgentDecision, DecisionType, ToolCallRequest
 from harbor_agent.runtime.state import AgentState
 
+
 def _source_refresh_step(
     *,
     state: AgentState,
@@ -46,11 +47,13 @@ def _source_refresh_step(
         )
     if not isinstance(discovery, dict) or discovery.get("program_id") != program_id:
         session["source_attempted"] = True
+        patch()
         return None
     urls = [str(item) for item in discovery.get("official_urls", []) if item]
     source_url = str(session.get("source_url") or (urls[0] if urls else ""))
     if not source_url:
         session["source_attempted"] = True
+        patch()
         return None
     session["source_url"] = source_url
     snapshot = results.get("snapshot_official_source")
@@ -75,6 +78,7 @@ def _source_refresh_step(
         return None
     if not snapshot.get("ok") or not snapshot.get("excerpt"):
         session["source_attempted"] = True
+        patch()
         return None
     extraction = results.get("extract_program_fields")
     if not session.get("extraction_requested"):
@@ -92,57 +96,64 @@ def _source_refresh_step(
         )
     if not isinstance(extraction, dict) or extraction.get("program_id") != program_id or extraction.get("source_url") != source_url:
         session["source_attempted"] = True
+        patch()
         return None
     candidates = list(extraction.get("fields", []))
     if not candidates:
         session["source_attempted"] = True
+        patch()
         return None
     session["candidate_fields"] = candidates
-    approved = set(memory.get("human_approved_tools", []))
-    if not session.get("review_requested"):
-        session["review_requested"] = True
-        return AgentDecision(
-            decision=DecisionType.HUMAN_REVIEW,
-            reasoning_summary="Extracted official-source candidates require human approval before binding or publication.",
-            state_patch=patch(),
-            human_review_reason=f"{program_id}: review extracted fields from {source_url} before they can affect formal use.",
+    candidate_field_names = list(
+        dict.fromkeys(
+            str(item.get("field_name"))
+            for item in candidates
+            if isinstance(item, dict) and item.get("field_name")
         )
-    if "bind_source_to_program" not in approved:
-        return AgentDecision(
-            decision=DecisionType.HUMAN_REVIEW,
-            reasoning_summary="Source binding remains gated until a reviewer explicitly approves it.",
-            state_patch=patch(),
-            human_review_reason=f"Approve or reject binding the extracted source fields for {program_id}.",
-        )
+    )
+    if not candidate_field_names:
+        session["source_attempted"] = True
+        patch()
+        return None
     binding = results.get("bind_source_to_program")
-    if not binding:
+    if not isinstance(binding, dict) or binding.get("program_id") != program_id or binding.get("source_url") != source_url:
         return AgentDecision(
             decision=DecisionType.CALL_TOOL,
-            reasoning_summary="Submit the approved source binding as a review proposal; it is not auto-published.",
+            reasoning_summary="Submit the exact source binding to the one-shot human approval gate.",
             state_patch=patch(),
-            tool_calls=[ToolCallRequest(tool_name="bind_source_to_program", arguments={"program_id": program_id, "source_url": source_url, "field_names": missing_fields})],
-        )
-    if "save_review_candidate" not in approved:
-        return AgentDecision(
-            decision=DecisionType.HUMAN_REVIEW,
-            reasoning_summary="Saving a review candidate is also a human-gated mutation.",
-            state_patch=patch(),
-            human_review_reason=f"Approve saving the extracted candidate for {program_id} to the review queue.",
+            tool_calls=[ToolCallRequest(tool_name="bind_source_to_program", arguments={"program_id": program_id, "source_url": source_url, "field_names": candidate_field_names})],
         )
     review = results.get("save_review_candidate")
-    if not review:
-        first = candidates[0] if isinstance(candidates[0], dict) else {}
+    saved_fields = set(session.get("saved_candidate_fields", []))
+    if (
+        isinstance(review, dict)
+        and review.get("program_id") == program_id
+        and review.get("persisted")
+        and review.get("field_name")
+    ):
+        saved_fields.add(str(review["field_name"]))
+        session["saved_candidate_fields"] = sorted(saved_fields)
+    next_candidate = next(
+        (
+            item
+            for item in candidates
+            if isinstance(item, dict)
+            and str(item.get("field_name") or "") not in saved_fields
+        ),
+        None,
+    )
+    if next_candidate is not None:
         return AgentDecision(
             decision=DecisionType.CALL_TOOL,
-            reasoning_summary="Save the approved candidate for reviewer publication; official verification remains gated.",
+            reasoning_summary="Persist the next exact candidate for reviewer publication; official verification remains gated.",
             state_patch=patch(),
             tool_calls=[
                 ToolCallRequest(
                     tool_name="save_review_candidate",
                     arguments={
                         "program_id": program_id,
-                        "field_name": str(first.get("field_name") or missing_fields[0]),
-                        "proposed_value": str(first.get("value")) if first.get("value") is not None else None,
+                        "field_name": str(next_candidate.get("field_name")),
+                        "proposed_value": str(next_candidate.get("value")) if next_candidate.get("value") is not None else None,
                         "reason": "Runtime source extraction candidate; human publication remains required.",
                     },
                 )
@@ -150,6 +161,8 @@ def _source_refresh_step(
         )
     session["source_attempted"] = True
     session["review_saved"] = True
+    sessions[program_id] = session
+    memory["verification_sources"] = sessions
     return None
 
 class VerificationAgent(BaseAgent):
@@ -158,7 +171,7 @@ class VerificationAgent(BaseAgent):
     allowed_tools = AGENT_TOOL_PERMISSIONS[name]
     can_request_human = True
     input_state_fields = ("selected_program_ids", "fields_needing_verification", "verification_conflicts")
-    output_state_fields = ("fields_needing_verification", "verified_program_fields", "verification_conflicts")
+    output_state_fields = ("fields_needing_verification", "verified_program_fields", "verification_conflicts", "working_memory")
     deterministic_boundaries = ("community data never becomes official evidence", "conflicts are not overwritten by a model")
 
     def step(self, state: AgentState) -> AgentDecision:
@@ -181,14 +194,23 @@ class VerificationAgent(BaseAgent):
         missing = results.get("list_missing_official_fields")
         comparison = results.get("compare_evidence_records")
         trust = results.get("get_program_trust_detail")
-        if not (missing and comparison and trust and missing.get("program_id") == program_id):
+        required = {
+            "get_program_trust_detail": trust,
+            "list_missing_official_fields": missing,
+            "compare_evidence_records": comparison,
+        }
+        missing_tools = [
+            name
+            for name, result in required.items()
+            if not isinstance(result, dict) or result.get("program_id") != program_id
+        ]
+        if missing_tools:
             return AgentDecision(
                 decision=DecisionType.CALL_TOOL,
                 reasoning_summary=f"Verify official evidence for {program_id} through deterministic trust tools.",
                 tool_calls=[
-                    ToolCallRequest(tool_name="get_program_trust_detail", arguments={"program_id": program_id}),
-                    ToolCallRequest(tool_name="list_missing_official_fields", arguments={"program_id": program_id}),
-                    ToolCallRequest(tool_name="compare_evidence_records", arguments={"program_id": program_id}),
+                    ToolCallRequest(tool_name=name, arguments={"program_id": program_id})
+                    for name in missing_tools
                 ],
             )
         fields = dict(state.fields_needing_verification)

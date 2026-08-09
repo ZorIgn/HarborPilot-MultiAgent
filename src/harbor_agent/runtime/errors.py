@@ -44,6 +44,10 @@ class WorkflowLimitExceeded(AgentRuntimeError):
 class HumanReviewRequired(AgentRuntimeError):
     """A policy requires a human decision before the workflow can proceed."""
 
+    def __init__(self, message: str, *, pending_approval=None) -> None:
+        super().__init__(message)
+        self.pending_approval = pending_approval
+
 
 class UnsafeSourceError(AgentRuntimeError):
     """A source URL failed the network/source safety policy."""

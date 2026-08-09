@@ -8,7 +8,11 @@ from uuid import uuid4
 
 from harbor_agent.models import FieldEvidenceRecord
 from harbor_agent.services.data_loader import DATA_DIR
-from harbor_agent.services.program_store import DB_PATH, load_field_evidence_records, upsert_field_evidence_records
+from harbor_agent.services.program_store import (
+    DB_PATH,
+    load_field_evidence_records,
+    upsert_field_evidence_records,
+)
 
 STORE_PATH = DATA_DIR / "reviewed_field_evidence.local.json"
 
@@ -19,7 +23,7 @@ def load_published_field_records() -> list[FieldEvidenceRecord]:
     try:
         persisted = [
             record
-            for record in load_field_evidence_records()
+            for record in load_field_evidence_records(db_path=DB_PATH)
             if record.status.value == "OFFICIAL_VERIFIED_CURRENT" and not record.review_required
         ]
         if persisted:
@@ -44,7 +48,7 @@ def load_published_field_records() -> list[FieldEvidenceRecord]:
 
 
 def save_published_field_record(record: FieldEvidenceRecord) -> None:
-    upsert_field_evidence_records([record])
+    upsert_field_evidence_records([record], db_path=DB_PATH)
     records = load_published_field_records()
     remaining = [
         item
@@ -79,10 +83,10 @@ def save_review_decision(
     decision: str,
     reviewer_id: str,
     reviewer_note: str | None = None,
-    db_path=DB_PATH,
+    db_path=None,
 ) -> str:
     decision_id = f"decision_{uuid4().hex[:14]}"
-    with sqlite3.connect(db_path) as conn:
+    with sqlite3.connect(db_path or DB_PATH) as conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS review_decisions (
@@ -118,9 +122,9 @@ def save_review_decision(
     return decision_id
 
 
-def load_review_decisions(*, db_path=DB_PATH) -> dict[str, str]:
+def load_review_decisions(*, db_path=None) -> dict[str, str]:
     try:
-        with sqlite3.connect(db_path) as conn:
+        with sqlite3.connect(db_path or DB_PATH) as conn:
             rows = conn.execute(
                 "SELECT review_id, decision FROM review_decisions ORDER BY decided_at, rowid"
             ).fetchall()

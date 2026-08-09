@@ -14,9 +14,14 @@ from harbor_agent.models import (
     ReviewQueueItem,
     ReviewQueueSummary,
 )
-from harbor_agent.services.evidence_graph import REVIEWER_GATE_FIELDS, build_field_evidence_records
+from harbor_agent.services import program_store
 from harbor_agent.services.data_loader import load_programs
-from harbor_agent.services.review_store import load_review_decisions, save_published_field_record, save_review_decision
+from harbor_agent.services.evidence_graph import REVIEWER_GATE_FIELDS, build_field_evidence_records
+from harbor_agent.services.review_store import (
+    load_review_decisions,
+    save_published_field_record,
+    save_review_decision,
+)
 from harbor_agent.services.source_identity import is_allowed_official_url, same_official_institution
 
 CURRENT_CYCLE_DATE_FIELDS = {"deadline", "scholarship_deadline", "recommendation_deadline"}
@@ -350,3 +355,98 @@ def _review_id(record: FieldEvidenceRecord) -> str:
         ]
     )
     return "rev_" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def review_id_for_record(record: FieldEvidenceRecord) -> str:
+    """Public stable identity for tools that persist a pending review record."""
+
+    return _review_id(record)
+
+
+def persist_conflict_decision(
+    conflict: dict,
+    *,
+    action: str,
+    conflict_id: str,
+    reviewer_id: str,
+    reviewer_note: str | None = None,
+) -> FieldEvidenceRecord:
+    """Persist an exact conflict decision before checkpoint state is cleared."""
+
+    payload = {
+        key: value
+        for key, value in conflict.items()
+        if key in FieldEvidenceRecord.model_fields
+    }
+    try:
+        record = FieldEvidenceRecord.model_validate(payload)
+    except Exception as exc:
+        raise ValueError(
+            "conflict is not a complete evidence record and cannot be resolved"
+        ) from exc
+    if action == "reject":
+        decision_id = save_review_decision(
+            review_id=conflict_id,
+            program_id=record.program_id,
+            field_name=record.field_name,
+            decision="reject",
+            reviewer_id=reviewer_id,
+            reviewer_note=reviewer_note,
+        )
+        rejected = record.model_copy(
+            update={
+                "status": FieldVerificationStatus.not_published,
+                "review_required": False,
+                "reviewer_id": reviewer_id,
+                "reviewer_note": reviewer_note,
+                "review_decision_id": decision_id,
+                "verified_at": datetime.now(UTC),
+            }
+        )
+        program_store.upsert_field_evidence_records(
+            [rejected],
+            db_path=program_store.DB_PATH,
+        )
+        return rejected
+    if action != "accept":
+        raise ValueError(f"unsupported conflict decision: {action}")
+
+    candidate = record.model_copy(
+        update={
+            "status": FieldVerificationStatus.model_inferred,
+            "review_required": True,
+            "reviewer_id": None,
+            "review_decision_id": None,
+        }
+    )
+    if not _is_publishable_official_candidate(candidate):
+        raise ValueError(
+            "selected conflict record is not publishable official current evidence"
+        )
+    item = _queue_item_from_record(candidate)
+    if item is None:
+        raise ValueError("selected conflict field is outside the reviewer gate")
+    validation_error = _validate_confirmed_value(item, candidate.value)
+    if validation_error:
+        raise ValueError(validation_error)
+    decision_id = save_review_decision(
+        review_id=conflict_id,
+        program_id=record.program_id,
+        field_name=record.field_name,
+        decision="approve",
+        reviewer_id=reviewer_id,
+        reviewer_note=reviewer_note,
+    )
+    approved = candidate.model_copy(
+        update={
+            "status": FieldVerificationStatus.official_verified_current,
+            "review_required": False,
+            "reviewer_id": reviewer_id,
+            "reviewer_note": reviewer_note,
+            "review_decision_id": decision_id,
+            "verified_at": datetime.now(UTC),
+            "confidence": "high",
+        }
+    )
+    save_published_field_record(approved)
+    return approved

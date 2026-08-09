@@ -9,9 +9,13 @@ from pydantic import BaseModel, Field
 
 from harbor_agent.evals.assertions import evaluate_expectations
 from harbor_agent.evals.metrics import aggregate_eval_metrics
-from harbor_agent.runtime.state import WorkflowGoal
 from harbor_agent.runtime.limits import RuntimeLimits
-from harbor_agent.runtime.workflow import MultiAgentRuntime, WorkflowResumeRequest, WorkflowStartRequest
+from harbor_agent.runtime.state import WorkflowGoal
+from harbor_agent.runtime.workflow import (
+    MultiAgentRuntime,
+    WorkflowResumeRequest,
+    WorkflowStartRequest,
+)
 from harbor_agent.services.agent_runtime import list_runtime_trace_events
 
 
@@ -39,7 +43,7 @@ class AgentEvalCase(BaseModel):
     selected_program_ids: list[str] = Field(default_factory=list)
     refresh_official_sources: bool = False
     resume_user_message: str | None = None
-    human_resolution: dict[str, Any] | str | None = None
+    human_resolution: dict[str, Any] | None = None
     limit_overrides: dict[str, Any] = Field(default_factory=dict)
     expectations: AgentEvalExpectation = Field(default_factory=AgentEvalExpectation)
 
@@ -78,6 +82,7 @@ class AgentEvalRunner:
             state = runtime.resume(
                 state.workflow_id,
                 WorkflowResumeRequest(user_message=case.resume_user_message, human_resolution=case.human_resolution),
+                reviewer_id="eval_admin" if case.human_resolution is not None else None,
             )
         trace = list_runtime_trace_events(state.workflow_id)
         failures = evaluate_expectations(state, case.expectations.model_dump(exclude_none=True))
@@ -118,15 +123,20 @@ class AgentEvalRunner:
         from harbor_agent.llm.provider import DeterministicMockToolCallingProvider
         from harbor_agent.llm.response import LLMResponse, LLMToolCall, LLMUsage
         from harbor_agent.observability.trace import RuntimeTracer
-        from harbor_agent.runtime.decision import AgentDecision
+        from harbor_agent.runtime.checkpoint import save_checkpoint
+        from harbor_agent.runtime.decision import AgentDecision, DecisionType, ToolCallRequest
         from harbor_agent.runtime.errors import LLMTimeoutError, ToolExecutionError
         from harbor_agent.runtime.executor import AgentExecutor
-        from harbor_agent.runtime.state import AgentState, WorkflowStatus, append_tool_result, apply_state_patch
+        from harbor_agent.runtime.state import (
+            AgentState,
+            WorkflowStatus,
+            append_tool_result,
+            apply_state_patch,
+        )
         from harbor_agent.services.agent_runtime import create_multi_agent_workflow
-        from harbor_agent.runtime.checkpoint import save_checkpoint
+        from harbor_agent.tools import build_default_tool_registry
         from harbor_agent.tools.base import ToolDefinition
         from harbor_agent.tools.registry import ToolRegistry
-        from harbor_agent.tools import build_default_tool_registry
 
         workflow_id = f"eval_{case.case_id}_{uuid4().hex[:10]}"
         state = AgentState(workflow_id=workflow_id, goal=case.goal, raw_profile=profile)
@@ -140,7 +150,40 @@ class AgentEvalRunner:
             allowed_tools: set[str] = set()
 
             def step(self, current: AgentState) -> AgentDecision:
-                raise AssertionError("probe uses the model provider")
+                if not self.allowed_tools:
+                    return AgentDecision(
+                        decision=DecisionType.HANDOFF,
+                        reasoning_summary="The deterministic probe policy permits a handoff.",
+                        next_agent="SupervisorAgent",
+                    )
+                tool_name = next(iter(self.allowed_tools))
+                if current.working_memory.get("tool_results", {}).get(tool_name) is not None:
+                    return AgentDecision(
+                        decision=DecisionType.HANDOFF,
+                        reasoning_summary="The policy-observed tool result permits a handoff.",
+                        next_agent="SupervisorAgent",
+                    )
+                if tool_name == "flaky_tool":
+                    arguments = (
+                        {} if case.operation == "tool_validation_failure" else {"value": "ok"}
+                    )
+                elif case.operation == "community_source_leakage":
+                    arguments = {
+                        "program_id": "cityu-ma-communication-and-new-media-2027",
+                        "source_url": "https://reddit.com/r/gradadmissions/example",
+                        "field_names": ["deadline"],
+                    }
+                else:
+                    arguments = {
+                        "program_id": "program-a",
+                        "source_url": "https://example.edu/program",
+                        "field_names": ["deadline"],
+                    }
+                return AgentDecision(
+                    decision=DecisionType.CALL_TOOL,
+                    reasoning_summary="The deterministic probe policy permits this exact call.",
+                    tool_calls=[ToolCallRequest(tool_name=tool_name, arguments=arguments)],
+                )
 
         class EchoInput(BaseModel):
             value: str
@@ -241,6 +284,7 @@ class AgentEvalRunner:
             program_id = "cityu-ma-communication-and-new-media-2027"
             # Keep this evaluation independent of ignored local SQLite state.
             from datetime import UTC, datetime
+
             from harbor_agent.models import FieldEvidenceRecord, FieldVerificationStatus
             from harbor_agent.services import evidence_graph
 
@@ -404,12 +448,29 @@ class AgentEvalRunner:
             state = outcome.state
             operation_data["critic_outcome"] = state.working_memory.get("critic_outcome")
         elif case.operation == "human_resume":
-            conflict = {"program_id": "program-a", "field_name": "deadline", "record_id": "record-a", "status": "CONFLICTED"}
+            conflict = {
+                "program_id": "cityu-ma-communication-and-new-media-2027",
+                "field_name": "deadline",
+                "record_id": "record-a",
+                "source_type": "official_program_page",
+                "status": "CONFLICTED",
+            }
             state = AgentState(workflow_id=workflow_id, goal=WorkflowGoal.BACKGROUND_ASSESSMENT, status=WorkflowStatus.WAITING_HUMAN, raw_profile=profile, normalized_profile=profile, assessment={}, verification_conflicts=[conflict], human_review_reason="review conflict", working_memory={"critic_outcome": "PASS"})
             create_multi_agent_workflow(workflow_id, state.goal.value, state.model_dump(mode="json"))
             save_checkpoint(state)
             runtime = MultiAgentRuntime()
-            state = runtime.resume(workflow_id, WorkflowResumeRequest(human_resolution=case.human_resolution or {"conflict_resolutions": [{"record_id": "record-a", "decision": "accept"}]}))
+            state = runtime.resume(
+                workflow_id,
+                WorkflowResumeRequest(
+                    human_resolution={
+                        "action": "resolve_conflicts",
+                        "conflict_resolutions": [
+                            {"conflict_id": "record-a", "action": "reject"}
+                        ],
+                    }
+                ),
+                reviewer_id="eval_admin",
+            )
         else:
             failures.append(f"unknown injected operation: {case.operation}")
 

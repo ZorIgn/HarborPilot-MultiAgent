@@ -236,7 +236,7 @@ function AgentRuntimePanel({ runtimeWorkflows, modelProvider, modelName, runtime
     }
   }
 
-  async function resumeWorkflow() {
+  async function resumeWorkflow(review?: { action: "approve_tool" | "reject_tool" } | { action: "accept" | "reject"; conflictId: string }) {
     if (!workflowState) return;
     const waitingForUser = workflowState.status === "WAITING_USER";
     if (waitingForUser && !resumeText.trim()) {
@@ -245,9 +245,35 @@ function AgentRuntimePanel({ runtimeWorkflows, modelProvider, modelName, runtime
     }
     setDetailLoading(true);
     try {
-      const state = await resumeRuntimeWorkflow(workflowState.workflow_id, waitingForUser
-        ? { user_message: resumeText.trim() }
-        : { human_resolution: resumeText.trim() || "管理员确认后继续执行。" });
+      let payload: { user_message?: string; human_resolution?: Record<string, unknown> };
+      if (waitingForUser || workflowState.status === "FAILED_RETRYABLE") {
+        payload = { user_message: resumeText.trim() };
+      } else if (review && "conflictId" in review) {
+        payload = {
+          human_resolution: {
+            action: "resolve_conflicts",
+            note: resumeText.trim() || undefined,
+            conflict_resolutions: [{
+              conflict_id: review.conflictId,
+              action: review.action,
+              selected_record_id: review.action === "accept" ? review.conflictId : undefined,
+              reviewer_note: resumeText.trim() || undefined,
+            }],
+          },
+        };
+      } else if (review && workflowState.pending_tool_approval) {
+        payload = {
+          human_resolution: {
+            action: review.action,
+            approval_id: workflowState.pending_tool_approval.approval_id,
+            note: resumeText.trim() || undefined,
+          },
+        };
+      } else {
+        setMessage("请选择一条具体工具调用或证据冲突并作出审核决定。");
+        return;
+      }
+      const state = await resumeRuntimeWorkflow(workflowState.workflow_id, payload);
       setWorkflowState(state);
       setResumeText("");
       setTrace(await getRuntimeWorkflowTrace(state.workflow_id));
@@ -325,7 +351,12 @@ function AgentRuntimePanel({ runtimeWorkflows, modelProvider, modelName, runtime
           {workflowState.human_review_reason ? <RuntimeCallout tone="human" title="等待人工复核" text={workflowState.human_review_reason} /> : null}
           {workflowState.errors.length ? <RuntimeCallout tone="error" title="运行错误" text={workflowState.errors.at(-1) ?? "工作流终止。"} /> : null}
           <RuntimeTaskBoard tasks={workflowState.tasks} />
-          {canResume ? <div className="runtime-resume"><label>{workflowState.status === "WAITING_USER" ? "补充给 Agent 的信息" : "人工处理结论"}<textarea value={resumeText} onChange={(event) => setResumeText(event.target.value)} placeholder={workflowState.status === "WAITING_USER" ? "例如：已取得 IELTS 7.0，单项均不低于 6.5。" : "记录核验结论或授权继续的原因。"} /></label><button type="button" className="runtime-start primary" onClick={() => void resumeWorkflow()} disabled={detailLoading}><ArrowRight size={14} aria-hidden />继续工作流</button></div> : null}
+          {canResume ? <div className="runtime-resume">
+            <label>{workflowState.status === "WAITING_USER" ? "补充给 Agent 的信息" : "审核备注（可选）"}<textarea value={resumeText} onChange={(event) => setResumeText(event.target.value)} placeholder={workflowState.status === "WAITING_USER" ? "例如：已取得 IELTS 7.0，单项均不低于 6.5。" : "记录你核对的原始来源与判断依据。"} /></label>
+            {workflowState.status === "WAITING_USER" || workflowState.status === "FAILED_RETRYABLE" ? <button type="button" className="runtime-start primary" onClick={() => void resumeWorkflow()} disabled={detailLoading}><ArrowRight size={14} aria-hidden />继续工作流</button> : null}
+            {workflowState.status === "WAITING_HUMAN" && workflowState.pending_tool_approval ? <article className="runtime-callout human"><strong>精确工具授权</strong><p>{workflowState.pending_tool_approval.agent_name} · {workflowState.pending_tool_approval.tool_name}</p><small>call {workflowState.pending_tool_approval.tool_call_id} · args {workflowState.pending_tool_approval.arguments_sha256.slice(0, 12)}</small><pre>{JSON.stringify(workflowState.pending_tool_approval.arguments, null, 2)}</pre><div className="runtime-goal-actions"><button type="button" className="runtime-start primary" onClick={() => void resumeWorkflow({ action: "approve_tool" })} disabled={detailLoading}>批准这一次调用</button><button type="button" className="runtime-start" onClick={() => void resumeWorkflow({ action: "reject_tool" })} disabled={detailLoading}>拒绝</button></div></article> : null}
+            {workflowState.status === "WAITING_HUMAN" && !workflowState.pending_tool_approval ? <div className="evidence-list">{workflowState.verification_conflicts.map((conflict) => { const conflictId = String(conflict.conflict_id ?? ""); return <article key={conflictId}><div className="program-title-row"><strong>{String(conflict.field_name ?? "evidence conflict")}</strong><span className="tier-pill">{String(conflict.program_id ?? "unknown programme")}</span></div><p>{String(conflict.evidence_snippet ?? conflict.value ?? "请打开原始来源核对该记录。")}</p>{conflict.source_url ? <a className="text-link" href={String(conflict.source_url)} target="_blank" rel="noreferrer">打开来源</a> : null}<small>{conflictId}</small><div className="runtime-goal-actions"><button type="button" className="runtime-start primary" onClick={() => void resumeWorkflow({ action: "accept", conflictId })} disabled={!conflictId || detailLoading}>接受该记录</button><button type="button" className="runtime-start" onClick={() => void resumeWorkflow({ action: "reject", conflictId })} disabled={!conflictId || detailLoading}>拒绝该记录</button></div></article>; })}</div> : null}
+          </div> : null}
         </>}
       </section>
 

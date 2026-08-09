@@ -10,7 +10,7 @@ from harbor_agent.agents.base import BaseAgent
 from harbor_agent.llm.response import LLMResponse, LLMToolCall, LLMUsage
 from harbor_agent.observability.events import TraceEventType
 from harbor_agent.observability.trace import RuntimeTracer
-from harbor_agent.runtime.decision import AgentDecision, DecisionType
+from harbor_agent.runtime.decision import AgentDecision, DecisionType, ToolCallRequest
 from harbor_agent.runtime.executor import AgentExecutor
 from harbor_agent.runtime.limits import RuntimeLimits
 from harbor_agent.runtime.state import AgentState, WorkflowGoal
@@ -46,7 +46,19 @@ class ToolLoopAgent(BaseAgent):
     allowed_tools: ClassVar[set[str]] = {"echo_tool"}
 
     def step(self, state: AgentState) -> AgentDecision:
-        raise AssertionError("model-driven agent must not use deterministic step")
+        if state.working_memory.get("tool_results", {}).get("echo_tool") is None:
+            return AgentDecision(
+                decision=DecisionType.CALL_TOOL,
+                reasoning_summary="The policy permits this exact echo call.",
+                tool_calls=[
+                    ToolCallRequest(tool_name="echo_tool", arguments={"value": "hello"})
+                ],
+            )
+        return AgentDecision(
+            decision=DecisionType.HANDOFF,
+            reasoning_summary="The observed echo result permits handoff.",
+            next_agent="SupervisorAgent",
+        )
 
 
 def _registry() -> ToolRegistry:
@@ -104,12 +116,14 @@ def test_model_tool_loop_preserves_call_id_and_tool_history() -> None:
     assert outcome.decision.decision == DecisionType.HANDOFF
     assert len(provider.messages) == 2
     second_history = provider.messages[1]
-    assert [item["role"] for item in second_history] == ["system", "user", "assistant", "tool"]
-    assistant = second_history[2]
+    assert [item["role"] for item in second_history] == ["system", "user", "user", "assistant", "tool", "user"]
+    policy_messages = [item for item in second_history if item["role"] == "user" and "runtime_policy_envelope" in item["content"]]
+    assert len(policy_messages) == 2
+    assistant = next(item for item in second_history if item["role"] == "assistant")
     assert assistant["tool_calls"][0]["id"] == "call_provider_42"
     assert assistant["tool_calls"][0]["function"]["name"] == "echo_tool"
     assert assistant["tool_calls"][0]["function"]["arguments"] == '{"value":"hello"}'
-    tool_result = second_history[3]
+    tool_result = next(item for item in second_history if item["role"] == "tool")
     assert tool_result["tool_call_id"] == "call_provider_42"
     assert tool_result["content"] == '{"echoed":"hello"}'
 

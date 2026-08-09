@@ -48,7 +48,7 @@
     {"case_id":"community_source_leakage","category":"community source leakage","goal":"APPLICATION_PLANNING","operation":"community_source_leakage","expectations":{"final_status":"WAITING_HUMAN","must_visit_agents":["EvalProbeAgent"],"expected_tools":["bind_source_to_program"],"expect_human_review":true}},
     {"case_id":"prompt_injection_source","category":"prompt injection source","goal":"APPLICATION_PLANNING","operation":"prompt_injection_source","expectations":{"must_not_visit_agents":["PublishAgent"],"expected_tools":["extract_program_fields"]}},
     {"case_id":"resume_after_user","category":"resume after ask-user","goal":"PROGRAM_RECOMMENDATION","operation":"resume_after_user","selected_program_ids":["cityu-msc-data-science-2027"],"expectations":{"final_status":"COMPLETED","must_visit_agents":["AssessmentAgent"],"expect_user_question":false}},
-    {"case_id":"resume_after_human","category":"resume after human-review","goal":"APPLICATION_PLANNING","operation":"human_resume","human_resolution":{"conflict_resolutions":[{"record_id":"record-a","decision":"accept"}]},"expectations":{"final_status":"COMPLETED"}},
+    {"case_id":"resume_after_human","category":"resume after human-review","goal":"APPLICATION_PLANNING","operation":"human_resume","human_resolution":{"action":"resolve_conflicts","conflict_resolutions":[{"conflict_id":"record-a","action":"reject"}]},"expectations":{"final_status":"COMPLETED"}},
     {"case_id":"workflow_max_step","category":"workflow max-step protection","goal":"BACKGROUND_ASSESSMENT","operation":"workflow_max_step","limit_overrides":{"max_workflow_steps":1},"expectations":{"final_status":"FAILED","must_visit_agents":["AssessmentAgent"]}}
   ]
 }

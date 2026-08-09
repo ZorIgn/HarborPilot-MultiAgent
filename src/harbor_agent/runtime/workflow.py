@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 from copy import deepcopy
 from typing import Any
@@ -8,7 +7,6 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from harbor_agent.runtime.decision import AgentDecision, DecisionType
 from harbor_agent.agents import build_agent_registry
 from harbor_agent.agents.base import BaseAgent
 from harbor_agent.agents.supervisor import SupervisorAgent, SupervisorRoute
@@ -16,11 +14,19 @@ from harbor_agent.llm.provider import RuntimeLLMProvider
 from harbor_agent.observability.events import TraceEventType
 from harbor_agent.observability.trace import RuntimeTracer
 from harbor_agent.runtime.checkpoint import load_checkpoint, save_checkpoint
+from harbor_agent.runtime.decision import AgentDecision, DecisionType
 from harbor_agent.runtime.errors import WorkflowLimitExceeded
 from harbor_agent.runtime.executor import AgentExecutor
 from harbor_agent.runtime.limits import RuntimeLimits, enforce_workflow_limits
 from harbor_agent.runtime.sanitizer import sanitize_runtime_payload
-from harbor_agent.runtime.state import AgentState, ConflictResolution, HumanResolution, WorkflowGoal, WorkflowStatus, apply_state_patch
+from harbor_agent.runtime.state import (
+    AgentState,
+    ConflictResolution,
+    HumanResolution,
+    WorkflowGoal,
+    WorkflowStatus,
+    apply_state_patch,
+)
 from harbor_agent.services.agent_runtime import (
     create_multi_agent_workflow,
     get_multi_agent_workflow,
@@ -43,7 +49,7 @@ class WorkflowStartRequest(BaseModel):
 
 class WorkflowResumeRequest(BaseModel):
     user_message: str | None = None
-    human_resolution: HumanResolution | str | None = None
+    human_resolution: HumanResolution | None = None
 
 
 class MultiAgentRuntime:
@@ -92,12 +98,29 @@ class MultiAgentRuntime:
         save_checkpoint(state)
         return self._run(state, tracer)
 
-    def resume(self, workflow_id: str, request: WorkflowResumeRequest) -> AgentState:
+    def resume(
+        self,
+        workflow_id: str,
+        request: WorkflowResumeRequest,
+        *,
+        reviewer_id: str | None = None,
+    ) -> AgentState:
         state = load_checkpoint(workflow_id)
         if state is None:
             raise KeyError(f"workflow not found: {workflow_id}")
         if state.status not in {WorkflowStatus.WAITING_USER, WorkflowStatus.WAITING_HUMAN, WorkflowStatus.FAILED_RETRYABLE}:
             raise ValueError(f"workflow cannot resume from status {state.status.value}")
+        if request.user_message and request.human_resolution is not None:
+            raise ValueError("user input and human review must be submitted separately")
+        if state.status == WorkflowStatus.WAITING_HUMAN:
+            if request.user_message:
+                raise ValueError("user messages cannot release a human-review gate")
+            if request.human_resolution is None:
+                raise ValueError("WAITING_HUMAN requires an explicit typed reviewer decision")
+            if not reviewer_id:
+                raise PermissionError("human review requires an authenticated administrator")
+        if state.status == WorkflowStatus.WAITING_USER and request.human_resolution is not None:
+            raise ValueError("WAITING_USER accepts only a user_message")
         memory = deepcopy(state.working_memory)
         user_messages = list(state.user_messages)
         raw_profile = deepcopy(state.raw_profile)
@@ -108,18 +131,65 @@ class MultiAgentRuntime:
             raw_profile = _apply_json_profile_supplement(raw_profile, safe_user_message)
         resolution: HumanResolution | None = None
         human_patch: dict[str, Any] = {}
-        unresolved_conflicts = bool(state.verification_conflicts)
         if request.human_resolution is not None:
-            resolution = _coerce_human_resolution(
-                request.human_resolution,
-                active_conflicts=bool(state.verification_conflicts),
-            )
-            if state.verification_conflicts:
-                memory, human_patch = _apply_human_conflict_resolution(state, memory, resolution)
-                unresolved_conflicts = bool(human_patch.get("verification_conflicts"))
-            approved = list(memory.get("human_approved_tools", []))
-            approved.extend(str(item) for item in resolution.approved_tools if item)
-            memory["human_approved_tools"] = list(dict.fromkeys(approved))
+            resolution = _coerce_human_resolution(request.human_resolution)
+            assert reviewer_id is not None
+            if state.pending_tool_approval is not None:
+                if resolution.action not in {"approve_tool", "reject_tool"}:
+                    raise ValueError("the current gate requires a decision for the pending tool call")
+                if resolution.approval_id != state.pending_tool_approval.approval_id:
+                    raise ValueError("approval_id does not match the pending tool call")
+                if resolution.action == "approve_tool":
+                    from harbor_agent.services.tool_approval_store import approve_tool_approval
+
+                    approved = approve_tool_approval(
+                        resolution.approval_id,
+                        workflow_id=workflow_id,
+                        reviewer_id=reviewer_id,
+                        reviewer_note=resolution.note,
+                    )
+                    human_patch = {
+                        "pending_tool_approval": None,
+                        "active_tool_approval": approved,
+                        "human_resolution": resolution,
+                    }
+                else:
+                    from harbor_agent.services.tool_approval_store import reject_tool_approval
+
+                    rejected = reject_tool_approval(
+                        resolution.approval_id,
+                        workflow_id=workflow_id,
+                        reviewer_id=reviewer_id,
+                        reviewer_note=resolution.note,
+                    )
+                    state = apply_state_patch(
+                        state,
+                        {
+                            "status": WorkflowStatus.FAILED.value,
+                            "pending_tool_approval": None,
+                            "active_tool_approval": None,
+                            "human_resolution": resolution,
+                            "human_review_reason": None,
+                            "errors": [
+                                *state.errors,
+                                f"Reviewer rejected {rejected.tool_name} approval {rejected.approval_id}.",
+                            ],
+                        },
+                    )
+                    update_multi_agent_workflow(state.model_dump(mode="json"))
+                    save_checkpoint(state)
+                    return state
+            elif state.verification_conflicts:
+                if resolution.action != "resolve_conflicts":
+                    raise ValueError("the current gate requires exact conflict decisions")
+                memory, human_patch = _apply_human_conflict_resolution(
+                    state,
+                    memory,
+                    resolution,
+                    reviewer_id=reviewer_id,
+                )
+            else:
+                raise ValueError("workflow has no pending tool approval or evidence conflict")
             memory["human_resolution"] = resolution.model_dump(mode="json")
         resume_patch: dict[str, Any] = {}
         if request.user_message:
@@ -142,14 +212,22 @@ class MultiAgentRuntime:
                 "verified_program_fields": {},
                 "verification_conflicts": [],
             }
-        resume_human_reason = state.human_review_reason if unresolved_conflicts and not request.user_message else None
         resolved_state_patch = {"human_resolution": resolution} if resolution is not None else {}
+        unresolved_conflicts = bool(human_patch.get("verification_conflicts"))
         state = apply_state_patch(
             state,
             {
-                "status": WorkflowStatus.RUNNING.value,
+                "status": (
+                    WorkflowStatus.WAITING_HUMAN.value
+                    if unresolved_conflicts
+                    else WorkflowStatus.RUNNING.value
+                ),
                 "user_question": None,
-                "human_review_reason": resume_human_reason,
+                "human_review_reason": (
+                    "Evidence conflicts remain; submit an exact decision for every remaining conflict."
+                    if unresolved_conflicts
+                    else None
+                ),
                 "user_messages": user_messages,
                 "raw_profile": raw_profile,
                 "working_memory": memory,
@@ -161,6 +239,9 @@ class MultiAgentRuntime:
         tracer = RuntimeTracer(workflow_id)
         tracer.emit(TraceEventType.RETRY, output_summary="workflow resumed after user or human input")
         save_checkpoint(state)
+        update_multi_agent_workflow(state.model_dump(mode="json"))
+        if state.status == WorkflowStatus.WAITING_HUMAN:
+            return state
         return self._run(state, tracer)
 
     def get_state(self, workflow_id: str) -> AgentState | None:
@@ -307,95 +388,53 @@ def _supervisor_route_from_decision(decision: AgentDecision) -> SupervisorRoute 
         return None
     return SupervisorRoute(next_agent=target, reason=decision.reasoning_summary, state_patch=decision.state_patch)
 
-def _coerce_human_resolution(value: HumanResolution | str | dict[str, Any], *, active_conflicts: bool) -> HumanResolution:
-    """Normalize legacy free text and dict payloads to one typed decision."""
+def _coerce_human_resolution(value: HumanResolution | dict[str, Any]) -> HumanResolution:
+    """Accept only the strict typed reviewer contract."""
 
-    if isinstance(value, HumanResolution):
-        resolution = value
-    else:
-        resolution = HumanResolution.model_validate(value)
-    # Older clients submit a plain reviewer note.  The HumanResolution
-    # validator marks it as resolve_conflicts; retain that explicit intent.
-    if active_conflicts and isinstance(value, str) and not resolution.conflict_resolutions:
-        resolution.resolve_conflicts = True
-        resolution.action = "resolve_conflicts"
-    return resolution
-
-
-def _conflict_fingerprint(conflict: dict[str, Any]) -> str:
-    """Build a stable ID for evidence records that have no persisted ID."""
-
-    for key in ("conflict_id", "id", "record_id", "review_decision_id"):
-        value = conflict.get(key)
-        if value:
-            return str(value)
-    identity = {
-        key: conflict.get(key)
-        for key in ("program_id", "field_name", "source_url", "official_url", "page_hash", "value", "evidence_snippet")
-    }
-    encoded = json.dumps(identity, ensure_ascii=False, sort_keys=True, default=str)
-    return "conflict_" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24]
-
-
-def _annotate_conflict(conflict: Any) -> dict[str, Any]:
-    item = dict(conflict) if isinstance(conflict, dict) else {"value": str(conflict)}
-    item.setdefault("conflict_id", _conflict_fingerprint(item))
-    return item
-
-
-def _resolution_matches(conflict: dict[str, Any], resolution: ConflictResolution) -> bool:
-    if resolution.all_conflicts:
-        return True
-    conflict_id = _conflict_fingerprint(conflict)
-    candidate_ids = {
-        str(conflict_id),
-        *(str(conflict.get(key)) for key in ("conflict_id", "id", "record_id", "review_decision_id") if conflict.get(key)),
-    }
-    if resolution.conflict_id and str(resolution.conflict_id) in candidate_ids:
-        return True
-    if resolution.selected_record_id and str(resolution.selected_record_id) in candidate_ids:
-        return True
-    if resolution.program_id and str(conflict.get("program_id")) != str(resolution.program_id):
-        return False
-    if resolution.field_name and str(conflict.get("field_name")) != str(resolution.field_name):
-        return False
-    return bool(resolution.program_id or resolution.field_name)
+    return value if isinstance(value, HumanResolution) else HumanResolution.model_validate(value)
 
 
 def _apply_human_conflict_resolution(
     state: AgentState,
     memory: dict[str, Any],
     resolution: HumanResolution,
+    *,
+    reviewer_id: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Remove resolved conflicts and invalidate stale comparison tool output."""
+    """Persist exact decisions, then remove only those conflicts from state."""
 
-    active = [_annotate_conflict(item) for item in state.verification_conflicts]
+    from harbor_agent.runtime.state import annotate_conflict
+    from harbor_agent.services.review_gate import persist_conflict_decision
+
+    active = [annotate_conflict(item) for item in state.verification_conflicts]
     decisions = list(resolution.conflict_resolutions)
-    if not decisions and (resolution.resolve_conflicts or resolution.action in {"resolve_conflicts", "resolve"}):
-        decisions = [
-            ConflictResolution(
-                action="resolve",
-                all_conflicts=True,
-                reviewer_note=resolution.note,
-            )
-        ]
+    by_id = {str(item["conflict_id"]): item for item in active}
+    decision_ids = [item.conflict_id for item in decisions]
+    if len(decision_ids) != len(set(decision_ids)):
+        raise ValueError("duplicate conflict decisions are not allowed")
+    unknown = set(decision_ids) - set(by_id)
+    if unknown:
+        raise ValueError(f"unknown conflict_id values: {sorted(unknown)}")
     remaining: list[dict[str, Any]] = []
     resolved: list[ConflictResolution] = []
     for conflict in active:
-        decision = next((item for item in decisions if _resolution_matches(conflict, item)), None)
+        conflict_id = str(conflict["conflict_id"])
+        decision = next((item for item in decisions if item.conflict_id == conflict_id), None)
         if decision is None:
             remaining.append(conflict)
             continue
-        resolved.append(
-            decision.model_copy(
-                update={
-                    "conflict_id": conflict["conflict_id"],
-                    "program_id": decision.program_id or conflict.get("program_id"),
-                    "field_name": decision.field_name or conflict.get("field_name"),
-                    "all_conflicts": False,
-                }
+        if decision.action == "accept" and decision.selected_record_id != conflict_id:
+            raise ValueError(
+                "selected_record_id must identify the exact record represented by conflict_id"
             )
+        persist_conflict_decision(
+            conflict,
+            action=decision.action,
+            conflict_id=conflict_id,
+            reviewer_id=reviewer_id,
+            reviewer_note=decision.reviewer_note or resolution.note,
         )
+        resolved.append(decision)
 
     # A cached comparison is a snapshot from before the reviewer decision.  Do
     # not feed its old conflict list back to VerificationAgent on resume.
@@ -405,8 +444,8 @@ def _apply_human_conflict_resolution(
     if isinstance(comparison, dict) and decisions:
         filtered = []
         for item in comparison.get("conflicts", []) or []:
-            conflict = _annotate_conflict(item)
-            if not any(_resolution_matches(conflict, decision) for decision in decisions):
+            conflict = annotate_conflict(item)
+            if str(conflict["conflict_id"]) not in set(decision_ids):
                 filtered.append(conflict)
         comparison = {
             **comparison,
@@ -418,7 +457,7 @@ def _apply_human_conflict_resolution(
         updated_memory["tool_results"] = tool_results
 
     resolved_ids = list(updated_memory.get("resolved_conflict_ids", []))
-    resolved_ids.extend(item.conflict_id for item in resolved if item.conflict_id)
+    resolved_ids.extend(item.conflict_id for item in resolved)
     updated_memory["resolved_conflict_ids"] = list(dict.fromkeys(str(item) for item in resolved_ids))
     cursor = int(updated_memory.get("verification_cursor", 0) or 0)
     if not remaining and cursor >= len(state.selected_program_ids):
@@ -427,7 +466,7 @@ def _apply_human_conflict_resolution(
         updated_memory["verification_complete"] = False
 
     audit = list(state.resolved_conflicts)
-    seen = {item.conflict_id for item in audit if item.conflict_id}
+    seen = {item.conflict_id for item in audit}
     audit.extend(item for item in resolved if item.conflict_id not in seen)
     return updated_memory, {
         "verification_conflicts": remaining,

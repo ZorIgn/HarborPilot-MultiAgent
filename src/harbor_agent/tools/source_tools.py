@@ -6,6 +6,11 @@ from harbor_agent.policies.source_policy import ensure_safe_https_url
 from harbor_agent.runtime.errors import HumanReviewRequired
 from harbor_agent.runtime.state import AgentState
 from harbor_agent.services.data_loader import load_programs
+from harbor_agent.services.source_binding_store import save_program_source_binding
+from harbor_agent.services.source_identity import (
+    is_allowed_official_url,
+    same_official_institution,
+)
 from harbor_agent.services.source_snapshot import snapshot_source
 from harbor_agent.tools.base import ToolDefinition
 
@@ -40,8 +45,20 @@ class SnapshotResultOutput(BaseModel):
 class SourceBindingProposal(BaseModel):
     program_id: str
     source_url: str
-    field_names: list[str] = Field(default_factory=list)
-    requires_human_review: bool = True
+    field_names: list[str] = Field(min_length=1)
+
+
+class SourceBindingResult(BaseModel):
+    binding_id: str
+    workflow_id: str
+    program_id: str
+    source_url: str
+    field_names: list[str]
+    page_hash: str | None = None
+    approval_id: str
+    reviewer_id: str
+    created_at: str
+    persisted: bool
 
 
 class SourceCrawlPlan(BaseModel):
@@ -73,10 +90,55 @@ def _snapshot(_: AgentState, args: SnapshotSourceInput) -> SnapshotResultOutput:
     )
 
 
-def _binding(_: AgentState, args: SourceBindingProposal) -> SourceBindingProposal:
-    # Publication/binding can change official evidence and therefore must be
-    # approved by a human. The tool only returns a typed review proposal.
-    return args
+def _binding(state: AgentState, args: SourceBindingProposal) -> SourceBindingResult:
+    approval = state.active_tool_approval
+    if approval is None or approval.tool_name != "bind_source_to_program" or not approval.reviewer_id:
+        raise HumanReviewRequired("source binding requires an active exact approval")
+    # Binding does not perform a network request.  The URL was already fetched
+    # through snapshot_official_source's SSRF gateway; re-running DNS policy
+    # here would make an auditable stored snapshot depend on later DNS answers.
+    source_url = args.source_url.strip()
+    program = next((item for item in load_programs() if item.id == args.program_id), None)
+    if program is None:
+        raise ValueError(f"unknown program_id: {args.program_id}")
+    expected_url = str(program.official_program_url or program.source.url or "")
+    if not is_allowed_official_url(source_url) or not same_official_institution(source_url, expected_url):
+        raise ValueError("source binding must use the programme institution's official HTTPS domain")
+    tool_results = state.working_memory.get("tool_results", {})
+    extraction = tool_results.get("extract_program_fields", {}) if isinstance(tool_results, dict) else {}
+    if (
+        not isinstance(extraction, dict)
+        or extraction.get("program_id") != args.program_id
+        or extraction.get("source_url") != source_url
+    ):
+        raise ValueError("source binding requires the current programme extraction result")
+    candidates = extraction.get("fields", [])
+    extracted_names = {
+        str(item.get("field_name"))
+        for item in candidates
+        if isinstance(item, dict) and item.get("field_name")
+    }
+    if not set(args.field_names).issubset(extracted_names):
+        raise ValueError("source binding fields must come from the current extraction session")
+    snapshot = tool_results.get("snapshot_official_source", {}) if isinstance(tool_results, dict) else {}
+    if (
+        not isinstance(snapshot, dict)
+        or snapshot.get("program_id") != args.program_id
+        or snapshot.get("url") != source_url
+        or not snapshot.get("ok")
+    ):
+        raise ValueError("source binding requires the successful current programme snapshot")
+    page_hash = snapshot.get("page_hash") if isinstance(snapshot, dict) else None
+    persisted = save_program_source_binding(
+        workflow_id=state.workflow_id,
+        program_id=args.program_id,
+        source_url=source_url,
+        field_names=args.field_names,
+        page_hash=str(page_hash) if page_hash else None,
+        approval_id=approval.approval_id,
+        reviewer_id=approval.reviewer_id,
+    )
+    return SourceBindingResult.model_validate(persisted)
 
 
 def _plan(state: AgentState, _: BaseModel) -> SourceCrawlPlan:
@@ -92,6 +154,6 @@ def definitions() -> list[ToolDefinition]:
     return [
         ToolDefinition("discover_official_sources", "Discover official programme and application URLs from the catalogue.", ProgramSourceInput, SourceDiscoveryResult, _discover),
         ToolDefinition("snapshot_official_source", "Fetch an HTTPS official source through the shared SSRF/robots safety gateway.", SnapshotSourceInput, SnapshotResultOutput, _snapshot, max_retries=3, retryable=True),
-        ToolDefinition("bind_source_to_program", "Create a human-review proposal to bind source evidence to a programme.", SourceBindingProposal, SourceBindingProposal, _binding, requires_human_review=True),
+        ToolDefinition("bind_source_to_program", "Persist one exact, human-approved official source binding.", SourceBindingProposal, SourceBindingResult, _binding, requires_human_review=True),
         ToolDefinition("build_source_crawl_plan", "Build deterministic official-source crawl jobs for selected programmes.", EmptyToolInput, SourceCrawlPlan, _plan),
     ]

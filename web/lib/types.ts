@@ -175,6 +175,20 @@ export type RuntimeWorkflowState = {
   working_memory: Record<string, unknown>;
   user_question: string | null;
   human_review_reason: string | null;
+  pending_tool_approval: {
+    approval_id: string;
+    workflow_id: string;
+    agent_name: string;
+    tool_name: string;
+    tool_call_id: string;
+    arguments: Record<string, unknown>;
+    arguments_sha256: string;
+    status: "PENDING" | "APPROVED" | "REJECTED" | "CONSUMED";
+    requested_at: string;
+    expires_at: string;
+    reviewer_id: string | null;
+  } | null;
+  active_tool_approval: RuntimeWorkflowState["pending_tool_approval"];
   errors: string[];
   final_result: Record<string, unknown> | null;
 };
