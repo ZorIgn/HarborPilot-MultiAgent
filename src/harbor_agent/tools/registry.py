@@ -76,6 +76,17 @@ class ToolRegistry:
             if definition.requires_human_review
             else tool_call_id or f"tool_{uuid4().hex[:12]}"
         )
+        call_event = None
+        if not definition.requires_human_review:
+            # Record even a malformed low-risk attempt. Validation still runs
+            # before any handler or human-approval capability is created.
+            call_event = tracer.emit(
+                TraceEventType.TOOL_CALL,
+                agent_name=agent_name,
+                tool_name=tool_name,
+                tool_call_id=call_id,
+                input_summary=_summary(arguments),
+            )
         try:
             parsed = definition.input_model.model_validate(arguments)
         except ValidationError as exc:
@@ -115,13 +126,14 @@ class ToolRegistry:
                 arguments_sha256=arguments_sha256,
             )
             call_id = pending.tool_call_id
-        call_event = tracer.emit(
-            TraceEventType.TOOL_CALL,
-            agent_name=agent_name,
-            tool_name=tool_name,
-            tool_call_id=call_id,
-            input_summary=_summary(canonical_arguments),
-        )
+        if call_event is None:
+            call_event = tracer.emit(
+                TraceEventType.TOOL_CALL,
+                agent_name=agent_name,
+                tool_name=tool_name,
+                tool_call_id=call_id,
+                input_summary=_summary(canonical_arguments),
+            )
         if definition.requires_human_review:
             if active is None:
                 assert pending is not None
