@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from pathlib import Path
 from datetime import UTC, datetime, timedelta
 from typing import Any, Iterable
 from uuid import uuid4
@@ -19,7 +20,8 @@ from harbor_agent.models import SourceHealthItem, SourceHealthSummary, SourcePol
 from harbor_agent.services.program_store import DB_PATH, init_program_store
 
 
-def init_information_store(db_path=DB_PATH) -> None:
+def init_information_store(db_path: Path | None = None) -> None:
+    db_path = db_path or DB_PATH
     db_path.parent.mkdir(parents=True, exist_ok=True)
     init_program_store(db_path)
     with _connect(db_path) as conn:
@@ -74,8 +76,9 @@ def start_information_run(
     mode: str,
     selected_program_ids: Iterable[str],
     planned_source_count: int,
-    db_path=DB_PATH,
+    db_path: Path | None = None,
 ) -> None:
+    db_path = db_path or DB_PATH
     init_information_store(db_path)
     with _connect(db_path) as conn:
         conn.execute(
@@ -105,8 +108,9 @@ def record_fetch_attempt(
     binding_status: str = "not_checked",
     binding_score: int = 0,
     extracted_field_count: int = 0,
-    db_path=DB_PATH,
+    db_path: Path | None = None,
 ) -> str:
+    db_path = db_path or DB_PATH
     init_information_store(db_path)
     attempt_id = f"fetch_{uuid4().hex[:14]}"
     status = str(getattr(snapshot, "status", "UNKNOWN"))
@@ -159,8 +163,9 @@ def finish_information_run(
     failed_source_count: int,
     binding_warning_count: int = 0,
     warnings: Iterable[str] = (),
-    db_path=DB_PATH,
+    db_path: Path | None = None,
 ) -> None:
+    db_path = db_path or DB_PATH
     init_information_store(db_path)
     with _connect(db_path) as conn:
         conn.execute(
@@ -184,9 +189,10 @@ def finish_information_run(
         )
 
 
-def update_information_run_plan(run_id: str, planned_source_count: int, *, db_path=DB_PATH) -> None:
+def update_information_run_plan(run_id: str, planned_source_count: int, *, db_path: Path | None = None) -> None:
     """Update a run when an index page discovers additional detail-page work."""
 
+    db_path = db_path or DB_PATH
     init_information_store(db_path)
     with _connect(db_path) as conn:
         conn.execute(
@@ -195,9 +201,10 @@ def update_information_run_plan(run_id: str, planned_source_count: int, *, db_pa
         )
 
 
-def latest_source_page_hash(source_id: str, *, db_path=DB_PATH) -> str | None:
+def latest_source_page_hash(source_id: str, *, db_path: Path | None = None) -> str | None:
     """Return the last stored content hash for change detection."""
 
+    db_path = db_path or DB_PATH
     init_information_store(db_path)
     with _connect(db_path) as conn:
         row = conn.execute(
@@ -215,10 +222,11 @@ def source_health_summary(
     sources: Iterable[SourcePolicy],
     *,
     now: datetime | None = None,
-    db_path=DB_PATH,
+    db_path: Path | None = None,
 ) -> SourceHealthSummary:
     """Return the latest operational health without exposing snapshot bodies."""
 
+    db_path = db_path or DB_PATH
     init_information_store(db_path)
     current = now or datetime.now(UTC)
     with _connect(db_path) as conn:

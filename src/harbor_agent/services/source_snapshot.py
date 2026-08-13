@@ -367,7 +367,13 @@ def _write_snapshot(url: str, body: bytes, checked_at: datetime, page_hash: str,
     name = f"{checked_at.strftime('%H%M%S')}_{host}_{page_hash.split(':', 1)[1][:12]}{suffix}"
     path = date_dir / name
     path.write_bytes(body)
-    return str(path.relative_to(DATA_DIR.parent)).replace("\\", "/")
+    try:
+        return str(path.relative_to(DATA_DIR.parent)).replace("\\", "/")
+    except ValueError:
+        # The snapshot directory may be redirected outside the repository
+        # (tests or an external snapshot volume). Store the absolute path so
+        # the snapshot remains addressable instead of failing the fetch.
+        return str(path).replace("\\", "/")
 
 
 def _mime_from(content_type: str, url: str, body: bytes) -> str:

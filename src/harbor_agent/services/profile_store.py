@@ -20,7 +20,8 @@ DEFAULT_PROFILE_ID = "local_student"
 PROTECTED_PREFIX = "hp1:"
 
 
-def init_profile_store(db_path: Path = DB_PATH) -> None:
+def init_profile_store(db_path: Path | None = None) -> None:
+    db_path = db_path or DB_PATH
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(db_path) as conn:
         conn.execute(
@@ -54,7 +55,8 @@ def init_profile_store(db_path: Path = DB_PATH) -> None:
         conn.commit()
 
 
-def load_profile(profile_id: str = DEFAULT_PROFILE_ID, db_path: Path = DB_PATH) -> ApplicantProfileInput | None:
+def load_profile(profile_id: str = DEFAULT_PROFILE_ID, db_path: Path | None = None) -> ApplicantProfileInput | None:
+    db_path = db_path or DB_PATH
     init_profile_store(db_path)
     with sqlite3.connect(db_path) as conn:
         row = conn.execute(
@@ -70,8 +72,9 @@ def load_profile(profile_id: str = DEFAULT_PROFILE_ID, db_path: Path = DB_PATH) 
 def save_profile(
     profile: ApplicantProfileInput,
     profile_id: str = DEFAULT_PROFILE_ID,
-    db_path: Path = DB_PATH,
+    db_path: Path | None = None,
 ) -> ApplicantProfileInput:
+    db_path = db_path or DB_PATH
     init_profile_store(db_path)
     now = datetime.now(timezone.utc).isoformat()
     payload_json = profile.model_dump_json()
@@ -113,8 +116,9 @@ DEFAULT_FIELD_SENSITIVITY: dict[str, str] = {
 
 def load_workspace_state(
     profile_id: str = DEFAULT_PROFILE_ID,
-    db_path: Path = DB_PATH,
+    db_path: Path | None = None,
 ) -> dict[str, Any]:
+    db_path = db_path or DB_PATH
     init_profile_store(db_path)
     with sqlite3.connect(db_path) as conn:
         row = conn.execute(
@@ -156,8 +160,9 @@ def save_workspace_state(
     program_scheme: dict[str, Any] | None = None,
     writing_draft_history: list[dict[str, Any]] | None = None,
     profile_id: str = DEFAULT_PROFILE_ID,
-    db_path: Path = DB_PATH,
+    db_path: Path | None = None,
 ) -> dict[str, Any]:
+    db_path = db_path or DB_PATH
     init_profile_store(db_path)
     now = datetime.now(timezone.utc).isoformat()
     selected_json = json.dumps(list(dict.fromkeys(selected_program_ids)), ensure_ascii=False)
@@ -261,7 +266,8 @@ def _unique_string_list(value: Any) -> list[str]:
 
 
 
-def profile_store_secret(db_path: Path = DB_PATH) -> bytes:
+def profile_store_secret(db_path: Path | None = None) -> bytes:
+    db_path = db_path or DB_PATH
     return _secret_bytes(db_path)
 
 

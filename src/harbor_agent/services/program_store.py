@@ -31,7 +31,8 @@ def _clear_data_loader_caches_after_write() -> None:
         pass
 
 
-def init_program_store(db_path: Path = DB_PATH) -> None:
+def init_program_store(db_path: Path | None = None) -> None:
+    db_path = db_path or DB_PATH
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with _connect(db_path) as conn:
         conn.execute(
@@ -140,9 +141,10 @@ def init_program_store(db_path: Path = DB_PATH) -> None:
 
 def load_programs_from_store(
     *,
-    db_path: Path = DB_PATH,
+    db_path: Path | None = None,
     seed_json_path: Path = PROGRAM_JSON,
 ) -> list[Program]:
+    db_path = db_path or DB_PATH
     init_program_store(db_path)
     if _program_count(db_path) == 0 and seed_json_path.exists():
         seed_program_store(_load_program_json(seed_json_path), db_path=db_path, replace=True)
@@ -153,7 +155,8 @@ def load_programs_from_store(
     return apply_program_url_overrides([Program.model_validate_json(row[0]) for row in rows])
 
 
-def seed_program_store(programs: Iterable[Program], *, db_path: Path = DB_PATH, replace: bool = True) -> int:
+def seed_program_store(programs: Iterable[Program], *, db_path: Path | None = None, replace: bool = True) -> int:
+    db_path = db_path or DB_PATH
     init_program_store(db_path)
     rows = [_program_row(program) for program in apply_program_url_overrides(list(programs))]
     sql = """
@@ -193,8 +196,9 @@ def seed_program_store(programs: Iterable[Program], *, db_path: Path = DB_PATH, 
 def upsert_field_evidence_records(
     records: Iterable[FieldEvidenceRecord],
     *,
-    db_path: Path = DB_PATH,
+    db_path: Path | None = None,
 ) -> int:
+    db_path = db_path or DB_PATH
     init_program_store(db_path)
     rows = [_field_evidence_row(record) for record in records]
     if not rows:
@@ -249,8 +253,9 @@ def upsert_field_evidence_records(
 def load_field_evidence_records(
     program_ids: Iterable[str] | None = None,
     *,
-    db_path: Path = DB_PATH,
+    db_path: Path | None = None,
 ) -> list[FieldEvidenceRecord]:
+    db_path = db_path or DB_PATH
     init_program_store(db_path)
     params: list[str] = []
     where = ""
@@ -491,8 +496,9 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) 
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
 
-def program_catalog_revision(db_path: Path = DB_PATH) -> int:
+def program_catalog_revision(db_path: Path | None = None) -> int:
     """Return a monotonic catalog revision for reliable cross-process cache invalidation."""
+    db_path = db_path or DB_PATH
     init_program_store(db_path)
     with _connect(db_path) as conn:
         row = conn.execute(
