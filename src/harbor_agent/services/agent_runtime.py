@@ -13,6 +13,14 @@ from harbor_agent.services.data_loader import DATA_DIR
 
 DB_PATH = DATA_DIR / "agent_runtime.sqlite"
 
+# Checkpoint retention is intentionally conservative.  A workflow may create
+# several snapshots during its current UTC day, but historical days keep only a
+# couple of recovery points.  The global cap is a safety net for many workflows
+# and prevents the append-only checkpoint table from growing without bound.
+CHECKPOINT_MAX_PER_WORKFLOW = 8
+CHECKPOINT_DAILY_KEEP = 2
+CHECKPOINT_MAX_TOTAL = 200
+
 
 def start_agent_run(workflow_id: str, workflow_name: str | None = None) -> None:
     _ensure_schema()
@@ -853,6 +861,93 @@ def list_multi_agent_workflows(limit: int = 80) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def _prune_checkpoint_history(
+    conn: sqlite3.Connection,
+    *,
+    workflow_id: str,
+    current_day: str,
+) -> None:
+    """Apply per-workflow, per-day and global checkpoint retention.
+
+    Only checkpoint rows are removed here.  The current workflow row, business
+    data, traces, jobs and source/evidence tables are intentionally untouched.
+    The newest checkpoint for an active workflow is protected by the global
+    cleanup pass so a running workflow can still resume.
+    """
+
+    max_per_workflow = max(1, int(CHECKPOINT_MAX_PER_WORKFLOW))
+    daily_keep = max(1, int(CHECKPOINT_DAILY_KEEP))
+    max_total = max(1, int(CHECKPOINT_MAX_TOTAL))
+
+    rows = conn.execute(
+        """
+        SELECT checkpoint_id, substr(created_at, 1, 10) AS checkpoint_day, created_at
+        FROM agent_checkpoints
+        WHERE workflow_id = ?
+        ORDER BY created_at DESC, checkpoint_id DESC
+        """,
+        (workflow_id,),
+    ).fetchall()
+
+    keep_ids: list[str] = []
+    kept_by_day: dict[str, int] = {}
+    for row in rows:
+        day = str(row["checkpoint_day"] or "")
+        day_limit = max_per_workflow if day == current_day else daily_keep
+        if kept_by_day.get(day, 0) >= day_limit:
+            continue
+        keep_ids.append(str(row["checkpoint_id"]))
+        kept_by_day[day] = kept_by_day.get(day, 0) + 1
+
+    # The per-workflow cap wins over the per-day allowance when a workflow has
+    # accumulated several historical days of snapshots.
+    keep_ids = keep_ids[:max_per_workflow]
+    keep_set = set(keep_ids)
+    delete_ids = [str(row["checkpoint_id"]) for row in rows if str(row["checkpoint_id"]) not in keep_set]
+    if delete_ids:
+        conn.executemany(
+            "DELETE FROM agent_checkpoints WHERE checkpoint_id = ?",
+            [(checkpoint_id,) for checkpoint_id in delete_ids],
+        )
+
+    total = int(conn.execute("SELECT COUNT(*) FROM agent_checkpoints").fetchone()[0])
+    excess = total - max_total
+    if excess <= 0:
+        return
+
+    # Prefer deleting old history and terminal workflow snapshots.  Never
+    # delete the newest checkpoint of an active workflow; if every workflow is
+    # active and has only one row, the safety rule deliberately leaves the
+    # count above the global cap rather than making an active workflow
+    # unrecoverable.
+    candidates = conn.execute(
+        """
+        SELECT c.checkpoint_id
+        FROM agent_checkpoints AS c
+        LEFT JOIN multi_agent_workflows AS w ON w.workflow_id = c.workflow_id
+        WHERE c.status IN ('COMPLETED', 'FAILED')
+           OR w.status IN ('COMPLETED', 'FAILED')
+           OR EXISTS (
+                SELECT 1
+                FROM agent_checkpoints AS newer
+                WHERE newer.workflow_id = c.workflow_id
+                  AND (
+                        newer.created_at > c.created_at
+                        OR (newer.created_at = c.created_at AND newer.checkpoint_id > c.checkpoint_id)
+                  )
+           )
+        ORDER BY c.created_at ASC, c.checkpoint_id ASC
+        LIMIT ?
+        """,
+        (excess,),
+    ).fetchall()
+    if candidates:
+        conn.executemany(
+            "DELETE FROM agent_checkpoints WHERE checkpoint_id = ?",
+            [(str(row["checkpoint_id"]),) for row in candidates],
+        )
+
+
 def save_workflow_checkpoint(
     *,
     workflow_id: str,
@@ -876,6 +971,11 @@ def save_workflow_checkpoint(
             """UPDATE multi_agent_workflows SET status = ?, current_agent = ?, state_json = ?, updated_at = ?
             WHERE workflow_id = ?""",
             (status, current_agent, payload, created_at, workflow_id),
+        )
+        _prune_checkpoint_history(
+            conn,
+            workflow_id=workflow_id,
+            current_day=created_at[:10],
         )
         conn.commit()
     return checkpoint_id

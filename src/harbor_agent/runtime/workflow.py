@@ -13,7 +13,7 @@ from harbor_agent.agents.supervisor import SupervisorAgent, SupervisorRoute
 from harbor_agent.llm.provider import RuntimeLLMProvider
 from harbor_agent.observability.events import TraceEventType
 from harbor_agent.observability.trace import RuntimeTracer
-from harbor_agent.runtime.checkpoint import load_checkpoint, save_checkpoint
+from harbor_agent.runtime.checkpoint import CheckpointPolicy, load_checkpoint, save_checkpoint
 from harbor_agent.runtime.decision import AgentDecision, DecisionType
 from harbor_agent.runtime.errors import WorkflowLimitExceeded
 from harbor_agent.runtime.executor import AgentExecutor
@@ -31,7 +31,6 @@ from harbor_agent.services.agent_runtime import (
     create_multi_agent_workflow,
     get_multi_agent_workflow,
     list_multi_agent_workflows,
-    update_multi_agent_workflow,
 )
 from harbor_agent.tools import build_default_tool_registry
 from harbor_agent.tools.registry import ToolRegistry
@@ -71,6 +70,12 @@ class MultiAgentRuntime:
         supervisor_limits = self.limits.model_copy(update={"max_agent_turns_per_agent": max(self.limits.max_agent_turns_per_agent, self.limits.max_workflow_steps)})
         self.supervisor_executor = AgentExecutor(self.tools, supervisor_limits)
         self.executor = AgentExecutor(self.tools, self.limits)
+        self.checkpoint_policy = CheckpointPolicy()
+
+    def _save_checkpoint(self, state: AgentState, *, force: bool = False) -> str | None:
+        """Persist only policy-approved snapshots; forced boundaries always save."""
+
+        return save_checkpoint(state, force=force, policy=self.checkpoint_policy)
 
     def start(self, request: WorkflowStartRequest, *, owner_id: str | None = None) -> AgentState:
         workflow_id = f"maf_{uuid4().hex[:16]}"
@@ -95,7 +100,7 @@ class MultiAgentRuntime:
         tracer = RuntimeTracer(workflow_id)
         tracer.emit(TraceEventType.WORKFLOW_STARTED, output_summary=f"goal={state.goal.value}")
         tracer.emit(TraceEventType.WORKFLOW_START, output_summary=f"goal={state.goal.value}")
-        save_checkpoint(state)
+        self._save_checkpoint(state, force=True)
         return self._run(state, tracer)
 
     def resume(
@@ -176,8 +181,7 @@ class MultiAgentRuntime:
                             ],
                         },
                     )
-                    update_multi_agent_workflow(state.model_dump(mode="json"))
-                    save_checkpoint(state)
+                    self._save_checkpoint(state, force=True)
                     return state
             elif state.verification_conflicts:
                 if resolution.action != "resolve_conflicts":
@@ -238,8 +242,7 @@ class MultiAgentRuntime:
         )
         tracer = RuntimeTracer(workflow_id)
         tracer.emit(TraceEventType.RETRY, output_summary="workflow resumed after user or human input")
-        save_checkpoint(state)
-        update_multi_agent_workflow(state.model_dump(mode="json"))
+        self._save_checkpoint(state, force=True)
         if state.status == WorkflowStatus.WAITING_HUMAN:
             return state
         return self._run(state, tracer)
@@ -272,8 +275,7 @@ class MultiAgentRuntime:
         state = outcome.state
         decision = outcome.decision
         if decision.decision == DecisionType.FAIL or state.status == WorkflowStatus.FAILED:
-            update_multi_agent_workflow(state.model_dump(mode="json"))
-            save_checkpoint(state)
+            self._save_checkpoint(state, force=True)
             tracer.emit(
                 TraceEventType.ERROR,
                 agent_name=supervisor.name,
@@ -288,8 +290,7 @@ class MultiAgentRuntime:
                 state,
                 {"status": WorkflowStatus.FAILED.value, "errors": [*state.errors, str(error)]},
             )
-            update_multi_agent_workflow(state.model_dump(mode="json"))
-            save_checkpoint(state)
+            self._save_checkpoint(state, force=True)
             tracer.emit(TraceEventType.ERROR, agent_name=supervisor.name, error=error)
             return state, None, True
 
@@ -298,13 +299,12 @@ class MultiAgentRuntime:
             agent_name=supervisor.name,
             output_summary=f"selected={route.next_agent}; reason={route.reason}",
         )
-        update_multi_agent_workflow(state.model_dump(mode="json"))
-        save_checkpoint(state)
-        tracer.emit(
-            TraceEventType.CHECKPOINT,
-            agent_name=supervisor.name,
-            output_summary=f"status={state.status.value}",
-        )
+        if self._save_checkpoint(state):
+            tracer.emit(
+                TraceEventType.CHECKPOINT,
+                agent_name=supervisor.name,
+                output_summary=f"status={state.status.value}",
+            )
         return state, route, True
 
     def _run(self, state: AgentState, tracer: RuntimeTracer) -> AgentState:
@@ -323,35 +323,39 @@ class MultiAgentRuntime:
                         output_summary=f"selected={route.next_agent}; reason={route.reason}",
                     )
                 if route.next_agent == "END":
-                    if not model_supervisor:
+                    if state.status == WorkflowStatus.RUNNING:
                         state = apply_state_patch(state, {"status": WorkflowStatus.COMPLETED.value})
-                        update_multi_agent_workflow(state.model_dump(mode="json"))
-                        save_checkpoint(state)
-                        tracer.emit(TraceEventType.CHECKPOINT, agent_name=supervisor.name, output_summary="terminal checkpoint")
+                    self._save_checkpoint(state, force=True)
+                    tracer.emit(
+                        TraceEventType.CHECKPOINT,
+                        agent_name=supervisor.name,
+                        output_summary="terminal checkpoint",
+                    )
                     tracer.emit(TraceEventType.WORKFLOW_COMPLETED, agent_name=supervisor.name, output_summary=route.reason)
                     tracer.emit(TraceEventType.WORKFLOW_END, agent_name=supervisor.name, output_summary=route.reason)
                     return state
                 if route.next_agent == "ASK_USER":
-                    if not model_supervisor:
+                    if state.status == WorkflowStatus.RUNNING:
                         state = apply_state_patch(state, {"status": WorkflowStatus.WAITING_USER.value})
-                        update_multi_agent_workflow(state.model_dump(mode="json"))
-                        save_checkpoint(state)
+                    self._save_checkpoint(state, force=True)
                     tracer.emit(TraceEventType.USER_WAIT, agent_name=supervisor.name, output_summary=route.reason)
                     return state
                 if route.next_agent == "HUMAN_REVIEW":
-                    if not model_supervisor:
+                    if state.status == WorkflowStatus.RUNNING:
                         state = apply_state_patch(state, {"status": WorkflowStatus.WAITING_HUMAN.value})
-                        update_multi_agent_workflow(state.model_dump(mode="json"))
-                        save_checkpoint(state)
+                    self._save_checkpoint(state, force=True)
                     tracer.emit(TraceEventType.HUMAN_WAIT, agent_name=supervisor.name, output_summary=route.reason)
                     return state
                 agent = self.agents[route.next_agent]
                 assert isinstance(agent, BaseAgent)
                 outcome = self.executor.execute_agent(agent, state, tracer)
                 state = outcome.state
-                update_multi_agent_workflow(state.model_dump(mode="json"))
-                save_checkpoint(state)
-                tracer.emit(TraceEventType.CHECKPOINT, agent_name=agent.name, output_summary=f"status={state.status.value}")
+                if self._save_checkpoint(state, force=state.status != WorkflowStatus.RUNNING):
+                    tracer.emit(
+                        TraceEventType.CHECKPOINT,
+                        agent_name=agent.name,
+                        output_summary=f"status={state.status.value}",
+                    )
                 if state.status == WorkflowStatus.WAITING_USER:
                     tracer.emit(TraceEventType.USER_WAIT, agent_name=agent.name, output_summary=state.user_question)
                     return state
@@ -364,8 +368,7 @@ class MultiAgentRuntime:
                     return state
             except WorkflowLimitExceeded as exc:
                 state = apply_state_patch(state, {"status": WorkflowStatus.FAILED.value, "errors": [*state.errors, str(exc)]})
-                update_multi_agent_workflow(state.model_dump(mode="json"))
-                save_checkpoint(state)
+                self._save_checkpoint(state, force=True)
                 tracer.emit(TraceEventType.ERROR, agent_name=supervisor.name, error=exc)
                 return state
         return state
