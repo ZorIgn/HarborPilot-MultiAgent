@@ -9,7 +9,7 @@ from harbor_agent.services import catalog_auto_update, data_acquisition
 from harbor_agent.services import data_loader, program_store
 from harbor_agent.services.catalog_auto_update import CatalogAutoUpdateService
 from harbor_agent.services.data_acquisition import ProgramDataAcquisitionService
-from harbor_agent.models import CatalogAutoUpdateRequest, DataAcquisitionRequest, FieldEvidenceRecord, FieldVerificationStatus
+from harbor_agent.models import CatalogAutoUpdateRequest, DataAcquisitionRequest, FieldEvidenceRecord, FieldVerificationStatus, SourceConnectionMode, SourceScope
 from harbor_agent.services.program_store import init_program_store, load_field_evidence_records, load_programs_from_store, upsert_field_evidence_records
 from harbor_agent.services.program_urls import has_application_entry, has_program_detail_page, is_generic_program_url
 
@@ -356,9 +356,41 @@ def test_data_acquisition_live_mode_persists_field_candidates(monkeypatch) -> No
         return len(records)
 
     monkeypatch.setattr(data_acquisition, "upsert_field_evidence_records", fake_upsert)
+
+    def fake_live_pipeline(packages, checked_at, run_id):
+        del packages, run_id
+        return (
+            [
+                FieldEvidenceRecord(
+                    program_id="hku-master-of-science-in-computer-science-2027",
+                    field_name="deadline",
+                    value="2027-03-15",
+                    cycle="2027-fall",
+                    source_url="https://www.example.edu/programmes/hku-cs",
+                    source_type="official_program_page",
+                    extracted_at=checked_at,
+                    page_hash="sha256:live-fixture",
+                    confidence="high",
+                    source_priority=1,
+                    status=FieldVerificationStatus.official_previous_cycle,
+                    review_required=True,
+                    evidence_snippet="Application deadline: 2027-03-15.",
+                    snapshot_url="https://snapshots.example.edu/live-fixture.html",
+                    source_scope=SourceScope.programme_detail,
+                    binding_status="matched",
+                    binding_score=95,
+                )
+            ],
+            [],
+            {"attempted": 1, "successful": 1, "failed": 0, "binding_warnings": 0},
+            [],
+        )
+
+    monkeypatch.setattr(data_acquisition, "_run_live_snapshot_pipeline_with_run", fake_live_pipeline)
     report = ProgramDataAcquisitionService().run(
         DataAcquisitionRequest(
             selected_program_ids=["hku-master-of-science-in-computer-science-2027"],
+            connection_mode=SourceConnectionMode.real,
             dry_run=False,
             include_community=False,
         )
@@ -369,6 +401,24 @@ def test_data_acquisition_live_mode_persists_field_candidates(monkeypatch) -> No
     assert any(record.field_name == "deadline" for record in captured)
     assert "SQLite" in report.summary
     assert report.execution_ref is None
+
+
+def test_data_acquisition_requires_explicit_real_connection_mode_before_fetch(monkeypatch) -> None:
+    def must_not_fetch(*args, **kwargs):
+        raise AssertionError("mock connection mode must not start a live source fetch")
+
+    monkeypatch.setattr(data_acquisition, "_run_live_snapshot_pipeline_with_run", must_not_fetch)
+    report = ProgramDataAcquisitionService().run(
+        DataAcquisitionRequest(
+            selected_program_ids=["hku-master-of-science-in-computer-science-2027"],
+            dry_run=False,
+            include_community=False,
+        )
+    )
+
+    assert report.mode == "dry_run"
+    assert report.persisted_evidence_count == 0
+    assert any("connection_mode=mock" in warning for warning in report.run_warnings)
 
 def test_catalog_auto_update_live_mode_persists_url_candidates_for_review(monkeypatch) -> None:
     captured: list[FieldEvidenceRecord] = []

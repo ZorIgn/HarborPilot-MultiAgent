@@ -17,6 +17,7 @@ AGENT_TOOL_PERMISSIONS: dict[str, set[str]] = {
         "search_program_catalog",
         "get_program_detail",
         "search_related_programs",
+        "build_source_research_plan",
         "get_program_trust_detail",
     },
     "MatchingAgent": {

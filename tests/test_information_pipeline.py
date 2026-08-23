@@ -205,6 +205,18 @@ def test_non_hkd_tuition_never_enters_hkd_field() -> None:
     assert not any(item.field_name == "tuition_hkd" for item in candidates)
 
 
+def test_hard_admissions_source_candidates_preserve_scale_and_require_review_normalization() -> None:
+    candidates = extract_field_candidates(
+        "Applicants need a minimum GPA of 3.6/4.0. A relevant academic background is required. "
+        "A portfolio is required for admission."
+    )
+    by_field = {item.field_name: item for item in candidates}
+
+    assert by_field["min_gpa"].value == "3.6/4.0"
+    assert "relevant academic background" in str(by_field["required_backgrounds"].value).lower()
+    assert by_field["portfolio_required"].value == "true"
+
+
 def test_shared_institution_index_is_fetched_once_for_multiple_programmes(monkeypatch) -> None:
     first_plan = AcquisitionSourcePlan(
         source_id="demo-index",

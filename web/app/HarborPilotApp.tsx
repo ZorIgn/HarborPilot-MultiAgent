@@ -410,13 +410,15 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
     finally { setLoading(null); }
   }
 
-  async function refreshSources(liveFetch = false) {
+  async function refreshSources() {
     setLoading("data"); setError(null);
     try {
-      const response = await runDataRefresh({ region: "ALL", selected_program_ids: selectedProgramIds, dry_run: !liveFetch, use_llm: realModel, max_sources: selectedProgramIds.length ? 24 : 16 });
+      // Legacy refresh is intentionally offline-only.  Real fetches use the
+      // explicitly named acquisition workflow, which carries real/hybrid mode,
+      // a known programme scope, snapshots, bindings and review candidates.
+      const response = await runDataRefresh({ region: "ALL", selected_program_ids: selectedProgramIds, dry_run: true, use_llm: false, max_sources: selectedProgramIds.length ? 24 : 16 });
       mergeResult({ source_refresh: response });
       setEvidenceGraph(await getEvidenceGraphSummary());
-      if (liveFetch) await reloadSourceHealth();
     } catch (err) { setError(appErrorCopy.sourceRefreshFailed); }
     finally { setLoading(null); }
   }
@@ -424,7 +426,16 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
   async function runAcquisition(dryRun: boolean) {
     setLoading("data"); setError(null);
     try {
-      const response = await runDataAcquisition({ selected_program_ids: selectedProgramIds, dry_run: dryRun, include_community: true, max_sources_per_program: selectedProgramIds.length ? 4 : 1 });
+      const response = await runDataAcquisition({
+        selected_program_ids: selectedProgramIds,
+        // The default throughout the product remains mock.  This admin-only
+        // action is the explicit opt-in point for a real, review-candidate
+        // acquisition run; dry_run=false alone is deliberately insufficient.
+        connection_mode: dryRun ? "mock" : "real",
+        dry_run: dryRun,
+        include_community: true,
+        max_sources_per_program: selectedProgramIds.length ? 4 : 1,
+      });
       setSourceAcquisition(response);
       if (!dryRun) { setEvidenceGraph(await getEvidenceGraphSummary()); await reloadSourceHealth(); }
     } catch (err) { setError(appErrorCopy.sourceRefreshFailed); }
@@ -558,12 +569,12 @@ export function HarborPilotApp({ view }: { view: ViewMode }) {
           {error ? <div className="error-strip"><AlertTriangle size={18} aria-hidden /><span>{error}</span></div> : null}
           {loading ? <GlobalProgress stage={loading} /> : null}
           {!realModel && view === "agent" ? <AdminModelNotice onSample={useSampleProfile} /> : null}
-          {view === "home" ? <DashboardView result={result} selectedMatches={selectedMatches} evidenceGraph={evidenceGraph} sourceHealth={sourceHealth} sourceHealthLoadState={sourceHealthLoadState} sourceRefresh={result?.source_refresh ?? null} loading={loading} onBackground={() => runBackground()} onPrograms={() => runPrograms()} onTimeline={runTimeline} onRefresh={() => refreshSources(false)} /> : null}
+          {view === "home" ? <DashboardView result={result} selectedMatches={selectedMatches} evidenceGraph={evidenceGraph} sourceHealth={sourceHealth} sourceHealthLoadState={sourceHealthLoadState} sourceRefresh={result?.source_refresh ?? null} loading={loading} onBackground={() => runBackground()} onPrograms={() => runPrograms()} onTimeline={runTimeline} onRefresh={refreshSources} /> : null}
           {view === "assessment" ? <AssessmentPage payload={payload} setPayload={persistPayload} result={result} loading={loading} profileSaveStatus={profileSaveStatus} onRun={() => runBackground()} onRunPrograms={() => runPrograms(payload, true)} /> : null}
           {view === "programs" ? <ProgramCatalogPage payload={payload} catalog={visibleCatalog} catalogTotal={catalog.length} catalogError={catalogError} result={result} focusList={focusList} applicationMix={applicationMix} filters={filters} setFilters={setFilters} selectedProgramIds={selectedProgramIds} programScheme={programScheme} onSchemeChange={updateProgramScheme} onToggle={toggleProgram} onInspect={openProgramPackage} onRequestSourceUpdate={requestProgramSourceUpdate} onRun={() => runPrograms()} loading={loading} /> : null}
-          {view === "timeline" ? <TimelinePage selectedMatches={selectedMatches} timeline={result?.timeline ?? []} loading={loading} onRun={runTimeline} onRefresh={() => refreshSources(false)} onTaskStatusChange={updateTimelineTaskStatus} /> : null}
+          {view === "timeline" ? <TimelinePage selectedMatches={selectedMatches} timeline={result?.timeline ?? []} loading={loading} onRun={runTimeline} onRefresh={refreshSources} onTaskStatusChange={updateTimelineTaskStatus} /> : null}
           {view === "writing" ? <WritingWorkspace schema={questionnaireSchema} values={questionnaireValues} onChange={updateQuestionnaire} selectedProgramIds={selectedProgramIds} recommendations={writingProgramOptions} documentType={writingDocumentType} setDocumentType={setWritingDocumentType} targetProgramId={writingTargetProgramId} setTargetProgramId={setWritingTargetProgramId} questions={interviewQuestions} storyCards={result?.story_cards ?? []} writing={result?.writing} rubric={writingReview} draftHistory={writingDraftHistory} onDraftHistoryChange={updateWritingDraftHistory} loading={loading} onInterview={runInterview} onRun={runWriting} /> : null}
-          {view === "agent" ? <AdminDataCenter evidenceGraph={evidenceGraph} runtimeWorkflows={runtimeWorkflows} modelProvider={health?.llm_provider ?? "mock"} modelName={health?.llm_mode ?? "mock"} runtimeMessage={runtimeMessage} runtimeBusy={runtimeBusy} sourceRegistry={sourceRegistry} sourceRefresh={result?.source_refresh ?? null} sourceAcquisition={sourceAcquisition} crawlQueue={crawlQueue} reviewQueue={reviewQueue} reviewPublishResult={reviewPublishResult} reviewBulkPublishResult={reviewBulkPublishResult} scenarioAudit={scenarioAudit} catalogAutoUpdate={catalogAutoUpdate} selectedProgramCount={selectedProgramIds.length} onRefresh={() => refreshSources(false)} onLiveRefresh={() => refreshSources(true)} onRunAcquisition={runAcquisition} onBuildCrawlQueue={buildCrawlQueue} onRunCatalogAutoUpdate={runCatalogUpdate} onLoadReviewQueue={loadReviewQueue} onLoadScenarioAudit={loadScenarioAudit} onPreviewReviewDecision={publishReviewDecision} onBulkPublishReview={publishReviewBatchDecision} onStartRuntimeWorkflow={startSupervisorWorkflow} onRefreshRuntimeWorkflows={refreshRuntimeWorkflows} loading={loading} /> : null}
+          {view === "agent" ? <AdminDataCenter evidenceGraph={evidenceGraph} runtimeWorkflows={runtimeWorkflows} modelProvider={health?.llm_provider ?? "mock"} modelName={health?.llm_mode ?? "mock"} runtimeMessage={runtimeMessage} runtimeBusy={runtimeBusy} sourceRegistry={sourceRegistry} sourceRefresh={result?.source_refresh ?? null} sourceAcquisition={sourceAcquisition} crawlQueue={crawlQueue} reviewQueue={reviewQueue} reviewPublishResult={reviewPublishResult} reviewBulkPublishResult={reviewBulkPublishResult} scenarioAudit={scenarioAudit} catalogAutoUpdate={catalogAutoUpdate} selectedProgramCount={selectedProgramIds.length} onRefresh={refreshSources} onLiveRefresh={refreshSources} onRunAcquisition={runAcquisition} onBuildCrawlQueue={buildCrawlQueue} onRunCatalogAutoUpdate={runCatalogUpdate} onLoadReviewQueue={loadReviewQueue} onLoadScenarioAudit={loadScenarioAudit} onPreviewReviewDecision={publishReviewDecision} onBulkPublishReview={publishReviewBatchDecision} onStartRuntimeWorkflow={startSupervisorWorkflow} onRefreshRuntimeWorkflows={refreshRuntimeWorkflows} loading={loading} /> : null}
           {view === "settings" ? <SettingsView currentProvider={health?.llm_provider ?? "mock"} currentModel={health?.llm_mode ?? "mock"} /> : null}
         </section>
         <ProgramPackageDrawer open={packageOpen} onClose={() => setPackageOpen(false)} dataPackage={programPackage} />

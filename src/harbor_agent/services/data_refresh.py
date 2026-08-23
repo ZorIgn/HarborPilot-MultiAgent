@@ -22,16 +22,11 @@ from harbor_agent.models import (
     SourceTrustLevel,
 )
 from harbor_agent.services.evidence_graph import build_field_evidence_records
+from harbor_agent.services.field_contract import ACQUISITION_FIELD_ORDER, FORMAL_RECOMMENDATION_FIELDS
 from harbor_agent.services.data_loader import DATA_DIR, load_programs, load_source_registry
 from harbor_agent.services.external_candidates import qs_import_summary_for_programs
-from harbor_agent.services.information_store import (
-    _scope_for_source,
-    finish_information_run,
-    latest_source_page_hash,
-    record_fetch_attempt,
-    start_information_run,
-)
-from harbor_agent.services.source_snapshot import snapshot_source
+from harbor_agent.services.information_store import _scope_for_source
+from harbor_agent.services.resolved_program import decision_fact_value, resolve_program_views
 
 
 class DataRefreshService:
@@ -43,55 +38,20 @@ class DataRefreshService:
         self.llm = llm
 
     def run(self, request: DataRefreshRequest) -> DataRefreshReport:
+        if not request.dry_run:
+            raise ValueError(
+                "DataRefreshService is offline compatibility planning only; use ProgramDataAcquisitionService with explicit real/hybrid mode for live fetches."
+            )
         checked_at = datetime.now(UTC)
         run_id = f"refresh_{uuid4().hex[:12]}"
         programs = _select_programs(load_programs(), request)
         sources = _select_sources(request, programs)[: request.max_sources]
-        if not request.dry_run:
-            start_information_run(
-                run_id,
-                mode="live_fetch",
-                selected_program_ids=[program.id for program in programs],
-                planned_source_count=len(sources),
-            )
-        try:
-            source_checks = [
-                self._check_source(
-                    source,
-                    request.dry_run,
-                    checked_at,
-                    run_id=None if request.dry_run else run_id,
-                )
-                for source in sources
-            ]
-        except Exception as exc:
-            if not request.dry_run:
-                finish_information_run(
-                    run_id,
-                    status="FAILED",
-                    attempted_source_count=0,
-                    successful_source_count=0,
-                    failed_source_count=1,
-                    warnings=[f"{type(exc).__name__}: {exc}"],
-                )
-            raise
-        if not request.dry_run:
-            successful_count = sum(check.status == "FETCH_OK" for check in source_checks)
-            failed_count = len(source_checks) - successful_count
-            changed_count = sum(check.content_changed is True for check in source_checks)
-            finish_information_run(
-                run_id,
-                status="NEEDS_REVIEW" if failed_count or changed_count else "COMPLETED",
-                attempted_source_count=len(source_checks),
-                successful_source_count=successful_count,
-                failed_source_count=failed_count,
-                warnings=[
-                    f"{check.source_id}: {check.status}"
-                    for check in source_checks
-                    if check.status != "FETCH_OK"
-                ],
-            )
-        findings = [_finding_for_program(program, sources, source_checks) for program in programs]
+        source_checks = [
+            self._check_source(source, True, checked_at)
+            for source in sources
+        ]
+        views = resolve_program_views(programs)
+        findings = [_finding_for_program(program, sources, source_checks, views[program.id]) for program in programs]
         extraction_results = _build_extraction_results(sources, source_checks, checked_at)
         qs_import_summary = qs_import_summary_for_programs(programs)
         if qs_import_summary["matched_candidate_count"]:
@@ -112,11 +72,7 @@ class DataRefreshService:
             for finding in findings
             if finding.data_status in {DataStatus.stale, DataStatus.pending_review, DataStatus.extracted}
         ]
-        changed_ids = [
-            finding.program_id
-            for finding in findings
-            if any(check.changed_fields for check in source_checks if check.status == "FETCH_OK")
-        ]
+        changed_ids: list[str] = []
         not_published_ids = [
             finding.program_id
             for finding in findings
@@ -131,12 +87,18 @@ class DataRefreshService:
             )
         next_actions = _next_actions_clean(request, findings, qs_import_summary)
 
-        if request.use_llm and self.llm.name != "mock":
-            summary, next_actions = self._llm_summarize(summary, next_actions, findings, source_checks)
+        if request.use_llm:
+            # This compatibility report is a governance projection.  Letting a
+            # free-form model rewrite its summary would create a second,
+            # non-authoritative claim channel, so retain deterministic wording.
+            next_actions.insert(
+                0,
+                "已忽略 use_llm：离线来源检查只输出由结构化 DecisionFact 投影的确定性说明。",
+            )
 
         return DataRefreshReport(
             run_id=run_id,
-            mode="dry_run" if request.dry_run else "live_fetch",
+            mode="dry_run",
             checked_at=checked_at,
             region=request.region,
             selected_program_ids=request.selected_program_ids,
@@ -155,6 +117,9 @@ class DataRefreshService:
             human_review_required=bool(stale_ids or not_published_ids or changed_ids),
             summary=summary,
             next_actions=next_actions,
+            truth_scope="operational_source_check",
+            formal_ready_program_count=sum(view.formal_readiness.value == "PASS" for view in views.values()),
+            formal_blocker_count=sum(len(view.formal_blockers) for view in views.values()),
         )
 
     def _check_source(
@@ -164,120 +129,27 @@ class DataRefreshService:
         checked_at: datetime,
         run_id: str | None = None,
     ) -> SourceCheckResult:
-        if dry_run:
-            return SourceCheckResult(
-                source_id=source.source_id,
-                name=source.name,
-                url=source.url,
-                category=source.category,
-                trust_level=source.trust_level,
-                status="SKIPPED_DRY_RUN",
-                checked_at=checked_at,
-                robots_txt_url=_robots_txt_url(str(source.url)),
-                robots_allowed=None,
-                robots_status="SKIPPED_DRY_RUN",
-                summary=f"Dry-run：登记刷新策略为 {source.refresh_cadence}，本次不联网采集。",
-                next_actions=[
-                    "正式更新时先检查 robots/服务条款，再采集官方索引或项目页。",
-                    "抽取后只生成变化报告，不自动覆盖学校信息。",
-                ],
+        if not dry_run:
+            raise ValueError(
+                "DataRefreshService never performs live fetches; use ProgramDataAcquisitionService with real/hybrid mode."
             )
-
-        previous_page_hash = latest_source_page_hash(source.source_id)
-        snapshot = snapshot_source(str(source.url), dry_run=False, checked_at=checked_at)
-        if run_id:
-            record_fetch_attempt(
-                run_id,
-                program_id=None,
-                source_id=source.source_id,
-                source_scope=_scope_for_source(source),
-                requested_url=str(source.url),
-                snapshot=snapshot,
-                binding_status=(
-                    "index_only"
-                    if _scope_for_source(source).value == "institution_index"
-                    else "not_checked"
-                ),
-            )
-        content_changed = (
-            snapshot.page_hash != previous_page_hash
-            if snapshot.page_hash and previous_page_hash
-            else None
-        )
-        robots_status = "NOT_CHECKED"
-        if snapshot.robots_allowed is True:
-            robots_status = "ALLOWED"
-        elif snapshot.robots_allowed is False:
-            robots_status = "DISALLOWED"
-        elif snapshot.robots_url:
-            robots_status = "ROBOTS_UNAVAILABLE"
-        status = (
-            "FETCH_OK"
-            if snapshot.ok
-            else (
-                "REVIEW_REQUIRED"
-                if snapshot.status in {"ROBOTS_REVIEW_REQUIRED", "CONTENT_REVIEW_REQUIRED"}
-                else "FETCH_FAILED"
-            )
-        )
         return SourceCheckResult(
             source_id=source.source_id,
             name=source.name,
             url=source.url,
             category=source.category,
             trust_level=source.trust_level,
-            status=status,
+            status="SKIPPED_DRY_RUN",
             checked_at=checked_at,
-            http_status=snapshot.http_status,
-            robots_txt_url=snapshot.robots_url,
-            robots_allowed=snapshot.robots_allowed,
-            robots_status=robots_status,
-            page_hash=snapshot.page_hash,
-            previous_page_hash=previous_page_hash,
-            content_changed=content_changed,
-            snapshot_path=snapshot.snapshot_path,
-            snapshot_mime=snapshot.snapshot_mime,
-            content_bytes=snapshot.content_bytes,
-            changed_fields=_field_hints_from_sample(snapshot.text[:4096]) if content_changed else [],
-            summary=(
-                f"已获取源页面 {snapshot.content_bytes} bytes，保存快照并生成 {str(snapshot.page_hash or '')[:19]}...；"
-                "下一步应提取候选信息、对比页面变化，并由人工确认后发布。"
-                if snapshot.ok
-                else f"联网检查未完成：{snapshot.status}。保留为需核验项。"
-            ),
+            robots_txt_url=_robots_txt_url(str(source.url)),
+            robots_allowed=None,
+            robots_status="SKIPPED_DRY_RUN",
+            summary=f"Dry-run：登记刷新策略为 {source.refresh_cadence}，本次不联网采集。",
             next_actions=[
-                "对项目名、截止日期、学费、材料、语言要求分别绑定学校来源。",
-                "对社区/目录来源只保留线索，不写入学校正式要求。",
+                "真实更新请使用受控采集 API，并显式选择 real/hybrid 模式、项目范围和 operator 授权。",
+                "抓取后只产生候选，仍需绑定、人工审核和发布，不能自动覆盖正式事实。",
             ],
         )
-
-    def _llm_summarize(
-        self,
-        summary: str,
-        next_actions: list[str],
-        findings: list[ProgramRefreshFinding],
-        checks: list[SourceCheckResult],
-    ) -> tuple[str, list[str]]:
-        completion = self.llm.complete_json(
-            system=(
-                "You are a data-governance agent for an admissions information platform. "
-                "Summarize only the provided source-check report. Do not invent school facts."
-            ),
-            user=(
-                f"summary={summary}\n"
-                f"program_findings={[item.model_dump(mode='json') for item in findings[:20]]}\n"
-                f"source_checks={[item.model_dump(mode='json') for item in checks[:20]]}\n"
-                f"next_actions={next_actions}"
-            ),
-            schema_hint={"summary": "string", "next_actions": ["string"]},
-        )
-        new_summary = completion.get("summary")
-        actions = completion.get("next_actions")
-        if not isinstance(new_summary, str) or not new_summary.strip():
-            new_summary = summary
-        if not isinstance(actions, list):
-            actions = next_actions
-        return new_summary, [str(item) for item in actions if str(item).strip()][:6]
 
 
 def _select_programs(programs: list[Program], request: DataRefreshRequest) -> list[Program]:
@@ -457,26 +329,12 @@ def _read_snapshot_html(snapshot_path: str) -> str:
 
 
 def _extract_field_candidates(text: str) -> list[FieldExtractionCandidate]:
-    candidates: list[FieldExtractionCandidate] = []
-    deadline = _extract_deadline(text)
-    if deadline:
-        candidates.append(deadline)
-    tuition = _extract_tuition(text)
-    if tuition:
-        candidates.append(tuition)
-    language = _extract_language(text)
-    if language:
-        candidates.append(language)
-    materials = _extract_materials(text)
-    if materials:
-        candidates.append(materials)
-    app_url = _extract_application_hint(text)
-    if app_url:
-        candidates.append(app_url)
-    essay = _extract_essay_prompt(text)
-    if essay:
-        candidates.append(essay)
-    return candidates
+    # Retained for offline compatibility callers.  Reuse the controlled
+    # pipeline extractor so this report cannot silently omit hard GPA,
+    # background or portfolio fields from the operator's review contract.
+    from harbor_agent.services.source_snapshot import extract_field_candidates
+
+    return extract_field_candidates(text)
 
 
 def _extract_deadline(text: str) -> FieldExtractionCandidate | None:
@@ -623,7 +481,7 @@ def _field_value(program: Program, field_name: str) -> str | None:
 
 
 def _reviewer_gate_fields() -> list[str]:
-    return ["deadline", "tuition_hkd", "materials", "language_requirement", "application_url", "essay_prompts"]
+    return list(ACQUISITION_FIELD_ORDER)
 
 
 def _source_priority_from_category(category: SourceCategory) -> int:
@@ -666,51 +524,51 @@ def _finding_for_program(
     program: Program,
     sources: list[SourcePolicy],
     checks: list[SourceCheckResult],
+    view,
 ) -> ProgramRefreshFinding:
-    fields = _fields_requiring_review(program)
+    """Build an offline discovery report from DecisionFacts, never catalog rows.
+
+    ``official_url`` is reserved for a published current fact.  A URL seen in
+    a registry or token-overlap discovery pass is only a candidate and must go
+    through controlled acquisition, binding and reviewer publication first.
+    """
+
+    fields = _fields_requiring_review(view)
     source_ids = [source.source_id for source in sources if source.source_id in _source_ids_for_programs([program])]
-    status = _recommended_status(program, fields)
-    discovered_url = _discovered_program_url(program, checks)
+    status = _recommended_status(view, fields)
+    official_url = decision_fact_value(view, "official_program_url")
     return ProgramRefreshFinding(
         program_id=program.id,
         institution=program.institution_zh or program.institution,
         program_name=program.name_zh or program.name,
         data_status=status,
-        official_url=discovered_url or program.official_program_url or program.source.url,
+        official_url=official_url,
         source_ids=source_ids,
         fields_requiring_review=fields,
         summary=(
-            "关键信息已进入学校官网确认清单。"
+            "当前季字段级正式事实尚未齐全；catalog 与发现链接只作为采集线索。"
             if fields
-            else "当前信息没有发现明显缺口，但仍需在正式递交前再次查看学校页面。"
+            else "当前季字段级正式事实已齐全；提交前仍应重新核对学校页面。"
         ),
         next_actions=_program_actions(program, fields),
     )
 
 
-def _fields_requiring_review(program: Program) -> list[str]:
-    fields: list[str] = []
-    if program.source.field_coverage != "complete":
-        fields.extend(["deadline", "tuition_hkd", "materials", "requirements"])
-    if program.deadline == "NOT_PUBLISHED":
-        fields.append("deadline")
-    if program.last_verified_at is None:
-        fields.append("last_verified_at")
-    if not program.official_program_url:
-        fields.append("official_program_url")
-    if not program.application_url:
-        fields.append("application_url")
-    return sorted(set(fields))
+def _fields_requiring_review(view) -> list[str]:
+    return [
+        field_name
+        for field_name in FORMAL_RECOMMENDATION_FIELDS
+        if not view.fact(field_name).formal_use_ready
+    ]
 
 
-def _recommended_status(program: Program, fields: list[str]) -> DataStatus:
-    if program.deadline == "NOT_PUBLISHED":
+def _recommended_status(view, fields: list[str]) -> DataStatus:
+    deadline = view.fact("deadline")
+    if deadline.provenance_status.value == "NOT_PUBLISHED":
         return DataStatus.not_published
-    if program.data_status == DataStatus.verified and not fields:
+    if not fields and view.formal_readiness.value == "PASS":
         return DataStatus.verified
-    if program.data_status in {DataStatus.changed, DataStatus.stale}:
-        return program.data_status
-    return DataStatus.pending_review if fields else program.data_status
+    return DataStatus.pending_review
 
 
 def _program_actions(program: Program, fields: list[str]) -> list[str]:
@@ -719,7 +577,7 @@ def _program_actions(program: Program, fields: list[str]) -> list[str]:
         actions.append("打开官方项目页或申请系统，确认 2027 Fall 申请开放时间和最终截止日期。")
     if "tuition_hkd" in fields:
         actions.append("确认学费币种、全日制/兼读制差异和是否按学年收费。")
-    if "materials" in fields or "requirements" in fields:
+    if any(field in fields for field in {"materials", "min_gpa", "language_requirement", "required_backgrounds", "portfolio_required"}):
         actions.append("核对材料清单、语言要求、先修课、作品集或工作经验要求。")
     if program.community_signals:
         actions.append("社区线索只用于发现别名，需回到学校页面确认。")
@@ -791,7 +649,10 @@ def _qs_import_extraction_result(qs_import_summary: dict, checked_at: datetime) 
                     value=str(closes_at),
                     evidence_snippet=str(candidate.get("evidence") or "")[:500],
                     confidence="medium",
-                    status=FieldVerificationStatus.official_previous_cycle,
+                    # A GitHub/QS discovery import is a lead, never official
+                    # prior-cycle evidence.  It requires an independent
+                    # official snapshot, binding and review before publication.
+                    status=FieldVerificationStatus.model_inferred,
                     review_required=True,
                 )
             )
@@ -803,7 +664,7 @@ def _qs_import_extraction_result(qs_import_summary: dict, checked_at: datetime) 
                     value=str(application_url),
                     evidence_snippet="GradWindow 导入的学校申请入口线索，需回到学校官网确认后发布。",
                     confidence="medium",
-                    status=FieldVerificationStatus.official_previous_cycle,
+                    status=FieldVerificationStatus.model_inferred,
                     review_required=True,
                 )
             )
@@ -817,7 +678,7 @@ def _qs_import_extraction_result(qs_import_summary: dict, checked_at: datetime) 
         extracted_at=checked_at,
         parser="not_run",
         extracted_fields=extracted_fields[:24],
-        unresolved_fields=["tuition_hkd", "language_requirement", "materials", "current_cycle_deadline"],
+        unresolved_fields=list(ACQUISITION_FIELD_ORDER),
         raw_json=qs_import_summary,
         execution_ref=None,
     )

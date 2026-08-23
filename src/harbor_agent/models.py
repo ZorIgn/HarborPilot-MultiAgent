@@ -76,6 +76,14 @@ class SourceScope(str, Enum):
     methodology = "methodology"
 
 
+class SourceConnectionMode(str, Enum):
+    """Whether an acquisition request may contact live external sources."""
+
+    mock = "mock"
+    real = "real"
+    hybrid = "hybrid"
+
+
 class WorkflowStage(str, Enum):
     profile = "PROFILE"
     matching = "MATCHING"
@@ -296,6 +304,11 @@ class ExecutionReference(BaseModel):
 
 
 class FieldEvidenceRecord(BaseModel):
+    # ``evidence_id`` is the durable key of the candidate record in SQLite.
+    # Legacy JSON records do not have one, which is intentional: their value
+    # may be useful for discovery, but it must not silently become a formal
+    # decision fact.
+    evidence_id: str | None = None
     program_id: str
     field_name: str
     value: str | None = None
@@ -366,6 +379,23 @@ class EvidenceGraphSummary(BaseModel):
     production_schema: list[str]
     reviewer_gate_fields: list[str]
     sample_records: list[FieldEvidenceRecord] = Field(default_factory=list)
+
+
+class DecisionCoverageSummary(BaseModel):
+    """Database-derived truth-coverage report, never a catalog-size proxy."""
+
+    generated_at: datetime
+    cycle: str | None = None
+    program_count: int
+    formal_ready_program_count: int
+    decision_fact_status_breakdown: dict[str, int] = Field(default_factory=dict)
+    required_field_formal_coverage: dict[str, int] = Field(default_factory=dict)
+    current_verified_record_count: int = 0
+    pending_review_record_count: int = 0
+    records_missing_source_scope: int = 0
+    programs_with_community_signals: int = 0
+    community_signal_collection_status: Literal["NOT_COLLECTED", "PARTIAL", "PRESENT"] = "NOT_COLLECTED"
+    blockers: list[str] = Field(default_factory=list)
 
 
 class ProgramTrustDetail(BaseModel):
@@ -467,6 +497,9 @@ class ProgramDataPackage(BaseModel):
 class DataAcquisitionRequest(BaseModel):
     selected_program_ids: list[str] = Field(default_factory=list)
     include_community: bool = True
+    # Safe by default: setting ``dry_run=False`` alone is never authority to
+    # contact the public web.  An operator must opt into real/hybrid explicitly.
+    connection_mode: SourceConnectionMode = SourceConnectionMode.mock
     dry_run: bool = True
     max_sources_per_program: int = Field(default=8, ge=1, le=30)
 
@@ -641,6 +674,9 @@ class DataRefreshRequest(BaseModel):
     region: Literal["HK", "SG", "ALL"] = "ALL"
     institution: str | None = None
     selected_program_ids: list[str] = Field(default_factory=list)
+    # Deprecated compatibility endpoint.  It remains offline/source-health
+    # planning only; live official acquisition must use DataAcquisitionRequest
+    # with an explicit ``real`` or ``hybrid`` connection mode.
     dry_run: bool = True
     use_llm: bool = False
     max_sources: int = Field(default=16, ge=1, le=80)
@@ -667,6 +703,9 @@ class DataRefreshReport(BaseModel):
     human_review_required: bool
     summary: str
     next_actions: list[str] = Field(default_factory=list)
+    truth_scope: Literal["operational_source_check", "runtime_evidence_projection"] = "operational_source_check"
+    formal_ready_program_count: int = 0
+    formal_blocker_count: int = 0
 
 
 class CatalogAutoUpdateRequest(BaseModel):
@@ -810,6 +849,136 @@ class DecisionStatus(str, Enum):
     UNKNOWN = "UNKNOWN"
 
 
+class FactProvenanceStatus(str, Enum):
+    """Trust state of the evidence backing one resolved programme field.
+
+    This is deliberately separate from :class:`DecisionStatus`.  A value can
+    be perfectly parseable but still be ``UNVERIFIED``; consumers must then
+    receive ``UNKNOWN`` rather than treating a catalogue seed as a fact.
+    """
+
+    VERIFIED_CURRENT = "VERIFIED_CURRENT"
+    REVIEWED_PREVIOUS = "REVIEWED_PREVIOUS"
+    UNVERIFIED = "UNVERIFIED"
+    CONFLICTED = "CONFLICTED"
+    STALE = "STALE"
+    NOT_PUBLISHED = "NOT_PUBLISHED"
+    REVOKED = "REVOKED"
+
+
+class DecisionFact(BaseModel):
+    """One field-level fact that is safe (or explicitly unsafe) for decisions.
+
+    ``catalog_value`` retains a discovery hint for an explorer UI, while
+    ``normalized_value`` is populated only when the record clears the formal
+    resolver checks.  Decision consumers must use ``normalized_value`` and
+    ``decision_status`` rather than a value embedded in ``Program``.
+    """
+
+    fact_id: str
+    program_id: str
+    field_name: str
+    cycle: str | None = None
+    catalog_value: Any | None = None
+    raw_value: Any | None = None
+    normalized_value: Any | None = None
+    decision_status: DecisionStatus = DecisionStatus.UNKNOWN
+    provenance_status: FactProvenanceStatus = FactProvenanceStatus.UNVERIFIED
+    formal_use_ready: bool = False
+    evidence_id: str | None = None
+    source_url: HttpUrl | str | None = None
+    source_scope: SourceScope | None = None
+    source_type: str | None = None
+    source_locator: str | None = None
+    evidence_quote: str | None = None
+    snapshot_url: HttpUrl | str | None = None
+    page_hash: str | None = None
+    observed_at: datetime | None = None
+    verified_at: datetime | None = None
+    reviewer_id: str | None = None
+    review_decision_id: str | None = None
+    conflict_id: str | None = None
+    blockers: list[str] = Field(default_factory=list)
+
+
+class ResolvedProgramView(BaseModel):
+    """Single decision read model for a catalogue programme and one cycle.
+
+    ``catalog`` is present solely for stable identity, rendering and exploratory
+    retrieval.  Facts are projected only from published, source-complete
+    evidence.  This makes the source boundary inspectable at every consumer.
+    """
+
+    program_id: str
+    cycle: str
+    catalog: "Program"
+    facts: dict[str, DecisionFact] = Field(default_factory=dict)
+    conflict_ids: list[str] = Field(default_factory=list)
+    formal_readiness: DecisionStatus = DecisionStatus.UNKNOWN
+    formal_blockers: list[str] = Field(default_factory=list)
+    provenance_summary: dict[str, int] = Field(default_factory=dict)
+
+    def fact(self, field_name: str) -> DecisionFact:
+        return self.facts.get(
+            field_name,
+            DecisionFact(
+                fact_id=f"missing:{self.program_id}:{field_name}",
+                program_id=self.program_id,
+                field_name=field_name,
+                cycle=self.cycle,
+                blockers=["未找到该字段的已发布证据。"],
+            ),
+        )
+
+
+class ClaimValidationStatus(str, Enum):
+    SUPPORTED = "SUPPORTED"
+    UNSUPPORTED = "UNSUPPORTED"
+    CONFLICTED = "CONFLICTED"
+    BLOCKED = "BLOCKED"
+
+
+class ClaimNode(BaseModel):
+    """Atomic objective claim in a recommendation or writing draft."""
+
+    claim_id: str
+    text: str
+    claim_type: Literal["student_fact", "program_fact", "recommendation", "writing"]
+    program_id: str | None = None
+    required_for_formal: bool = True
+    status: ClaimValidationStatus = ClaimValidationStatus.UNSUPPORTED
+    decision_fact_ids: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    blockers: list[str] = Field(default_factory=list)
+
+
+class ClaimEdge(BaseModel):
+    """A typed relationship from evidence/facts to one claim."""
+
+    source_id: str
+    target_claim_id: str
+    relation: Literal["SUPPORTS", "CONTRADICTS", "QUALIFIES"]
+    reason: str = ""
+
+
+class ClaimGraph(BaseModel):
+    """Deterministic claim/evidence graph used by writing and Critic gates."""
+
+    graph_id: str
+    nodes: list[ClaimNode] = Field(default_factory=list)
+    edges: list[ClaimEdge] = Field(default_factory=list)
+    formal_status: DecisionStatus = DecisionStatus.UNKNOWN
+    blockers: list[str] = Field(default_factory=list)
+
+
+class CriticReadiness(str, Enum):
+    """Separates formal approval, preliminary completion and a hard block."""
+
+    FORMAL_PASS = "FORMAL_PASS"
+    PRELIMINARY_COMPLETE = "PRELIMINARY_COMPLETE"
+    BLOCKED = "BLOCKED"
+
+
 class RuleSeverity(str, Enum):
     BLOCKING = "BLOCKING"
     WARNING = "WARNING"
@@ -932,6 +1101,12 @@ class ProgramMatch(BaseModel):
     intent_reasons: list[str] = Field(default_factory=list)
     hard_rule_passed: bool
     formal_recommendation: bool = False
+    # A compatibility ``Program`` remains embedded for catalogue rendering,
+    # but all hard-decision provenance is carried separately.  Consumers must
+    # never infer formal readiness from ``program.data_status`` alone.
+    decision_facts: dict[str, DecisionFact] = Field(default_factory=dict)
+    formal_gate_status: DecisionStatus = DecisionStatus.UNKNOWN
+    formal_blockers: list[str] = Field(default_factory=list)
     data_status: DataStatus = DataStatus.pending_review
     reasons: list[str]
     risks: list[str]
@@ -1003,6 +1178,17 @@ class WritingDraft(BaseModel):
     reference_package: list[str] = Field(default_factory=list)
     risk_controls: list[str] = Field(default_factory=list)
     review_flags: list[str]
+    # A draft may be useful for revision long before it is safe for formal
+    # programme-specific use.  These fields carry the deterministic ClaimGraph
+    # result instead of asking clients to infer readiness from prose flags.
+    claim_graph: ClaimGraph | None = None
+    claim_grounding_ready: bool = False
+    # This is copied from the Supervisor/Critic runtime when a draft is
+    # delivered through a workflow.  Direct outline helpers deliberately use
+    # a non-formal status, so clients cannot infer approval from prose alone.
+    delivery_status: CriticReadiness | Literal["UNREVIEWED"] = "UNREVIEWED"
+    formal_use_ready: bool = False
+    formal_blockers: list[str] = Field(default_factory=list)
 
 
 class WritingInterviewQuestion(BaseModel):
@@ -1032,6 +1218,17 @@ class WritingReviewRubric(BaseModel):
     export_recommendation: Literal["建议导出", "修改后导出", "不建议导出"]
     issues: list[str] = Field(default_factory=list)
     next_actions: list[str] = Field(default_factory=list)
+    # The standalone rubric is an inspection aid.  It must surface the same
+    # ClaimGraph boundary as the runtime instead of promoting a clean-looking
+    # draft solely because ``review_flags`` happened to be empty.
+    claim_graph: ClaimGraph | None = None
+    formal_status: DecisionStatus = DecisionStatus.UNKNOWN
+    # The request carries client-controlled prose, story cards and draft
+    # metadata.  It can therefore be a deterministic preliminary lint only;
+    # the Supervisor/Critic workflow is the sole producer of FORMAL_PASS.
+    delivery_status: Literal["PRELIMINARY_COMPLETE", "BLOCKED"] = "PRELIMINARY_COMPLETE"
+    formal_use_ready: bool = False
+    formal_blockers: list[str] = Field(default_factory=list)
 
 
 class ProgramCompareRow(BaseModel):
@@ -1204,6 +1401,10 @@ class WritingPlanResult(BaseModel):
     writing: WritingDraft
     review: dict[str, Any]
     trace: list[AgentTraceEvent]
+    critic_readiness: CriticReadiness | None = None
+    delivery_status: str = "UNREVIEWED"
+    formal_use_ready: bool = False
+    formal_blockers: list[str] = Field(default_factory=list)
 
 
 class WorkflowResult(BaseModel):

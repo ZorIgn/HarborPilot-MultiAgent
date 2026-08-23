@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
 import re
 from typing import Literal
 
 from harbor_agent.core.llm import LLMProvider
 from harbor_agent.core.rules import display_gpa
 from harbor_agent.models import (
+    CriticReadiness,
+    DecisionStatus,
     NormalizedProfile,
     ProgramMatch,
     QuestionnaireAnswer,
@@ -14,6 +17,9 @@ from harbor_agent.models import (
     WritingInterviewQuestion,
     WritingReviewRubric,
 )
+from harbor_agent.services.claim_graph import build_claim_graph, claim_graph_passed
+from harbor_agent.services.data_loader import load_programs
+from harbor_agent.services.resolved_program import resolve_program_view
 
 DocumentType = Literal["PS", "SOP", "CV", "ESSAY", "REFERENCE_PACKAGE"]
 
@@ -148,7 +154,10 @@ class WritingComposer:
                         f"target_school={school_name}\n"
                         f"target_program={target_name}\n"
                         f"profile={profile.model_dump_json()}\n"
-                        f"selected_program={target.model_dump_json() if target else '{}'}\n"
+                        # Do not expose raw catalogue values or legacy evidence
+                        # to a live model.  Objective programme assertions can
+                        # only use this narrow DecisionFact projection.
+                        f"selected_program={json.dumps(_writing_program_context(target), ensure_ascii=False)}\n"
                         f"story_cards={[card.model_dump(mode='json') for card in story_cards]}\n"
                         f"style_guide={STYLE_GUIDE}\n"
                         f"document_rules={DOCUMENT_TYPE_RULES.get(doc_type, [])}\n"
@@ -229,7 +238,7 @@ class WritingComposer:
         paragraph_drafts = _paragraph_drafts(draft_zh, draft_en)
         doc_label = {"REFERENCE_PACKAGE": "推荐信", "PS": "PS", "SOP": "SOP", "CV": "CV", "ESSAY": "Essay"}.get(doc_type, doc_type)
         title = f"{school_name} {target_name} {doc_label} 中英文草稿"
-        return WritingDraft(
+        draft = WritingDraft(
             document_type=doc_type,
             version_id="v1-student-story",
             title=title,
@@ -248,6 +257,7 @@ class WritingComposer:
             risk_controls=risk_controls,
             review_flags=flags,
         )
+        return _preliminary_writing_draft(draft, [target] if target is not None else [])
 
     def interview_questions(
         self,
@@ -380,16 +390,46 @@ class WritingComposer:
     def review_rubric(self, draft: WritingDraft, story_cards: list[StoryCard]) -> WritingReviewRubric:
         text = draft.draft_en or draft.draft or ""
         word_count = len(text.split())
-        unsupported = _unsupported_school_claim_count(
-            "\n".join([text, draft.draft_zh or "", *draft.school_customization])
+        selected_programs = [
+            program
+            for program in load_programs()
+            if program.id in set(draft.target_program_ids)
+        ]
+        graph = build_claim_graph(draft, selected_programs)
+        claim_grounding_ready = claim_graph_passed(graph)
+        unsupported = sum(
+            node.required_for_formal and node.status.value != "SUPPORTED"
+            for node in graph.nodes
+        )
+        formal_blockers = list(dict.fromkeys([
+            *list(graph.blockers),
+            *[str(item).strip() for item in draft.formal_blockers if str(item).strip()],
+        ]))
+        # A client-supplied draft is always an inspection artifact.  Fields
+        # such as ``formal_use_ready`` are untrusted input here, so even a
+        # forged completed-runtime response cannot recreate a formal delivery.
+        # The only formal pathway is a server-held runtime state that has been
+        # independently checked by WritingAgent, Critic and Supervisor.
+        formal_blockers.append(
+            "无状态 writing-review 只做 ClaimGraph 预检查；客户端提交的草稿不能取得 Supervisor/Critic 正式交付许可。"
+        )
+        delivery_status = (
+            CriticReadiness.PRELIMINARY_COMPLETE.value
+            if claim_grounding_ready
+            else CriticReadiness.BLOCKED.value
         )
         issues = list(draft.review_flags)
         if unsupported:
-            issues.append("\u6587\u4e66\u4e2d\u4ecd\u6709\u672a\u7ed1\u5b9a\u5b98\u7f51\u8bc1\u636e\u7684\u5b66\u6821\u5b9a\u5236\u58f0\u660e\uff0c\u5bfc\u51fa\u524d\u9700\u8981\u5220\u9664\u6216\u8865\u6765\u6e90\u3002")
+            issues.append("文书中仍有未绑定官网证据的学校定制声明，导出前需要删除或补来源。")
         if not draft.prompt_requirements:
             issues.append("尚未读取项目文书题目和字数限制。")
         if any(card.completeness < 60 for card in story_cards):
             issues.append("部分故事卡缺少行动、结果或反思。")
+        if not claim_grounding_ready:
+            issues.append("ClaimGraph 未能将全部必需的项目事实绑定到当前已发布的 DecisionFact。")
+        formal_blockers = list(dict.fromkeys(formal_blockers))
+        if formal_blockers:
+            issues.append("当前仅可作为带复核标记的草稿，不能视为正式可用文书。")
         return WritingReviewRubric(
             prompt_coverage="2/4" if draft.prompt_requirements else "1/4",
             program_specificity="2/5" if draft.school_customization else "1/5",
@@ -398,13 +438,21 @@ class WritingComposer:
             cv_conflicts=0,
             word_count_status=_word_count_status(word_count),
             template_language="中" if word_count else "高",
-            export_recommendation="修改后导出" if issues else "建议导出",
-            issues=issues[:8],
+            # Do not issue even a conditional export recommendation from a
+            # client-supplied draft.  A reviewer must use the runtime artifact
+            # result, whose formal readiness cannot be fabricated by the UI.
+            export_recommendation="不建议导出",
+            issues=list(dict.fromkeys(issues))[:8],
             next_actions=[
                 "先粘贴项目 prompt 原文和字数限制。",
                 "补充每段经历的技术动作、数据规模和验证方法。",
                 "导出前逐句检查事实绑定，不写未经确认的课程、教授或录取结果。",
             ],
+            claim_graph=graph,
+            formal_status=graph.formal_status,
+            delivery_status=delivery_status,
+            formal_use_ready=False,
+            formal_blockers=formal_blockers,
         )
 
 
@@ -450,9 +498,9 @@ def _source_bound_school_customization(
             continue
         kept.append(text)
     for item in fallback:
-        if item not in kept and (_is_source_item(item) or not _is_unsupported_school_claim(item, target)):
+        if item not in kept and (_is_source_item(item, target) or not _is_unsupported_school_claim(item, target)):
             kept.append(item)
-    if target and not any(_is_source_item(item) for item in kept):
+    if target and not any(_is_source_item(item, target) for item in kept):
         kept.append("\u5b66\u6821\u5b9a\u5236\u53e5\u8bc1\u636e\u6765\u6e90\uff1a\u672a\u627e\u5230\u9879\u76ee\u8be6\u60c5\u9875\uff0c\u6b63\u5f0f\u7a3f\u4e0d\u5f97\u5199\u5177\u4f53\u8bfe\u7a0b\u3001\u6559\u6388\u3001\u5c31\u4e1a\u6570\u636e\u6216\u5f55\u53d6\u6982\u7387\u3002")
     return _dedupe(kept)[:8], removed
 
@@ -473,8 +521,12 @@ def _remove_unsupported_school_claims(text: str, target: ProgramMatch | None) ->
             removed += 1
             continue
         cleaned.append(sentence + delimiter)
-    sanitized = "".join(cleaned).strip()
-    return sanitized or text, removed
+    # Never restore the original text when every sentence was rejected.  The
+    # old fallback made a flag claim that a sentence had been removed while it
+    # was still present in the draft, which could then slip through a
+    # string-based review path.  A caller can render the empty result as a
+    # material gap; it must not silently reintroduce an unsupported claim.
+    return "".join(cleaned).strip(), removed
 
 
 def _unsupported_school_claim_count(text: str, target: ProgramMatch | None = None) -> int:
@@ -487,7 +539,9 @@ def _unsupported_school_claim_count(text: str, target: ProgramMatch | None = Non
 def _is_unsupported_school_claim(text: str, target: ProgramMatch | None) -> bool:
     if not _has_risky_school_claim(text, target):
         return False
-    return not (_has_source_url(text) or _is_boundary_warning(text))
+    # An arbitrary URL is a citation-shaped string, not evidence.  It must be
+    # traceable to a current published DecisionFact for this programme.
+    return not (_has_formal_source_url(text, target) or _is_boundary_warning(text))
 
 
 def _has_risky_school_claim(text: str, target: ProgramMatch | None) -> bool:
@@ -539,8 +593,30 @@ def _has_source_url(text: str) -> bool:
     return bool(_URL_PATTERN.search(text))
 
 
-def _is_source_item(text: str) -> bool:
-    return "\u5b66\u6821\u5b9a\u5236\u53e5\u8bc1\u636e\u6765\u6e90" in text or "customization evidence source" in text.lower() or _has_source_url(text)
+def _has_formal_source_url(text: str, target: ProgramMatch | None) -> bool:
+    """Return true only for URLs represented by current DecisionFacts."""
+
+    if not _has_source_url(text) or target is None:
+        return False
+    view = _resolved_programme_view(target)
+    if view is None:
+        return False
+    urls = {
+        str(value)
+        for fact in view.facts.values()
+        if fact.formal_use_ready
+        for value in (fact.source_url, fact.snapshot_url)
+        if value
+    }
+    return any(url in text for url in urls)
+
+
+def _is_source_item(text: str, target: ProgramMatch | None = None) -> bool:
+    return (
+        "\u5b66\u6821\u5b9a\u5236\u53e5\u8bc1\u636e\u6765\u6e90" in text
+        or "customization evidence source" in text.lower()
+        or _has_formal_source_url(text, target)
+    )
 
 
 def _is_boundary_warning(text: str) -> bool:
@@ -796,8 +872,9 @@ def _ensure_minimum_application_draft(
 def _why_program_sentence(target: ProgramMatch | None) -> str:
     if not target:
         return "当前还没有选定项目，因此 Why Program 只能保留为待补充段落。"
-    source_label = _student_source_status_label(target.program.data_status.value)
-    source_note = "项目来源已可用于草稿定制" if target.program.data_status.value == "VERIFIED" else "学校定制句只能引用已绑定的项目页、申请系统或官方 PDF 来源"
+    formal_ready = _formal_programme_ready(target)
+    source_label = "当前季字段级已审核事实" if formal_ready else "当前季正式事实尚未齐全"
+    source_note = "项目定制句可使用已发布 DecisionFact 的来源" if formal_ready else "学校定制句只能保留结构，等待项目页、申请系统或官方 PDF 的已发布事实"
     return (
         f"目前可确认的目标是 {target.program.institution_zh or target.program.institution} "
         f"{target.program.name_zh or target.program.name}，项目来源为{source_label}，{source_note}。"
@@ -807,7 +884,7 @@ def _why_program_sentence(target: ProgramMatch | None) -> str:
 def _why_program_sentence_en(target: ProgramMatch | None) -> str:
     if not target:
         return "No target programme has been selected, so this section should remain a structure note."
-    source_label = _student_source_status_label_en(target.program.data_status.value)
+    source_label = "current, reviewed field-level facts" if _formal_programme_ready(target) else "incomplete current formal facts"
     return (
         f"The selected programme is {_target_name_en(target)} at {_school_name_en(target)}. "
         f"The current source coverage is {source_label}; programme-specific claims must be tied to the official programme page, application system or official PDF before final submission."
@@ -919,7 +996,7 @@ def _material_gaps(story_cards: list[StoryCard], target: ProgramMatch | None, do
         gaps.append("部分故事卡缺少行动、结果或反思，当前只能生成结构草稿。")
     if target is None:
         gaps.append("选择目标项目后，再补充 Why Program 所需的官网课程、培养目标或申请要求。")
-    elif document_type in {"PS", "SOP", "ESSAY"} and target.program.data_status.value != "VERIFIED":
+    elif document_type in {"PS", "SOP", "ESSAY"} and not _formal_programme_ready(target):
         gaps.append("目标项目官网信息还不完整，学校定制内容只能作为草稿方向，不能写成最终事实。")
     return gaps[:8]
 
@@ -938,7 +1015,7 @@ def _review_flags(story_cards: list[StoryCard], target: ProgramMatch | None) -> 
         flags.append("尚未填写足够故事素材，当前稿件只能作为结构示例。")
     if target is None:
         flags.append("尚未指定具体学校/项目，Why Program 不能进入最终稿。")
-    elif target.program.data_status.value != "VERIFIED":
+    elif not _formal_programme_ready(target):
         flags.append("Why Program 需要绑定项目页、申请系统或官方 PDF 中能查到的课程、培养目标或申请要求。")
     return flags
 
@@ -947,16 +1024,18 @@ def _school_customization(target: ProgramMatch | None, document_type: DocumentTy
     if not target:
         return ["尚未选定学校/项目，不能写最终版 Why Program。"]
     program = target.program
-    evidence_url = program.official_program_url or program.application_url
+    view = _resolved_programme_view(target)
+    evidence_url = _formal_writing_source_url(view)
+    formal_ready = bool(view and view.formal_readiness == DecisionStatus.PASS)
     items = [
         f"目标项目：{program.institution_zh or program.institution} - {program.name_zh or program.name}",
         f"学院/开设单位：{program.school_zh or program.school}",
-        f"项目来源：{_student_source_status_label(program.data_status.value)}；需核验信息不得写成确定事实。",
+        "项目来源：当前季字段级正式事实已齐全。" if formal_ready else "项目来源：当前季正式事实未齐全；需核验信息不得写成确定事实。",
     ]
     if evidence_url:
         items.append(f"学校定制句证据来源：{evidence_url}")
     else:
-        items.append("学校定制句证据来源：未找到项目详情页，正式稿不得写具体课程、教授、就业数据或录取结果。")
+        items.append("学校定制句证据来源：没有可用于正式学校定制句的已发布 DecisionFact；正式稿不得写具体课程、教授、就业数据或录取结果。")
     if document_type in {"PS", "SOP", "ESSAY"}:
         items.append("正式稿需绑定官网课程、培养目标、essay prompt 或申请要求。")
     return items
@@ -971,7 +1050,7 @@ def _prompt_requirements(target: ProgramMatch | None, document_type: DocumentTyp
         items.append("CV 需按项目偏好调整技能顺序、项目标题和量化结果。")
     if document_type == "REFERENCE_PACKAGE":
         items.append("推荐信素材必须来自推荐人能观察到的课程、项目或研究互动。")
-    if target and target.program.data_status.value != "VERIFIED":
+    if target and not _formal_programme_ready(target):
         items.append("缺少项目页证据时，Why Program 只保留结构，不写具体课程、教授、就业数据或录取结果。")
     return items
 
@@ -1046,9 +1125,109 @@ def _risk_controls(story_cards: list[StoryCard], target: ProgramMatch | None) ->
     ]
     if any(card.completeness < 60 for card in story_cards):
         controls.append("部分故事卡完整度不足，当前稿件更适合做结构样例。")
-    if target and target.program.data_status.value != "VERIFIED":
+    if target and not _formal_programme_ready(target):
         controls.append("Why Program 的学校定制句必须绑定项目页、申请系统或官方 PDF 来源后才能进入最终稿。")
     return controls
+
+
+def _resolved_programme_view(target: ProgramMatch | None):
+    if target is None:
+        return None
+    try:
+        return resolve_program_view(target.program)
+    except Exception:
+        return None
+
+
+def _formal_programme_ready(target: ProgramMatch | None) -> bool:
+    view = _resolved_programme_view(target)
+    return bool(view and view.formal_readiness == DecisionStatus.PASS)
+
+
+def _formal_writing_source_url(view) -> str | None:
+    if view is None:
+        return None
+    for field_name in ("official_program_url", "application_url"):
+        fact = view.fact(field_name)
+        if fact.formal_use_ready and fact.normalized_value:
+            return str(fact.normalized_value)
+        if fact.formal_use_ready and fact.source_url:
+            return str(fact.source_url)
+    return None
+
+
+def _writing_program_context(target: ProgramMatch | None) -> dict:
+    """Return the only programme payload permitted in a live-model prompt."""
+
+    if target is None:
+        return {
+            "target_selected": False,
+            "formal_facts": {},
+            "formal_blockers": ["No target programme selected."],
+        }
+    view = _resolved_programme_view(target)
+    identity = {
+        "institution": target.program.institution_zh or target.program.institution,
+        "program_name": target.program.name_zh or target.program.name,
+    }
+    if view is None:
+        return {
+            "target_selected": True,
+            "program_id": target.program.id,
+            "display_identity": identity,
+            "formal_facts": {},
+            "formal_blockers": ["DecisionFact resolver is unavailable."],
+        }
+    facts = {
+        field_name: {
+            "value": fact.normalized_value,
+            "fact_id": fact.fact_id,
+            "evidence_id": fact.evidence_id,
+            "source_url": str(fact.source_url) if fact.source_url else None,
+            "source_scope": fact.source_scope.value if fact.source_scope else None,
+            "verified_at": fact.verified_at.isoformat() if fact.verified_at else None,
+        }
+        for field_name, fact in view.facts.items()
+        if fact.formal_use_ready
+    }
+    return {
+        "target_selected": True,
+        "program_id": target.program.id,
+        "display_identity": identity,
+        "formal_readiness": view.formal_readiness.value,
+        "formal_facts": facts,
+        "formal_blockers": view.formal_blockers,
+    }
+
+
+def _preliminary_writing_draft(
+    draft: WritingDraft,
+    matches: list[ProgramMatch],
+) -> WritingDraft:
+    """Annotate direct-composer output as an explicitly non-formal artifact.
+
+    The public outline/review helpers remain useful for collecting student
+    material in mock mode.  They do not run the Supervisor/Critic delivery
+    protocol, so they can never grant formal writing readiness on their own.
+    """
+
+    graph = build_claim_graph(draft, matches)
+    blockers = list(graph.blockers)
+    blockers.append("直接预览/大纲接口未经过 Supervisor、独立 WritingAgent 验证与 Critic 正式交付。")
+    claim_grounding_ready = claim_graph_passed(graph)
+    return draft.model_copy(
+        update={
+            "claim_graph": graph,
+            "claim_grounding_ready": claim_grounding_ready,
+            "delivery_status": (
+                CriticReadiness.PRELIMINARY_COMPLETE
+                if claim_grounding_ready
+                else CriticReadiness.BLOCKED
+            ),
+            "formal_use_ready": False,
+            "formal_blockers": list(dict.fromkeys(blockers)),
+        }
+    )
 
 
 def _string_value(value: object, fallback: str) -> str:

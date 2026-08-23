@@ -20,6 +20,7 @@ from harbor_agent.models import (
     BackgroundStageResult,
     ConsultantPlanItem,
     ConsultantSchoolPlan,
+    CriticReadiness,
     DataRefreshReport,
     EvidenceReview,
     FieldEvidenceRecord,
@@ -27,15 +28,15 @@ from harbor_agent.models import (
     ProgramMatch,
     ProgramPlanResult,
     ProgramRefreshFinding,
-    QuestionnaireResponse,
     StoryCard,
     TimelineTask,
     WorkflowResult,
     WritingDraft,
     WritingPlanResult,
 )
-from harbor_agent.runtime.state import AgentState, WorkflowStatus
+from harbor_agent.runtime.state import AgentState, WorkflowGoal, WorkflowStatus
 from harbor_agent.services.agent_runtime import list_runtime_trace_events
+from harbor_agent.services.claim_graph import build_claim_graph, claim_graph_passed
 from harbor_agent.services.evidence_graph import build_program_trust_detail
 from harbor_agent.services.formal_gate import CRITICAL_TIMELINE_FIELDS, program_field_gate
 from harbor_agent.services.intent import build_intent_profile
@@ -103,9 +104,38 @@ def to_writing_plan(state: AgentState) -> WritingPlanResult:
     return WritingPlanResult(
         workflow_id=state.workflow_id,
         story_cards=[StoryCard.model_validate(item) for item in state.story_cards],
-        writing=WritingDraft.model_validate(state.writing_draft),
+        writing=_writing_with_delivery_status(state),
         review=_review_summary(state),
         trace=_legacy_trace(state.workflow_id),
+        critic_readiness=_critic_readiness(state),
+        delivery_status=_delivery_status(state),
+        formal_use_ready=bool((state.final_result or {}).get("formal_use_ready")),
+        formal_blockers=_formal_blockers(state),
+    )
+
+
+def to_preliminary_writing_plan(state: AgentState) -> WritingPlanResult:
+    """Expose a revisable draft while preserving a blocked formal delivery.
+
+    Default mock mode is still useful for story-card collection and prose
+    revision.  A source/ClaimGraph block must not turn that useful preview into
+    a 500 or a fake formal pass, so this adapter deliberately emits the exact
+    blocked readiness on the same legacy response shape.
+    """
+
+    if state.writing_draft is None:
+        raise RuntimeError("runtime blocked before it produced a writing draft")
+    review = _review_summary(state)
+    return WritingPlanResult(
+        workflow_id=state.workflow_id,
+        story_cards=[StoryCard.model_validate(item) for item in state.story_cards],
+        writing=_writing_with_delivery_status(state),
+        review=review,
+        trace=_legacy_trace(state.workflow_id),
+        critic_readiness=_critic_readiness(state),
+        delivery_status=_delivery_status(state),
+        formal_use_ready=False,
+        formal_blockers=_formal_blockers(state),
     )
 
 
@@ -120,7 +150,7 @@ def to_workflow_result(state: AgentState) -> WorkflowResult:
         assessment=_assessment(state),
         recommendations=_matches(state),
         timeline=[TimelineTask.model_validate(item) for item in state.timeline],
-        writing=WritingDraft.model_validate(state.writing_draft),
+        writing=_writing_with_delivery_status(state),
         review=_review_summary(state),
         trace=_legacy_trace(state.workflow_id),
     )
@@ -158,7 +188,13 @@ def _selected_matches(state: AgentState) -> list[ProgramMatch]:
 
 
 def _review_summary(state: AgentState, matches: list[ProgramMatch] | None = None) -> dict[str, Any]:
-    """Expose legacy review fields from Runtime verification state and pure gates."""
+    """Project the runtime's structured decision without recreating a pass.
+
+    This compatibility response is consumed by older stage endpoints.  It may
+    add explanatory fields, but it must never turn a clean-looking
+    ``review_flags`` array into a formal success.  ClaimGraph, Critic readiness
+    and the Supervisor's canonical final result are the only success signals.
+    """
 
     reviewed_matches = matches if matches is not None else (_selected_matches(state) or _matches(state))
     hard_violations = [item.program.id for item in reviewed_matches if not item.hard_rule_passed]
@@ -179,24 +215,52 @@ def _review_summary(state: AgentState, matches: list[ProgramMatch] | None = None
         set(programs_with_missing_or_blocked_fields) | set(previous_cycle_reference_fields)
     )
     writing = WritingDraft.model_validate(state.writing_draft) if state.writing_draft else None
+    writing_required = state.goal in {WorkflowGoal.WRITING, WorkflowGoal.FULL_APPLICATION_PLAN}
+    graph = build_claim_graph(writing, reviewed_matches) if writing is not None else None
+    claim_grounding_ready = claim_graph_passed(graph)
+    writing_ready = (
+        not writing_required
+        or (
+            state.writing_ready
+            and claim_grounding_ready
+        )
+    )
     writing_review = (
         "本次工作流未请求文书产出；文书阶段仍需逐句绑定学生事实和项目官网依据。"
         if writing is None
         else (
-            "文书草稿还缺少足够的事实绑定，不能作为最终提交稿。"
-            if len(writing.fact_bindings) < 2
-            else "文书草稿已有基础事实绑定，提交前仍需逐句核对学生事实和项目官网依据。"
+            "文书尚未通过独立 ClaimGraph 验证，不能作为最终提交稿。"
+            if writing_required and not writing_ready
+            else "文书 ClaimGraph 已通过；仍需以 Critic 的正式交付状态为准。"
         )
     )
+    runtime_final = state.final_result if isinstance(state.final_result, dict) else {}
+    critic_readiness = str(state.working_memory.get("critic_readiness") or "")
+    critic_blockers = _string_list(state.working_memory.get("critic_blockers"))
+    canonical_formal_ready = bool(runtime_final.get("formal_use_ready"))
     passed = (
         not hard_violations
         and not programs_requiring_current_cycle_review
         and not state.verification_conflicts
-        and not (writing.review_flags if writing else [])
+        and writing_ready
+        and critic_readiness == CriticReadiness.FORMAL_PASS.value
+        and canonical_formal_ready
     )
+    if passed:
+        status_label = "可进入正式申请使用"
+    elif critic_readiness == CriticReadiness.PRELIMINARY_COMPLETE.value:
+        status_label = "仅完成探索/准备交付；当前季正式字段仍未齐全"
+    elif critic_readiness == CriticReadiness.BLOCKED.value:
+        status_label = "正式交付已被阻断，需要新的来源、重写或人工审核"
+    else:
+        status_label = "关键字段或 ClaimGraph 核验完成前不能作为正式申请计划"
+    blockers = list(dict.fromkeys([
+        *critic_blockers,
+        *(graph.blockers if graph is not None else ([] if not writing_required else ["缺少 ClaimGraph。"])),
+    ]))
     return {
         "passed": passed,
-        "status_label": "可进入正式申请使用" if passed else "关键字段核验完成前不能作为正式申请计划",
+        "status_label": status_label,
         "hard_rule_violations": hard_violations,
         "programs_requiring_data_review": programs_requiring_current_cycle_review,
         "programs_with_missing_or_blocked_fields": programs_with_missing_or_blocked_fields,
@@ -205,7 +269,13 @@ def _review_summary(state: AgentState, matches: list[ProgramMatch] | None = None
         "previous_cycle_reference_fields": previous_cycle_reference_fields,
         "required_timeline_fields": CRITICAL_TIMELINE_FIELDS,
         "writing_review": writing_review,
+        "claim_graph": graph.model_dump(mode="json") if graph is not None else None,
+        "claim_grounding_ready": claim_grounding_ready,
+        "writing_ready": state.writing_ready,
         "verification_conflicts": state.verification_conflicts,
+        "critic_readiness": critic_readiness or None,
+        "delivery_status": str(runtime_final.get("delivery_status") or critic_readiness or "UNREVIEWED"),
+        "blockers": blockers,
         "formal_use_ready": passed,
         "human_gates": [
             "正式提交倒推必须同时具备项目详情页、截止日期、申请入口、语言要求、材料清单和学费的字段级当前季官网证据。",
@@ -214,6 +284,75 @@ def _review_summary(state: AgentState, matches: list[ProgramMatch] | None = None
             "学校定制文书句必须绑定项目官网、PDF/FAQ 或网申系统证据。",
         ],
     }
+
+
+def _writing_with_delivery_status(state: AgentState) -> WritingDraft:
+    """Return a draft annotated from live runtime state, not prose hints."""
+
+    if state.writing_draft is None:
+        raise RuntimeError("writing draft missing")
+    draft = WritingDraft.model_validate(state.writing_draft)
+    matches = _selected_matches(state) or _matches(state)
+    graph = build_claim_graph(draft, matches)
+    claim_grounding_ready = state.writing_ready and claim_graph_passed(graph)
+    runtime_final = state.final_result if isinstance(state.final_result, dict) else {}
+    critic_readiness = str(state.working_memory.get("critic_readiness") or "")
+    formal_use_ready = bool(runtime_final.get("formal_use_ready")) and (
+        critic_readiness == CriticReadiness.FORMAL_PASS.value
+    ) and claim_grounding_ready
+    blockers = list(dict.fromkeys([
+        *list(graph.blockers),
+        *_string_list(state.working_memory.get("critic_blockers")),
+        *_string_list(runtime_final.get("blockers")),
+    ]))
+    if not formal_use_ready and not blockers:
+        blockers.append("当前文书未取得 Supervisor/Critic 的正式交付许可。")
+    return draft.model_copy(
+        update={
+            "claim_graph": graph,
+            "claim_grounding_ready": claim_grounding_ready,
+            "delivery_status": _draft_delivery_status(state),
+            "formal_use_ready": formal_use_ready,
+            "formal_blockers": blockers,
+        }
+    )
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _critic_readiness(state: AgentState) -> CriticReadiness | None:
+    raw = str(state.working_memory.get("critic_readiness") or "")
+    try:
+        return CriticReadiness(raw) if raw else None
+    except ValueError:
+        return None
+
+
+def _delivery_status(state: AgentState) -> str:
+    final = state.final_result if isinstance(state.final_result, dict) else {}
+    return str(final.get("delivery_status") or state.working_memory.get("critic_readiness") or "UNREVIEWED")
+
+
+def _draft_delivery_status(state: AgentState) -> CriticReadiness | str:
+    """Coerce the runtime string to the draft model's closed delivery enum."""
+
+    raw = _delivery_status(state)
+    try:
+        return CriticReadiness(raw)
+    except ValueError:
+        return "UNREVIEWED"
+
+
+def _formal_blockers(state: AgentState) -> list[str]:
+    final = state.final_result if isinstance(state.final_result, dict) else {}
+    return list(dict.fromkeys([
+        *_string_list(state.working_memory.get("critic_blockers")),
+        *_string_list(final.get("blockers")),
+    ]))
 
 
 def _source_refresh_summary(
@@ -234,6 +373,8 @@ def _source_refresh_summary(
     records: list[FieldEvidenceRecord] = []
     stale_program_ids: list[str] = []
     review_queue_size = 0
+    formal_ready_program_count = 0
+    formal_blocker_count = 0
     for match in selected:
         program_id = match.program.id
         snapshot = state.verified_program_fields.get(program_id, {})
@@ -253,13 +394,27 @@ def _source_refresh_summary(
         review_queue_size += len(required_fields)
         if trust.stale_or_reference_fields:
             stale_program_ids.append(program_id)
+        formal_ready = bool(getattr(trust, "production_ready", False))
+        if formal_ready:
+            formal_ready_program_count += 1
+        formal_blocker_count += len(trust.fields_requiring_review)
+        resolved_official_url = None
+        for record in field_records:
+            if (
+                record.field_name == "official_program_url"
+                and record.status.value == "OFFICIAL_VERIFIED_CURRENT"
+                and not record.review_required
+                and record.source_url
+            ):
+                resolved_official_url = record.source_url
+                break
         findings.append(
             ProgramRefreshFinding(
                 program_id=program_id,
                 institution=match.program.institution,
                 program_name=match.program.name_zh or match.program.name,
-                data_status=match.program.data_status,
-                official_url=match.program.official_program_url,
+                data_status=("VERIFIED" if formal_ready else "PENDING_REVIEW"),
+                official_url=resolved_official_url,
                 source_ids=list(dict.fromkeys(str(record.source_url) for record in field_records if record.source_url))[:8],
                 fields_requiring_review=required_fields,
                 summary=trust.source_warning,
@@ -293,6 +448,9 @@ def _source_refresh_summary(
         human_review_required=bool(review_queue_size or state.verification_conflicts),
         summary=f"Runtime VerificationAgent checked {len(selected_ids)} selected programmes.",
         next_actions=["对标记字段核对学校官网当前申请季原文，再进入正式提交倒推。"],
+        truth_scope="runtime_evidence_projection",
+        formal_ready_program_count=formal_ready_program_count,
+        formal_blocker_count=formal_blocker_count,
     )
 
 

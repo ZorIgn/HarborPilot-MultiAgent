@@ -15,6 +15,7 @@ from harbor_agent.models import (
     Program,
     ProgramMatch,
     RecommendationExplanation,
+    ResolvedProgramView,
 )
 from harbor_agent.services.external_candidates import qs_evidence_note_for_program
 from harbor_agent.services.intent import (
@@ -24,6 +25,7 @@ from harbor_agent.services.intent import (
 )
 from harbor_agent.services.matching_strategy import load_matching_strategy
 from harbor_agent.services.program_urls import has_program_detail_page
+from harbor_agent.services.resolved_program import materialize_decision_program
 from harbor_agent.tools.constraint_tools import (
     admissions_eligibility_checks,
     admissions_status,
@@ -65,74 +67,19 @@ class MatchingHeuristicService:
         programs: list[Program],
         pinned_program_ids: list[str] | None = None,
     ) -> list[ProgramMatch]:
-        matches: list[ProgramMatch] = []
-        pinned_ids = set(pinned_program_ids or [])
-        base = _base_score_from_level(assessment.overall_level)
-        intent_profile = build_intent_profile(profile)
+        # Keep the legacy service entry point, but delegate the actual matching
+        # calculation to the sole evidence-aware implementation.  The optional
+        # LLM pass below can only refine wording; it never changes facts,
+        # constraint statuses or formal readiness.
+        from harbor_agent.services.deterministic_matching import calculate_applicant_fit
 
-        for program in programs:
-            intent = classify_program_intent(profile, program, intent_profile)
-            checks = check_program_eligibility(profile, program)
-            hard_ok = hard_rules_pass(checks)
-            overlap = len(set(program.discipline_tags) & set(profile.discipline_tags))
-            recommendable = hard_ok and intent.category != "blocked"
-
-            score_breakdown = _score_breakdown(profile, assessment, program, overlap, intent)
-            risk_penalty = 12 if not hard_ok else 0
-            fit = (
-                _weighted_fit(score_breakdown, base)
-                - risk_penalty
-                + _intent_fit_adjustment(intent)
-                + _institution_priority_adjustment(profile, program, intent.category)
-            )
-            if intent.category == "blocked":
-                fit = min(fit, 38)
-            fit = max(10, min(96, fit))
-
-            data_ready = _critical_fields_verified(program)
-            formal = recommendable and program.data_status == DataStatus.verified
-            strategy_band = _strategy_band(profile, program, fit, recommendable, intent.category)
-            tier = self._tier(strategy_band)
-
-            reasons = _reasons(profile, program, intent)
-            risks = _risks(profile, program, checks, score_breakdown, intent)
-            actions = _actions(intent, formal, risks)
-            consultant_note = _consultant_note(
-                profile, program, strategy_band, score_breakdown, intent
-            )
-            source_warning = _source_warning_v2(program, formal)
-
-            matches.append(
-                ProgramMatch(
-                    program=program,
-                    tier=tier,
-                    **_decision_dimensions(
-                        profile, program, score_breakdown, fit, intent.alignment
-                    ),
-                    fit_score=fit,
-                    score_breakdown=score_breakdown,
-                    match_category=intent.category,
-                    intent_alignment=intent.alignment,
-                    intent_reasons=intent.reasons,
-                    hard_rule_passed=hard_ok,
-                    formal_recommendation=formal,
-                    data_status=program.data_status,
-                    reasons=reasons[:5],
-                    risks=risks[:5],
-                    actions=actions[:5],
-                    rule_checks=checks,
-                    explanation=_explanation(
-                        score_breakdown, recommendable, data_ready, program, reasons, risks
-                    ),
-                    strategy_band=strategy_band,
-                    consultant_note=consultant_note,
-                    source_warning=source_warning,
-                )
-            )
-
-        matches = self._apply_llm_consultant_pass(profile, matches)
-        ranked = sorted(matches, key=_ranking_key)
-        return _balanced_recommendation_output(ranked, pinned_ids)
+        matches = calculate_applicant_fit(
+            profile,
+            assessment,
+            programs,
+            pinned_program_ids=pinned_program_ids,
+        )
+        return self._apply_llm_consultant_pass(profile, matches)
 
     def _tier(self, strategy_band: str) -> str:
         if strategy_band == "blocked":
@@ -609,16 +556,21 @@ def _score_breakdown(
 
 def _decision_dimensions(
     profile: NormalizedProfile,
-    program: Program,
+    program: Program | ResolvedProgramView,
     score_breakdown: dict[str, int],
     fit: int,
     intent_alignment: int,
 ) -> dict[str, object]:
     admissions = admissions_eligibility_checks(profile, program)
     financial = financial_feasibility(program, profile.budget_hkd, profile.budget_mode)
+    decision_program = (
+        materialize_decision_program(program)
+        if isinstance(program, ResolvedProgramView)
+        else program
+    )
     financial_score = None
     if financial.status != DecisionStatus.UNKNOWN:
-        financial_score = _budget_fit(profile, program)
+        financial_score = _budget_fit(profile, decision_program)
     return {
         "admissions_status": admissions_status(admissions),
         "admissions_checks": admissions,

@@ -6,6 +6,11 @@ from harbor_agent.services.deterministic_catalog import get_program_detail, sear
 from harbor_agent.models import NormalizedProfile, Program
 from harbor_agent.runtime.state import AgentState
 from harbor_agent.services.data_loader import load_programs
+from harbor_agent.services.data_loader import load_source_registry
+from harbor_agent.services.source_research import (
+    SourceResearchPlan,
+    build_source_research_plan,
+)
 from harbor_agent.tools.base import EmptyToolInput, ToolDefinition
 
 
@@ -65,9 +70,27 @@ def _related(state: AgentState, _: EmptyToolInput) -> CatalogSearchResult:
     return CatalogSearchResult(programs=related[:40], program_ids=[str(item["id"]) for item in related[:40]])
 
 
+def _source_research_plan(state: AgentState, _: EmptyToolInput) -> SourceResearchPlan:
+    """Plan bounded official-source work from the completed catalog recall."""
+
+    tool_results = state.working_memory.get("tool_results", {})
+    catalogue = tool_results.get("search_program_catalog", {})
+    candidate_ids = []
+    if isinstance(catalogue, dict):
+        candidate_ids = [str(item) for item in catalogue.get("program_ids", []) if item]
+    if not candidate_ids:
+        candidate_ids = list(state.candidate_program_ids)
+    return build_source_research_plan(
+        candidate_ids,
+        programs=load_programs(),
+        registry=load_source_registry(),
+    )
+
+
 def definitions() -> list[ToolDefinition]:
     return [
         ToolDefinition("search_program_catalog", "Search the deterministic programme catalogue for the normalized applicant profile.", EmptyToolInput, CatalogSearchResult, _search),
         ToolDefinition("get_program_detail", "Load one programme's structured catalogue record.", ProgramIdInput, ProgramDetailResult, _detail),
         ToolDefinition("search_related_programs", "Find related catalogue programmes without inventing programme facts.", EmptyToolInput, CatalogSearchResult, _related),
+        ToolDefinition("build_source_research_plan", "Plan bounded allowlisted official-source research without fetching or publishing facts.", EmptyToolInput, SourceResearchPlan, _source_research_plan),
     ]

@@ -74,8 +74,12 @@ def _discover(_: AgentState, args: ProgramSourceInput) -> SourceDiscoveryResult:
     return SourceDiscoveryResult(program_id=args.program_id, official_urls=list(dict.fromkeys(urls)))
 
 
-def _snapshot(_: AgentState, args: SnapshotSourceInput) -> SnapshotResultOutput:
+def _snapshot(state: AgentState, args: SnapshotSourceInput) -> SnapshotResultOutput:
     url = ensure_safe_https_url(args.url)
+    if not args.dry_run and not state.working_memory.get("verification_source_fetch_enabled"):
+        raise PermissionError(
+            "live source snapshots require a runtime request with explicit real/hybrid mode, programme scope and server-issued operator authorization"
+        )
     result = snapshot_source(url, dry_run=args.dry_run)
     return SnapshotResultOutput(
         program_id=args.program_id,

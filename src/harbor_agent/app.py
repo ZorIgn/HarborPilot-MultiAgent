@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from starlette.responses import JSONResponse
 
-from harbor_agent.agents.orchestrator import WorkflowOrchestrator
+from harbor_agent.agents.orchestrator import WorkflowDeliveryBlockedError, WorkflowOrchestrator
 from harbor_agent.config import get_settings
 from harbor_agent.core.llm import MockLLMProvider, OpenAICompatibleLLMProvider, build_llm_provider
 from harbor_agent.llm.provider import OpenAICompatibleToolCallingProvider
@@ -26,6 +26,7 @@ from harbor_agent.models import (
     CrawlQueueRequest,
     DataAcquisitionReport,
     DataAcquisitionRequest,
+    DecisionCoverageSummary,
     DataRefreshReport,
     DataRefreshRequest,
     EvidenceGraphSummary,
@@ -40,6 +41,7 @@ from harbor_agent.models import (
     ReviewPublishResponse,
     ReviewQueueSummary,
     SourceHealthSummary,
+    SourceConnectionMode,
     StoryCard,
     WorkflowResult,
     WritingDraft,
@@ -64,6 +66,7 @@ from harbor_agent.services.agent_runtime import (
 from harbor_agent.services.agent_worker import execute_agent_job
 from harbor_agent.services.catalog_auto_update import CatalogAutoUpdateService
 from harbor_agent.services.data_acquisition import ProgramDataAcquisitionService
+from harbor_agent.services.decision_coverage import build_decision_coverage_summary
 from harbor_agent.services.data_loader import (
     load_community_sources,
     load_cv_profile_schema,
@@ -97,8 +100,6 @@ from harbor_agent.services.profile_store import (
 from harbor_agent.services.program_urls import (
     is_generic_application_url,
     is_generic_program_url,
-    student_application_url,
-    student_program_url,
 )
 from harbor_agent.services.review_gate import (
     build_review_queue,
@@ -775,9 +776,13 @@ def program_data_package(program_id: str) -> ProgramDataPackage:
 
 @app.post("/api/workflows/data-acquisition", response_model=DataAcquisitionReport)
 def run_data_acquisition_stage(payload: DataAcquisitionRequest, request: Request) -> DataAcquisitionReport:
-    if not payload.dry_run and not _admin_request_allowed(request):
+    live_fetch_requested = (
+        not payload.dry_run
+        and payload.connection_mode.value in {"real", "hybrid"}
+    )
+    if live_fetch_requested and not _admin_request_allowed(request):
         raise HTTPException(status_code=403, detail="联网采集和证据写入只能由受控 operator/worker 触发。")
-    if not payload.dry_run:
+    if live_fetch_requested:
         _validate_acquisition_scope(payload, request)
     return ProgramDataAcquisitionService().run(payload)
 
@@ -798,6 +803,13 @@ def program_trust_detail(program_id: str) -> ProgramTrustDetail:
     if program is None:
         raise HTTPException(status_code=404, detail="项目不存在。")
     return build_program_trust_detail(program)
+
+
+@app.get("/api/admin/decision-coverage", response_model=DecisionCoverageSummary)
+def admin_decision_coverage(cycle: str | None = None) -> DecisionCoverageSummary:
+    """Expose actual formal-fact coverage rather than catalog-size rhetoric."""
+
+    return build_decision_coverage_summary(cycle=cycle)
 
 @app.get("/api/admin/review-queue", response_model=ReviewQueueSummary)
 def admin_review_queue(
@@ -911,15 +923,21 @@ def run_application_plan_stage(payload: SelectedProgramsRequest) -> ApplicationP
 
 @app.post("/api/workflows/data-refresh", response_model=DataRefreshReport)
 def run_data_refresh_stage(payload: DataRefreshRequest, request: Request) -> DataRefreshReport:
-    if not payload.dry_run and not _admin_request_allowed(request):
-        raise HTTPException(status_code=403, detail="联网刷新只能由受控 operator/worker 触发。")
+    if not payload.dry_run:
+        raise HTTPException(
+            status_code=410,
+            detail="data-refresh 仅保留离线来源检查兼容接口；真实采集请使用 /api/workflows/data-acquisition，并显式设置 connection_mode=real 或 hybrid、已知项目范围与 operator 授权。",
+        )
     return DataRefreshService(llm_provider).run(payload)
 
 
 @app.post("/api/workflows/source-refresh", response_model=DataRefreshReport)
 def run_source_refresh_stage(payload: DataRefreshRequest, request: Request) -> DataRefreshReport:
-    if not payload.dry_run and not _admin_request_allowed(request):
-        raise HTTPException(status_code=403, detail="联网刷新只能由受控 operator/worker 触发。")
+    if not payload.dry_run:
+        raise HTTPException(
+            status_code=410,
+            detail="source-refresh 仅保留离线来源检查兼容接口；真实采集请使用 /api/workflows/data-acquisition，并显式设置 connection_mode=real 或 hybrid、已知项目范围与 operator 授权。",
+        )
     return DataRefreshService(llm_provider).run(payload)
 
 
@@ -938,12 +956,30 @@ def _validate_acquisition_scope(payload: DataAcquisitionRequest, request: Reques
 def run_writing_plan_stage(payload: WritingPlanRequest) -> WritingPlanResult:
     _validate_selected_program_ids(payload.profile, payload.selected_program_ids)
     orchestrator = WorkflowOrchestrator(llm_provider)
-    return orchestrator.run_writing_plan_stage(
-        payload.profile,
-        payload.questionnaire,
-        payload.selected_program_ids,
-        payload.document_type,
-    )
+    try:
+        return orchestrator.run_writing_plan_stage(
+            payload.profile,
+            payload.questionnaire,
+            payload.selected_program_ids,
+            payload.document_type,
+        )
+    except WorkflowDeliveryBlockedError as exc:
+        state = exc.state
+        memory = state.working_memory if isinstance(state.working_memory, dict) else {}
+        blockers = memory.get("critic_blockers", [])
+        if not isinstance(blockers, list):
+            blockers = [str(blockers)]
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "workflow_id": state.workflow_id,
+                "status": state.status.value,
+                "delivery_status": memory.get("critic_readiness") or "BLOCKED",
+                "formal_use_ready": False,
+                "blockers": blockers,
+                "message": "文书草稿尚未生成，或正式 ClaimGraph/来源门禁未满足。默认 mock 模式不会伪造正式文书；请先补齐素材，或完成受控来源采集、人工发布与正式写作验证。",
+            },
+        ) from exc
 
 
 @app.post("/api/workflows/writing-interview", response_model=list[WritingInterviewQuestion])
@@ -973,13 +1009,33 @@ def run_writing_outline(payload: WritingOutlineRequestPayload) -> WritingDraft:
 
 @app.post("/api/workflows/writing-review", response_model=WritingReviewRubric)
 def run_writing_review(payload: WritingReviewRequest) -> WritingReviewRubric:
+    """Run an untrusted-draft ClaimGraph lint, never a formal delivery gate."""
+
     return WritingComposer(llm_provider).review_rubric(payload.draft, payload.story_cards)
 
 
 @app.post("/api/workflows/assessment", response_model=WorkflowResult)
 def run_assessment(payload: ApplicantProfileInput) -> WorkflowResult:
     orchestrator = WorkflowOrchestrator(llm_provider)
-    return orchestrator.run_assessment(payload)
+    try:
+        return orchestrator.run_assessment(payload)
+    except WorkflowDeliveryBlockedError as exc:
+        state = exc.state
+        memory = state.working_memory if isinstance(state.working_memory, dict) else {}
+        blockers = memory.get("critic_blockers", [])
+        if not isinstance(blockers, list):
+            blockers = [str(blockers)]
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "workflow_id": state.workflow_id,
+                "status": state.status.value,
+                "delivery_status": memory.get("critic_readiness") or "BLOCKED",
+                "formal_use_ready": False,
+                "blockers": blockers,
+                "message": "完整申请方案需要当前季正式项目事实与通过 ClaimGraph 的文书；默认 mock 模式不会伪造这些条件。请先走受控来源采集、人工发布与正式文书验证。",
+            },
+        ) from exc
 
 
 @app.post("/api/admin/model-smoke-test")
@@ -1013,6 +1069,9 @@ class AgentWorkflowCreateRequest(BaseModel):
     questionnaire: QuestionnaireResponse | None = None
     selected_program_ids: list[str] = Field(default_factory=list, max_length=20)
     document_type: str = Field(default="PS", pattern="^(PS|SOP|CV|ESSAY|REFERENCE_PACKAGE)$")
+    # An explicit source mode is required in addition to the refresh flag.
+    # `mock` is the safe default and never contacts external sources.
+    source_connection_mode: SourceConnectionMode = SourceConnectionMode.mock
     refresh_official_sources: bool = False
 
 
@@ -1075,6 +1134,22 @@ def _agent_workflow_snapshot(state) -> dict[str, Any]:
 @app.post("/api/agent/workflows")
 def start_agent_workflow(payload: AgentWorkflowCreateRequest, request: Request, response: Response) -> dict[str, Any]:
     owner_id = _request_profile_id(request, response)
+    source_fetch_authorized = False
+    if payload.refresh_official_sources:
+        if payload.source_connection_mode not in {SourceConnectionMode.real, SourceConnectionMode.hybrid}:
+            raise HTTPException(
+                status_code=422,
+                detail="运行时来源刷新必须显式设置 source_connection_mode=real 或 hybrid；默认 mock 模式不会联网。",
+            )
+        if not _admin_request_allowed(request):
+            raise HTTPException(status_code=403, detail="运行时联网来源刷新只能由受控 operator/worker 触发。")
+        if not payload.selected_program_ids:
+            raise HTTPException(status_code=422, detail="运行时联网来源刷新必须明确指定项目，不能默认抓取全量项目。")
+        known_ids = {program.id for program in load_programs()}
+        unknown = sorted(set(payload.selected_program_ids) - known_ids)
+        if unknown:
+            raise HTTPException(status_code=422, detail={"message": "存在未知项目 ID。", "unknown_program_ids": unknown[:10]})
+        source_fetch_authorized = True
     runtime = _configured_runtime()
     state = runtime.start(
         WorkflowStartRequest(
@@ -1085,6 +1160,8 @@ def start_agent_workflow(payload: AgentWorkflowCreateRequest, request: Request, 
             selected_program_ids=payload.selected_program_ids,
             document_type=payload.document_type,
             refresh_official_sources=payload.refresh_official_sources,
+            source_connection_mode=payload.source_connection_mode,
+            source_fetch_authorized=source_fetch_authorized,
         ),
         owner_id=owner_id,
     )

@@ -511,6 +511,17 @@ export type DataAcquisitionReport = {
   run_warnings?: string[];
 };
 
+export type SourceConnectionMode = "mock" | "real" | "hybrid";
+
+export type DataAcquisitionRequest = {
+  selected_program_ids?: string[];
+  include_community?: boolean;
+  /** Defaults to mock; real/hybrid must be an explicit controlled-operator choice. */
+  connection_mode?: SourceConnectionMode;
+  dry_run?: boolean;
+  max_sources_per_program?: number;
+};
+
 export type SourceHealthItem = {
   source_id: string;
   name: string;
@@ -718,6 +729,10 @@ export type DataRefreshReport = {
   human_review_required: boolean;
   summary: string;
   next_actions: string[];
+  /** An operational source-health report, never a formal-fact coverage proxy. */
+  truth_scope?: "operational_source_check" | "runtime_evidence_projection";
+  formal_ready_program_count?: number;
+  formal_blocker_count?: number;
 };
 
 export type FieldEvidenceRecord = {
@@ -768,6 +783,9 @@ export type ProgramTrustDetail = {
   cycle: string;
   production_ready: boolean;
   reference_ready: boolean;
+  /** Optional compatibility projections for newer decision responses. */
+  formal_use_ready?: boolean;
+  formal_blockers?: string[];
   status_label: string;
   source_warning: string;
   official_current_fields: string[];
@@ -776,6 +794,64 @@ export type ProgramTrustDetail = {
   reviewer_gate_fields: string[];
   last_official_verified_at: string | null;
   field_records: FieldEvidenceRecord[];
+};
+
+/**
+ * Field-level decision provenance returned with a recommendation.
+ *
+ * `catalog_value` is a discovery hint only.  A value is safe to render as a
+ * current formal fact only when `formal_use_ready` and `decision_status` both
+ * say so.  Keeping this contract in the client prevents the embedded raw
+ * `Program` object from becoming an accidental second source of truth.
+ */
+export type DecisionFact = {
+  fact_id: string;
+  program_id: string;
+  field_name: string;
+  cycle?: string | null;
+  catalog_value?: unknown;
+  raw_value?: unknown;
+  normalized_value?: unknown;
+  decision_status: DecisionStatus;
+  provenance_status: string;
+  formal_use_ready: boolean;
+  evidence_id?: string | null;
+  source_url?: string | null;
+  source_scope?: SourceScope | null;
+  evidence_quote?: string | null;
+  snapshot_url?: string | null;
+  page_hash?: string | null;
+  observed_at?: string | null;
+  verified_at?: string | null;
+  reviewer_id?: string | null;
+  review_decision_id?: string | null;
+  conflict_id?: string | null;
+  blockers?: string[];
+};
+
+export type ClaimGraphNode = {
+  claim_id: string;
+  text: string;
+  claim_type: "student_fact" | "program_fact" | "recommendation" | "writing";
+  program_id?: string | null;
+  required_for_formal: boolean;
+  status: "SUPPORTED" | "UNSUPPORTED" | "CONFLICTED" | "BLOCKED";
+  decision_fact_ids: string[];
+  evidence_ids: string[];
+  blockers: string[];
+};
+
+export type ClaimGraph = {
+  graph_id: string;
+  nodes: ClaimGraphNode[];
+  edges: Array<{
+    source_id: string;
+    target_claim_id: string;
+    relation: "SUPPORTS" | "CONTRADICTS" | "QUALIFIES";
+    reason: string;
+  }>;
+  formal_status: DecisionStatus;
+  blockers: string[];
 };
 
 export type ApplicantPayload = {
@@ -834,6 +910,12 @@ export type ApplicantPayload = {
 
 export type WorkflowResult = {
   workflow_id: string;
+  /** Optional runtime delivery metadata; absent in legacy stage responses. */
+  formal_use_ready?: boolean;
+  delivery_status?: "FORMAL_PASS" | "PRELIMINARY_COMPLETE" | "BLOCKED" | "UNREVIEWED" | string;
+  formal_blockers?: string[];
+  critic_readiness?: "FORMAL_PASS" | "PRELIMINARY_COMPLETE" | "BLOCKED" | string | null;
+  claim_graph?: ClaimGraph | null;
   profile: {
     profile_id: string;
     discipline_tags: string[];
@@ -891,6 +973,11 @@ export type WorkflowResult = {
     reference_package: string[];
     risk_controls: string[];
     review_flags: string[];
+    claim_graph?: ClaimGraph | null;
+    claim_grounding_ready?: boolean;
+    formal_use_ready?: boolean;
+    formal_blockers?: string[];
+    delivery_status?: "FORMAL_PASS" | "PRELIMINARY_COMPLETE" | "BLOCKED" | "UNREVIEWED" | string;
   };
   review: {
     passed: boolean;
@@ -996,6 +1083,11 @@ export type ProgramMatch = {
   intent_reasons: string[];
   hard_rule_passed: boolean;
   formal_recommendation: boolean;
+  /** Canonical field facts used for hard decisions and formal readiness. */
+  decision_facts?: Record<string, DecisionFact>;
+  formal_gate_status?: DecisionStatus;
+  formal_use_ready?: boolean;
+  formal_blockers?: string[];
   data_status: DataStatus;
   reasons: string[];
   risks: string[];
@@ -1195,6 +1287,11 @@ export type StoryCard = {
 
 export type WritingPlanResult = {
   workflow_id: string;
+  formal_use_ready?: boolean;
+  delivery_status?: "FORMAL_PASS" | "PRELIMINARY_COMPLETE" | "BLOCKED" | "UNREVIEWED" | string;
+  formal_blockers?: string[];
+  critic_readiness?: "FORMAL_PASS" | "PRELIMINARY_COMPLETE" | "BLOCKED" | string | null;
+  claim_graph?: ClaimGraph | null;
   story_cards: StoryCard[];
   writing: WorkflowResult["writing"];
   review: WorkflowResult["review"];
@@ -1258,4 +1355,10 @@ export type WritingReviewRubric = {
   export_recommendation: "建议导出" | "修改后导出" | "不建议导出";
   issues: string[];
   next_actions: string[];
+  claim_graph?: ClaimGraph | null;
+  formal_status?: DecisionStatus;
+  /** Client-supplied writing review is preliminary lint, never FORMAL_PASS. */
+  delivery_status?: "PRELIMINARY_COMPLETE" | "BLOCKED";
+  formal_use_ready?: boolean;
+  formal_blockers?: string[];
 };

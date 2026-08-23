@@ -12,6 +12,7 @@ import type {
   CatalogProgram,
   CrawlQueueReport,
   DataAcquisitionReport,
+  DataAcquisitionRequest,
   DataRefreshReport,
   EvidenceGraphSummary,
   LayeredProgramPlanResult,
@@ -238,7 +239,7 @@ export function runCatalogAutoUpdate(payload: { selected_program_ids?: string[];
   return apiJson<CatalogAutoUpdateReport>("/api/admin/catalog-auto-update", postJson(payload), "Catalog auto update API");
 }
 
-export function runDataAcquisition(payload: { selected_program_ids?: string[]; include_community?: boolean; dry_run?: boolean; max_sources_per_program?: number }): Promise<DataAcquisitionReport> {
+export function runDataAcquisition(payload: DataAcquisitionRequest): Promise<DataAcquisitionReport> {
   return apiJson<DataAcquisitionReport>("/api/workflows/data-acquisition", postJson(payload), "Data acquisition API");
 }
 

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from harbor_agent.agents.orchestrator import WorkflowOrchestrator
+import pytest
+
+from harbor_agent.agents.orchestrator import WorkflowDeliveryBlockedError, WorkflowOrchestrator
 from harbor_agent.services.deterministic_profile import normalize_profile
 from harbor_agent.core.llm import MockLLMProvider
 from harbor_agent.models import ApplicantProfileInput
@@ -28,33 +30,22 @@ def test_profile_agent_uses_structured_courses_and_skills_for_direction() -> Non
     assert "core courses or prerequisites" not in profile.missing_fields
 
 
-def test_assessment_workflow_runs_all_agents() -> None:
-    result = WorkflowOrchestrator(MockLLMProvider()).run_assessment(load_sample())
+def test_full_assessment_is_explicitly_blocked_without_current_formal_sources() -> None:
+    with pytest.raises(WorkflowDeliveryBlockedError) as exc_info:
+        WorkflowOrchestrator(MockLLMProvider()).run_assessment(load_sample())
 
-    assert result.assessment.overall_level in {"A", "A-", "B+", "B", "C+", "C"}
-    assert result.assessment.competitiveness_level in {"强", "中强", "中", "弱"}
-    assert result.assessment.application_positioning
-    assert {"冲刺", "主申", "相对稳妥"} <= set(result.assessment.application_positioning)
-    assert result.assessment.hard_thresholds
-    assert result.assessment.strengthening_actions
-    assert len(result.assessment.strengthening_actions) >= 6
-    action_text = " ".join(result.assessment.strengthening_actions)
-    for expected in ["成绩", "课程", "语言", "经历", "文书素材", "目标"]:
-        assert expected in action_text
-    assert "项目分档" in result.assessment.scope_note
-    assert "暂不适合" not in result.assessment.scope_note
-    assert result.evidence.recommended_uploads
-    assert result.recommendations
-    assert result.timeline
-    assert result.writing.outline
-    trace_nodes = {event.node for event in result.trace}
-    assert {"AssessmentAgent", "ResearchAgent", "MatchingAgent", "VerificationAgent", "PlanningAgent", "WritingAgent", "CriticAgent"} <= trace_nodes
-    assert trace_nodes <= {"AssessmentAgent", "ResearchAgent", "MatchingAgent", "VerificationAgent", "PlanningAgent", "WritingAgent", "CriticAgent"}
-    assert all(event.tool_calls for event in result.trace)
+    state = exc_info.value.state
+    assert state.status.value == "WAITING_HUMAN"
+    assert state.working_memory["critic_readiness"] == "BLOCKED"
+    assert state.working_memory["critic_blockers"]
+    assert state.assessment is not None
+    assert state.program_matches
+    assert state.writing_ready is False
+    assert {"AssessmentAgent", "ResearchAgent", "MatchingAgent", "VerificationAgent", "CriticAgent"} <= set(state.visited_agents)
 
 
 def test_recommended_programs_do_not_violate_hard_rules() -> None:
-    result = WorkflowOrchestrator(MockLLMProvider()).run_assessment(load_sample())
+    result = WorkflowOrchestrator(MockLLMProvider()).run_program_plan_stage(load_sample())
     selected = [item for item in result.recommendations if item.tier != "not_recommended"]
 
     assert selected
@@ -74,10 +65,18 @@ def test_partial_program_source_requires_data_review() -> None:
     payload = load_sample()
     payload.discipline_interests = ["design"]
     payload.raw_interest_text = "design portfolio urban design architecture portfolio"
-    result = WorkflowOrchestrator(MockLLMProvider()).run_assessment(payload)
+    orchestrator = WorkflowOrchestrator(MockLLMProvider())
+    program_plan = orchestrator.run_program_plan_stage(payload)
+    selected_ids = [
+        item.program.id
+        for item in program_plan.recommendations
+        if item.tier != "not_recommended"
+    ][:2]
+    assert selected_ids
+    result = orchestrator.run_application_plan_stage(payload, selected_ids)
 
     uncertain_ids = result.review["programs_requiring_data_review"]
     assert uncertain_ids
     assert result.review["passed"] is False
-    assert any(item.program.data_status.value != "VERIFIED" for item in result.recommendations)
-    assert result.recommendations[0].program.id in uncertain_ids
+    assert any(item.program.data_status.value != "VERIFIED" for item in result.selected_programs)
+    assert result.selected_programs[0].program.id in uncertain_ids

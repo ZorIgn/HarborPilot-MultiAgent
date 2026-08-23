@@ -4,11 +4,13 @@ import { Bell, BookOpenCheck, CalendarDays, Download, ExternalLink, ShieldCheck,
 import { Card as IslandCard, Button as IslandButton, Tabs as IslandTabs, Title as IslandTitle } from "animal-island-ui";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { dataStatusLabels, fieldLabels, materialLabels, previousCycleLabel, taskTypeLabels, timelineCopy } from "@/lib/copy";
-import type { ProgramMatch, TimelineTask } from "@/lib/types";
+import type { DecisionFact, DecisionStatus, ProgramMatch, TimelineTask } from "@/lib/types";
 
 type TimelineLoading = string | null;
 type Program = ProgramMatch["program"];
 type TrustRecord = NonNullable<Program["trust_detail"]>["field_records"][number];
+type DecisionFacts = Record<string, DecisionFact>;
+type FieldReadiness = "current" | "reference" | "candidate" | "missing";
 type TaskStatus = NonNullable<TimelineTask["status"]>;
 type EvidenceFieldState = {
   badgeStatus: string;
@@ -115,30 +117,37 @@ function SourceEvidenceMatrix({ matches }: { matches: ProgramMatch[] }) {
             <h3>{programTitle(item.program)}</h3>
             <p>{programSchoolLine(item.program)}</p>
           </div>
-          <DataBadge status={sourceBadgeStatus(item.program)} />
+          <DataBadge status={sourceBadgeStatus(item.program, item.decision_facts, item.formal_gate_status)} />
         </header>
         <div className="source-evidence-grid">
-          {criticalFieldOrder.map((field) => <EvidenceFieldCell field={field} program={item.program} key={field} />)}
+          {criticalFieldOrder.map((field) => <EvidenceFieldCell field={field} program={item.program} decisionFacts={item.decision_facts} key={field} />)}
         </div>
       </article>)}
     </div>
   </IslandCard>;
 }
 
-function EvidenceFieldCell({ field, program }: { field: string; program: Program }) {
+function EvidenceFieldCell({ field, program, decisionFacts }: { field: string; program: Program; decisionFacts?: DecisionFacts }) {
   const record = findRecord(program, field);
-  const fallback = fallbackFieldValue(program, field);
-  const usable = record && (record.status === "OFFICIAL_VERIFIED_CURRENT" || record.status === "OFFICIAL_PREVIOUS_CYCLE");
-  const state = evidenceFieldState(program, field, record);
+  const readiness = fieldReadiness(program, field, decisionFacts);
+  const fallback = fallbackFieldValue(program, field, decisionFacts);
+  const usable = readiness === "current" || readiness === "reference";
+  const state = evidenceFieldState(program, field, record, decisionFacts);
+  const fact = decisionFacts?.[field];
+  const factValue = usable ? (fact?.normalized_value ?? fact?.raw_value) : null;
+  const displayValue = factValue !== null && factValue !== undefined && factValue !== "" && factValue !== "NOT_PUBLISHED"
+    ? formatDecisionFactValue(factValue, readiness, fact?.cycle ?? program.cycle)
+    : record ? fieldRecordDisplayValue(record, readiness) : fallback;
+  const sourceUrl = fact?.source_url ?? record?.source_url;
   return <section className={("source-field-cell " + (usable ? "usable" : "needs-source")).trim()}>
     <div className="source-field-head">
       <span>{fieldLabels[field] ?? field}</span>
       <DataBadge status={state.badgeStatus} label={state.label} />
     </div>
-    <strong>{record ? fieldRecordDisplayValue(record) : fallback}</strong>
-    <small>{record?.cycle ? previousCycleLabel(record.cycle) : state.kind === "awaiting_publish" ? "申请季待发布" : "申请季待补充"} · {formatSourceTime(record)}</small>
+    <strong>{displayValue}</strong>
+    <small>{readiness === "reference" ? previousCycleLabel(record?.cycle ?? fact?.cycle ?? program.cycle) : readiness === "current" ? "当前申请季字段" : record?.cycle ? previousCycleLabel(record.cycle) : state.kind === "awaiting_publish" ? "申请季待发布" : "申请季待补充"} · {formatSourceTime(record, fact)}</small>
     {record?.evidence_snippet ? <p>{fieldRecordExcerpt(record.evidence_snippet)}</p> : null}
-    {record?.source_url ? <a className="text-link" href={record.source_url} target="_blank" rel="noreferrer"><ExternalLink size={13} aria-hidden />打开来源</a> : <span className="source-missing-note">{state.kind === "missing" ? "来源待补充" : state.kind === "needs_verification" ? "核验后更新来源" : "发布后更新来源"}</span>}
+    {sourceUrl ? <a className="text-link" href={sourceUrl} target="_blank" rel="noreferrer"><ExternalLink size={13} aria-hidden />{usable ? "打开已记录来源" : "查看候选来源（待核验）"}</a> : <span className="source-missing-note">{state.kind === "missing" ? "来源待补充" : state.kind === "needs_verification" ? "核验后更新来源" : "发布后更新来源"}</span>}
   </section>;
 }
 
@@ -190,13 +199,13 @@ function TaskCard({ task, onStatusChange }: { task: TimelineTask; onStatusChange
         return <label key={item}><input type="checkbox" checked={Boolean(checkedMaterials[key])} onChange={() => setCheckedMaterials((current) => ({ ...current, [key]: !current[key] }))} /><span>{materialLabels[item] ?? fieldLabels[item] ?? item}</span></label>;
       })}</div> : null}
       {dependencies.length ? <div className="task-dependency-list"><strong>先完成</strong><div>{dependencies.map((item) => <span key={item}>{formatDependency(item)}</span>)}</div></div> : null}
-      <div className="link-row">{task.application_url ? <a className="text-link" href={task.application_url} target="_blank" rel="noreferrer"><ExternalLink size={13} aria-hidden />{timelineCopy.applicationEntry}</a> : null}{task.source_url ? <a className="text-link" href={task.source_url} target="_blank" rel="noreferrer"><ExternalLink size={13} aria-hidden />{timelineCopy.schoolSource}</a> : null}</div>
+      <div className="link-row">{task.application_url ? <a className="text-link" href={task.application_url} target="_blank" rel="noreferrer"><ExternalLink size={13} aria-hidden />{task.review_required ? "申请入口线索（待核验）" : timelineCopy.applicationEntry}</a> : null}{task.source_url ? <a className="text-link" href={task.source_url} target="_blank" rel="noreferrer"><ExternalLink size={13} aria-hidden />{task.review_required ? "官网来源线索（待核验）" : timelineCopy.schoolSource}</a> : null}</div>
     </div>
   </article>;
 }
 
 function TaskAssurance({ task }: { task: TimelineTask }) {
-  if (task.official_deadline && task.official_deadline !== "NOT_PUBLISHED") {
+  if (!task.review_required && task.date_basis === "官方截止倒推" && task.official_deadline && task.official_deadline !== "NOT_PUBLISHED") {
     return <div className="task-assurance ready"><ShieldCheck size={14} aria-hidden /><span>使用当前季官方日期安排；提交前建议再打开项目页确认入口和轮次。</span></div>;
   }
   if (task.previous_cycle_reference && task.previous_cycle_reference !== "NOT_PUBLISHED") {
@@ -214,29 +223,31 @@ function ProjectTimelineSummary({ matches, tasks }: { matches: ProgramMatch[]; t
     const programTasks = tasks.filter((task) => task.linked_program_ids?.includes(item.program.id)).sort(compareTasks);
     const nextTasks = programTasks.slice(0, 4);
     return <article className="project-summary-card" key={item.program.id}>
-      <div className="program-title-row"><DataBadge status={sourceBadgeStatus(item.program)} /><span className="tier-pill">{tierLabel(item)}</span></div>
+      <div className="program-title-row"><DataBadge status={sourceBadgeStatus(item.program, item.decision_facts, item.formal_gate_status)} /><span className="tier-pill">{tierLabel(item)}</span></div>
       <div className="project-identity">
         <span>{programInstitution(item.program)}</span>
         <h3>{programTitle(item.program)}</h3>
         <p>{programSchoolLine(item.program)}</p>
       </div>
-      <ProgramSourceAssurance program={item.program} />
-      <div className="task-meta compact"><span>DDL：{formatProgramDeadline(item.program)}</span><span>语言：{formatLanguageRequirement(item.program)}</span><span>材料：{formatProgramMaterials(item.program)}</span><span>学费：{formatMoney(item.program.tuition_hkd)}</span></div>
+      <ProgramSourceAssurance program={item.program} decisionFacts={item.decision_facts} formalGateStatus={item.formal_gate_status} />
+      <div className="task-meta compact"><span>DDL：{formatProgramDeadline(item.program, item.decision_facts)}</span><span>语言：{formatLanguageRequirement(item.program, item.decision_facts)}</span><span>材料：{formatProgramMaterials(item.program, item.decision_facts)}</span><span>学费：{formatProgramMoney(item.program, item.decision_facts)}</span></div>
       {nextTasks.length ? <div className="project-next-task-list">{nextTasks.map((task) => <div key={task.id}><strong>{String(task.suggested_due_date ?? task.due_date)}</strong><span>{task.program_round || task.task_name || task.title}</span><small>{formatTaskDeadline(task)} · {normalizeTaskStatus(task.status)}</small></div>)}</div> : <p>生成后会显示开放日、DDL、材料上传和提交入口。</p>}
-      <div className="link-row">{item.program.application_url ? <a className="text-link" href={item.program.application_url} target="_blank" rel="noreferrer"><ExternalLink size={13} aria-hidden />打开申请入口</a> : null}{item.program.official_program_url ? <a className="text-link" href={item.program.official_program_url} target="_blank" rel="noreferrer"><ExternalLink size={13} aria-hidden />打开项目页</a> : null}</div>
+      <ProgramLinks program={item.program} decisionFacts={item.decision_facts} />
     </article>;
   })}</div>;
 }
 
-function ProgramSourceAssurance({ program }: { program: Program }) {
+function ProgramSourceAssurance({ program, decisionFacts, formalGateStatus }: { program: Program; decisionFacts?: DecisionFacts; formalGateStatus?: DecisionStatus }) {
   const trust = program.trust_detail;
-  const records = criticalFieldOrder.map((field) => findRecord(program, field)).filter((record): record is TrustRecord => Boolean(record));
-  const readyItems = records.filter((record) => record.status === "OFFICIAL_VERIFIED_CURRENT" || record.status === "OFFICIAL_PREVIOUS_CYCLE").map((record) => fieldLabels[record.field_name] ?? record.field_name);
-  const missingItems = criticalFieldOrder.filter((field) => !records.some((record) => record.field_name === field && (record.status === "OFFICIAL_VERIFIED_CURRENT" || record.status === "OFFICIAL_PREVIOUS_CYCLE"))).map((field) => fieldLabels[field] ?? field);
+  const readyItems = criticalFieldOrder.filter((field) => ["current", "reference"].includes(fieldReadiness(program, field, decisionFacts))).map((field) => fieldLabels[field] ?? field);
+  const referenceFields = criticalFieldOrder.filter((field) => fieldReadiness(program, field, decisionFacts) === "reference");
+  const missingItems = criticalFieldOrder.filter((field) => !["current", "reference"].includes(fieldReadiness(program, field, decisionFacts))).map((field) => fieldLabels[field] ?? field);
+  const formalReady = formalGateStatus === "PASS" || Boolean(trust?.production_ready || trust?.formal_use_ready);
+  const referenceReady = !formalReady && (trust?.reference_ready || referenceFields.length > 0);
   return <div className="project-reference-box">
-    <div><span>资料可用性</span><strong>{trust?.production_ready ? "当前季官网信息可用" : trust?.reference_ready ? "有往届官方信息可参考" : "发布后更新"}</strong></div>
+    <div><span>资料可用性</span><strong>{formalReady ? "当前季官网信息可用" : referenceReady ? "有往届官方信息可参考" : "发布后更新"}</strong></div>
     <div><span>可参考内容</span><strong>{readyItems.length ? readyItems.slice(0, 4).join(" / ") : "先按通用材料准备"}</strong></div>
-    <p>{trust?.production_ready ? "可生成当前季日期任务；提交前仍建议打开项目页确认入口和轮次。" : trust?.reference_ready ? "先按往届信息准备材料，当前季发布后更新最终日期。" : "先准备通用材料，并优先补项目页、申请入口和截止日期来源。"}</p>
+    <p>{formalReady ? "可生成当前季日期任务；提交前仍建议打开项目页确认入口和轮次。" : referenceReady ? "先按往届信息准备材料，当前季发布后更新最终日期。" : "先准备通用材料，并优先补项目页、申请入口、截止日期和字段来源。"}</p>
     {missingItems.length ? <div className="source-mini-grid"><span><b>发布后更新</b>{missingItems.slice(0, 4).join(" / ")}</span></div> : null}
   </div>;
 }
@@ -250,15 +261,16 @@ function groupTasks(tasks: TimelineTask[], keyFor: (task: TimelineTask) => strin
 function buildSourceSummary(matches: ProgramMatch[]): SourceSummary {
   return matches.reduce<SourceSummary>((summary, item) => {
     const trust = item.program.trust_detail;
-    const records = trust?.field_records?.filter((record) => criticalFieldOrder.includes(record.field_name)) ?? [];
-    const current = trust?.official_current_fields?.length ?? records.filter((record) => record.status === "OFFICIAL_VERIFIED_CURRENT").length;
-    const reference = trust?.stale_or_reference_fields?.length ?? records.filter((record) => record.status === "OFFICIAL_PREVIOUS_CYCLE").length;
-    const missing = trust?.fields_requiring_review?.length ?? Math.max(0, criticalFieldOrder.length - current - reference);
+    const current = criticalFieldOrder.filter((field) => fieldReadiness(item.program, field, item.decision_facts) === "current").length;
+    const reference = criticalFieldOrder.filter((field) => fieldReadiness(item.program, field, item.decision_facts) === "reference").length;
+    const missing = criticalFieldOrder.length - current - reference;
+    const formalReady = item.formal_use_ready === true || item.formal_gate_status === "PASS" || Boolean(trust?.production_ready || trust?.formal_use_ready);
+    const referenceReady = !formalReady && Boolean(trust?.reference_ready || reference > 0);
     return {
       total: summary.total + 1,
-      formalReady: summary.formalReady + (trust?.production_ready ? 1 : 0),
-      referenceReady: summary.referenceReady + (!trust?.production_ready && trust?.reference_ready ? 1 : 0),
-      needsSource: summary.needsSource + (!trust?.production_ready && !trust?.reference_ready ? 1 : 0),
+      formalReady: summary.formalReady + (formalReady ? 1 : 0),
+      referenceReady: summary.referenceReady + (referenceReady ? 1 : 0),
+      needsSource: summary.needsSource + (!formalReady && !referenceReady ? 1 : 0),
       currentFields: summary.currentFields + current,
       referenceFields: summary.referenceFields + reference,
       missingFields: summary.missingFields + missing,
@@ -314,37 +326,52 @@ function compareTasks(a: TimelineTask, b: TimelineTask) { return taskDateKey(a).
 function taskDateKey(task: TimelineTask) { return String(task.suggested_due_date ?? task.due_date); }
 function taskProgramLabel(task: TimelineTask) { return task.program_name ? (task.institution ? task.institution + " / " : "") + task.program_name : "通用材料和语言"; }
 function projectRounds(tasks: TimelineTask[]) { const rounds = Array.from(new Set(tasks.map((task) => task.program_round).filter(Boolean))); return rounds.length ? "轮次：" + rounds.join(" / ") : String(tasks.length) + " 项任务"; }
-function formatTaskDeadline(task: TimelineTask) { const deadline = task.round_deadline ?? task.official_deadline; if (!deadline || deadline === "NOT_PUBLISHED") return task.previous_cycle_reference ? "当前季未发布，" + previousCycleLabel(task.previous_cycle_reference) + "：" + task.previous_cycle_reference : "当前季未发布"; return String(deadline); }
-function formatProgramDeadline(program: Program) { const fallback = !program.deadline || program.deadline === "NOT_PUBLISHED" ? null : String(program.deadline); return formatProgramField(program, "deadline", fallback, "当前季未发布 / 待官网核验"); }
-function formatLanguageRequirement(program: Program) { const language = program.requirements?.language ?? {}; const parts = Object.entries(language).filter(([, value]) => value !== null && value !== undefined).map(([key, value]) => key.toUpperCase() + " " + String(value)); return formatProgramField(program, "language_requirement", parts.length ? parts.slice(0, 2).join(" / ") : null, "打开项目页核对"); }
-function formatProgramMaterials(program: Program) { const materials = program.materials ?? []; const fallback = materials.length ? materials.slice(0, 4).map((item) => materialLabels[item] ?? item).join(" / ") : null; return formatProgramField(program, "materials", fallback, "成绩单 / 语言 / 推荐信 / CV / PS（待官网核验）"); }
+function formatTaskDeadline(task: TimelineTask) {
+  const deadline = task.round_deadline ?? task.official_deadline;
+  if (!deadline || deadline === "NOT_PUBLISHED") return task.previous_cycle_reference ? "当前季未发布，" + previousCycleLabel(task.previous_cycle_reference) + "：" + task.previous_cycle_reference : "当前季未发布";
+  if (task.review_required || task.date_basis !== "官方截止倒推") return `待官网核验（库内参考：${String(deadline)}）`;
+  return String(deadline);
+}
+function formatProgramDeadline(program: Program, decisionFacts?: DecisionFacts) { const fallback = !program.deadline || program.deadline === "NOT_PUBLISHED" ? null : String(program.deadline); return formatProgramField(program, "deadline", fallback, "当前季未发布 / 待官网核验", decisionFacts); }
+function formatLanguageRequirement(program: Program, decisionFacts?: DecisionFacts) { const language = program.requirements?.language ?? {}; const parts = Object.entries(language).filter(([, value]) => value !== null && value !== undefined).map(([key, value]) => key.toUpperCase() + " " + String(value)); return formatProgramField(program, "language_requirement", parts.length ? parts.slice(0, 2).join(" / ") : null, "打开项目页核对", decisionFacts); }
+function formatProgramMaterials(program: Program, decisionFacts?: DecisionFacts) { const materials = program.materials ?? []; const fallback = materials.length ? materials.slice(0, 4).map((item) => materialLabels[item] ?? item).join(" / ") : null; return formatProgramField(program, "materials", fallback, "成绩单 / 语言 / 推荐信 / CV / PS（待官网核验）", decisionFacts); }
 function formatMoney(value: number | null | undefined) { return value ? String(Math.round(value / 10000)) + " 万港币" : "官网学费待补充"; }
+function formatProgramMoney(program: Program, decisionFacts?: DecisionFacts) {
+  const readiness = fieldReadiness(program, "tuition_hkd", decisionFacts);
+  const record = findRecord(program, "tuition_hkd");
+  const value = decisionFacts?.tuition_hkd && readiness !== "candidate" && readiness !== "missing" ? (decisionFacts.tuition_hkd.normalized_value ?? decisionFacts.tuition_hkd.raw_value) : readiness === "current" ? record?.value : null;
+  const amount = typeof value === "number" ? value : Number.parseFloat(String(value ?? ""));
+  if (readiness === "current" && Number.isFinite(amount) && amount > 0) return formatMoney(amount);
+  if (program.tuition_hkd) return `待官网核验（库内参考：${formatMoney(program.tuition_hkd)}）`;
+  return "官网学费待补充";
+}
 function findRecord(program: Program, field: string) { return program.trust_detail?.field_records?.find((record) => record.field_name === field) ?? null; }
 
-function formatProgramField(program: Program, field: string, fallback: string | null, empty: string) {
+function formatProgramField(program: Program, field: string, fallback: string | null, empty: string, decisionFacts?: DecisionFacts) {
+  const readiness = fieldReadiness(program, field, decisionFacts);
+  const fact = decisionFacts?.[field];
+  const factValue = readiness === "current" || readiness === "reference" ? (fact?.normalized_value ?? fact?.raw_value) : null;
   const record = findRecord(program, field);
-  if (record?.value && record.value !== "NOT_PUBLISHED") return fieldRecordDisplayValue(record);
+  const value = factValue ?? (readiness === "current" || readiness === "reference" ? record?.value : null);
+  if (value && value !== "NOT_PUBLISHED") return formatDecisionFactValue(value, readiness, fact?.cycle ?? record?.cycle ?? program.cycle);
   return fallback ? `待官网核验（库内参考：${fallback}）` : empty;
 }
 
-function fallbackFieldValue(program: Program, field: string) {
-  if (field === "official_program_url") return program.official_program_url ? "已找到项目页，等待字段发布" : "未找到项目详情页";
-  if (field === "application_url") return program.application_url ? "已找到申请入口，等待字段发布" : "申请入口待补充";
-  if (field === "deadline") return formatProgramDeadline(program);
-  if (field === "language_requirement") return formatLanguageRequirement(program);
-  if (field === "materials") return formatProgramMaterials(program);
-  if (field === "tuition_hkd") return formatProgramField(program, field, program.tuition_hkd ? formatMoney(program.tuition_hkd) : null, "官网学费待补充");
+function fallbackFieldValue(program: Program, field: string, decisionFacts?: DecisionFacts) {
+  if (field === "official_program_url") return program.official_program_url ? "已找到项目页线索，等待字段发布" : "未找到项目详情页";
+  if (field === "application_url") return program.application_url ? "已找到申请入口线索，等待字段发布" : "申请入口待补充";
+  if (field === "deadline") return formatProgramDeadline(program, decisionFacts);
+  if (field === "language_requirement") return formatLanguageRequirement(program, decisionFacts);
+  if (field === "materials") return formatProgramMaterials(program, decisionFacts);
+  if (field === "tuition_hkd") return formatProgramField(program, field, program.tuition_hkd ? formatMoney(program.tuition_hkd) : null, "官网学费待补充", decisionFacts);
   return "等待来源更新";
 }
-function evidenceFieldState(program: Program, field: string, record: TrustRecord | null): EvidenceFieldState {
-  if (record && record.status !== "MODEL_INFERRED") {
-    const published = record.status === "OFFICIAL_VERIFIED_CURRENT" || record.status === "OFFICIAL_PREVIOUS_CYCLE";
-    return { badgeStatus: record.status, label: dataStatusLabels[record.status] ?? record.status, kind: published ? "published" : "needs_verification" };
-  }
-  const hasCandidate = Boolean(record?.value && record.value !== "NOT_PUBLISHED") || hasProgramFieldCandidate(program, field);
-  if (hasCandidate && (field === "official_program_url" || field === "application_url")) {
-    return { badgeStatus: "EXTRACTED", label: "已提取待发布", kind: "awaiting_publish" };
-  }
+function evidenceFieldState(program: Program, field: string, record: TrustRecord | null, decisionFacts?: DecisionFacts): EvidenceFieldState {
+  const readiness = fieldReadiness(program, field, decisionFacts);
+  if (readiness === "current") return { badgeStatus: "OFFICIAL_VERIFIED_CURRENT", label: "官网当前季已核验", kind: "published" };
+  if (readiness === "reference") return { badgeStatus: "OFFICIAL_PREVIOUS_CYCLE", label: previousCycleLabel(record?.cycle ?? decisionFacts?.[field]?.cycle ?? program.cycle), kind: "published" };
+  const hasCandidate = Boolean(record?.value && record.value !== "NOT_PUBLISHED") || hasProgramFieldCandidate(program, field) || Boolean(decisionFacts?.[field]?.catalog_value);
+  if (hasCandidate && (field === "official_program_url" || field === "application_url")) return { badgeStatus: "EXTRACTED", label: "已提取待发布", kind: "awaiting_publish" };
   if (hasCandidate) return { badgeStatus: "PENDING_REVIEW", label: "待官网核验", kind: "needs_verification" };
   return { badgeStatus: "MODEL_INFERRED", label: "缺少来源", kind: "missing" };
 }
@@ -357,25 +384,81 @@ function hasProgramFieldCandidate(program: Program, field: string) {
   if (field === "tuition_hkd") return Boolean(program.tuition_hkd);
   return false;
 }
-function fieldRecordDisplayValue(record: TrustRecord) {
-  if (!record.value || record.value === "NOT_PUBLISHED") return "当前季未发布";
+function fieldReadiness(program: Program, field: string, decisionFacts?: DecisionFacts): FieldReadiness {
+  const fact = decisionFacts?.[field];
+  if (fact?.formal_use_ready && fact.decision_status === "PASS") return "current";
+  if (fact?.provenance_status === "REVIEWED_PREVIOUS") return "reference";
+  const trust = program.trust_detail;
+  const record = findRecord(program, field);
+  if (trust?.official_current_fields.includes(field) || (trust?.production_ready && !trust.official_current_fields.length && record?.status === "OFFICIAL_VERIFIED_CURRENT")) return "current";
+  if (trust?.stale_or_reference_fields.includes(field) || (trust?.reference_ready && record?.status === "OFFICIAL_PREVIOUS_CYCLE")) return "reference";
+  if (record?.value && record.value !== "NOT_PUBLISHED") return "candidate";
+  return "missing";
+}
+function formatDecisionFactValue(value: unknown, readiness: FieldReadiness, cycle: string | null | undefined) {
+  if (value === null || value === undefined || value === "" || value === "NOT_PUBLISHED") return "当前季未发布 / 待官网核验";
+  const compact = String(value).replace(/\s+/g, " ").trim();
+  const bounded = compact.length > 120 ? compact.slice(0, 120) + "..." : compact;
+  if (readiness === "current") return bounded;
+  if (readiness === "reference") return `${bounded}（${previousCycleLabel(cycle)}）`;
+  return `待官网核验（目录/抓取线索：${bounded}）`;
+}
+function fieldRecordDisplayValue(record: TrustRecord, readiness: FieldReadiness = record.status === "OFFICIAL_VERIFIED_CURRENT" ? "current" : record.status === "OFFICIAL_PREVIOUS_CYCLE" ? "reference" : "candidate") {
+  if (!record.value || record.value === "NOT_PUBLISHED") return readiness === "reference" ? `${previousCycleLabel(record.cycle)}可用于安排材料` : "当前季未发布 / 待官网核验";
   const value = String(record.value).replace(/\s+/g, " ").trim();
   const compact = value.length > 96 ? value.slice(0, 96) + "..." : value;
-  if (record.status === "OFFICIAL_VERIFIED_CURRENT") return compact;
-  if (record.status === "OFFICIAL_PREVIOUS_CYCLE") return `${compact}（${previousCycleLabel(record.cycle)}）`;
-  return `待官网核验（库内参考：${compact}）`;
+  if (readiness === "current") return compact;
+  if (readiness === "reference") return `${compact}（${previousCycleLabel(record.cycle)}）`;
+  return `待官网核验（目录/抓取线索：${compact}）`;
 }
 function fieldRecordExcerpt(value: string) {
   const compact = value.replace(/\s+/g, " ").trim();
   return compact.length > 140 ? compact.slice(0, 140) + "..." : compact;
 }
-function formatSourceTime(record?: TrustRecord | null) {
-  if (!record) return "来源待补充";
-  const value = record.verified_at ?? record.extracted_at;
+function formatSourceTime(record?: TrustRecord | null, fact?: DecisionFact) {
+  if (!record && !fact) return "来源待补充";
+  const value = fact?.verified_at ?? fact?.observed_at ?? record?.verified_at ?? record?.extracted_at;
   if (!value) return "抓取时间待补充";
-  return value.includes("T") ? value.replace("T", " ").slice(0, 16) : value;
+  const stringValue = String(value);
+  return stringValue.includes("T") ? stringValue.replace("T", " ").slice(0, 16) : stringValue;
 }
-function sourceBadgeStatus(program: Program) { const trust = program.trust_detail; if (trust?.production_ready) return "OFFICIAL_VERIFIED_CURRENT"; if (trust?.reference_ready) return "OFFICIAL_PREVIOUS_CYCLE"; return program.data_status ?? "MODEL_INFERRED"; }
+function absoluteHttpUrl(value: unknown) { try { const url = new URL(String(value ?? "")); return ["http:", "https:"].includes(url.protocol) ? url.toString() : null; } catch { return null; } }
+function isLikelyProgramDetailUrl(urlValue: string) {
+  const url = urlValue.toLowerCase();
+  if (url.includes("masters.smu.edu.sg/programmes/") && !url.endsWith("/programmes")) return true;
+  if (url.includes("www.ntu.edu.sg") && url.includes("/admissions/graduate-studies/") && url.split("/").length > 6) return true;
+  if (url.includes("prog-crs.hkust.edu.cn/pgprog/") || url.includes("prog-crs.hkust.edu.hk/pgprog/")) return true;
+  if (url.includes("www.sutd.edu.sg/programme-listing/")) return true;
+  const generic = ["programme-list", "taught-postgraduate-programmes", "/admissions", "/graduate-admissions", "/programmes?", "/programs?", "/programme/index"];
+  return !generic.some((pattern) => url.includes(pattern));
+}
+function verifiedFieldUrl(program: Program, field: "official_program_url" | "application_url", decisionFacts?: DecisionFacts) {
+  if (fieldReadiness(program, field, decisionFacts) !== "current") return null;
+  const fact = decisionFacts?.[field];
+  const factUrl = absoluteHttpUrl(fact?.normalized_value ?? fact?.raw_value);
+  if (factUrl && (field !== "official_program_url" || isLikelyProgramDetailUrl(factUrl))) return factUrl;
+  const record = findRecord(program, field);
+  const recordUrl = absoluteHttpUrl(record?.value);
+  return recordUrl && (field !== "official_program_url" || isLikelyProgramDetailUrl(recordUrl)) ? recordUrl : null;
+}
+function candidateFieldUrl(program: Program, field: "official_program_url" | "application_url") {
+  const value = absoluteHttpUrl(field === "official_program_url" ? program.official_program_url : program.application_url);
+  return value && (field !== "official_program_url" || isLikelyProgramDetailUrl(value)) ? value : null;
+}
+function ProgramLinks({ program, decisionFacts }: { program: Program; decisionFacts?: DecisionFacts }) {
+  const verifiedApplicationUrl = verifiedFieldUrl(program, "application_url", decisionFacts);
+  const candidateApplicationUrl = verifiedApplicationUrl ? null : candidateFieldUrl(program, "application_url");
+  const verifiedDetailUrl = verifiedFieldUrl(program, "official_program_url", decisionFacts);
+  const candidateDetailUrl = verifiedDetailUrl ? null : candidateFieldUrl(program, "official_program_url");
+  if (!verifiedApplicationUrl && !candidateApplicationUrl && !verifiedDetailUrl && !candidateDetailUrl) return null;
+  return <div className="link-row">{verifiedApplicationUrl ? <a className="text-link" href={verifiedApplicationUrl} target="_blank" rel="noreferrer"><ExternalLink size={13} aria-hidden />打开已核验申请入口</a> : candidateApplicationUrl ? <a className="text-link" href={candidateApplicationUrl} target="_blank" rel="noreferrer"><ExternalLink size={13} aria-hidden />申请入口线索（待核验）</a> : null}{verifiedDetailUrl ? <a className="text-link" href={verifiedDetailUrl} target="_blank" rel="noreferrer"><ExternalLink size={13} aria-hidden />打开已核验项目页</a> : candidateDetailUrl ? <a className="text-link" href={candidateDetailUrl} target="_blank" rel="noreferrer"><ExternalLink size={13} aria-hidden />项目页线索（待核验）</a> : null}</div>;
+}
+function sourceBadgeStatus(program: Program, decisionFacts?: DecisionFacts, formalGateStatus?: DecisionStatus) {
+  const trust = program.trust_detail;
+  if (formalGateStatus === "PASS" || trust?.production_ready || trust?.formal_use_ready) return "OFFICIAL_VERIFIED_CURRENT";
+  if (trust?.reference_ready || criticalFieldOrder.some((field) => fieldReadiness(program, field, decisionFacts) === "reference")) return "OFFICIAL_PREVIOUS_CYCLE";
+  return "MODEL_INFERRED";
+}
 function dateBasisLabel(value?: string | null) { const raw = String(value ?? ""); if (raw.includes("官方")) return "官方倒推"; if (raw.includes("上一") || raw.includes("往届")) return "往届参考"; if (raw.includes("人工")) return "人工确认"; return "准备动作"; }
 function riskLabel(value?: string | null) { const raw = String(value ?? "").toLowerCase(); if (raw.includes("high") || raw.includes("高")) return "高"; if (raw.includes("low") || raw.includes("低")) return "低"; return "中"; }
 function riskClass(value?: string | null) { const label = riskLabel(value); return label === "高" ? "high" : label === "低" ? "low" : "medium"; }
@@ -398,5 +481,5 @@ function EmptyState({ text }: { text: string }) { return <div className="empty-s
 
 export function ProgramMiniList({ matches }: { matches: ProgramMatch[] }) {
   if (!matches.length) return <EmptyState text={timelineCopy.noSelectedPrograms} />;
-  return <div className="mini-program-list">{matches.map((item) => <article className="mini-program" key={item.program.id}><DataBadge status={sourceBadgeStatus(item.program)} /><h3>{programTitle(item.program)}</h3><p>{programInstitution(item.program)} / {programSchoolLine(item.program)}</p><span>{tierLabel(item)}</span></article>)}</div>;
+  return <div className="mini-program-list">{matches.map((item) => <article className="mini-program" key={item.program.id}><DataBadge status={sourceBadgeStatus(item.program, item.decision_facts, item.formal_gate_status)} /><h3>{programTitle(item.program)}</h3><p>{programInstitution(item.program)} / {programSchoolLine(item.program)}</p><span>{tierLabel(item)}</span></article>)}</div>;
 }

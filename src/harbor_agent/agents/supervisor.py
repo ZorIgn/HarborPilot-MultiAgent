@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from harbor_agent.agents.base import BaseAgent
 from harbor_agent.agents.critic import CriticOutcome
+from harbor_agent.models import CriticReadiness
 from harbor_agent.runtime.decision import AgentDecision, DecisionType
 from harbor_agent.runtime.errors import LLMStructuredOutputError
 from harbor_agent.runtime.state import AgentState, WorkflowGoal, WorkflowTask, WorkflowTaskStatus
@@ -96,8 +97,10 @@ class SupervisorAgent(BaseAgent):
             "verification_complete": bool(state.working_memory.get("verification_complete")),
             "verification_conflict_count": len(state.verification_conflicts),
             "timeline_ready": bool(state.timeline or state.timeline_ready),
-            "writing_ready": bool(state.writing_draft or state.writing_ready),
+            "writing_ready": state.writing_ready,
             "critic_outcome": state.working_memory.get("critic_outcome"),
+            "critic_readiness": state.working_memory.get("critic_readiness"),
+            "critic_blockers": state.working_memory.get("critic_blockers", [])[:12],
             "reverify_attempts": state.working_memory.get("reverify_attempts", 0),
             "supervisor_replans": state.supervisor_replans,
             "waiting_for_user": bool(state.user_question),
@@ -124,7 +127,16 @@ class SupervisorAgent(BaseAgent):
         if route.next_agent == "ASK_USER":
             return AgentDecision(decision=DecisionType.ASK_USER, reasoning_summary=route.reason, state_patch=route.state_patch, user_question=state.user_question or "请补充继续所需的信息。")
         if route.next_agent == "HUMAN_REVIEW":
-            return AgentDecision(decision=DecisionType.HUMAN_REVIEW, reasoning_summary=route.reason, state_patch=route.state_patch, human_review_reason=state.human_review_reason or "需要人工审核。")
+            return AgentDecision(
+                decision=DecisionType.HUMAN_REVIEW,
+                reasoning_summary=route.reason,
+                state_patch=route.state_patch,
+                human_review_reason=str(
+                    route.state_patch.get("human_review_reason")
+                    or state.human_review_reason
+                    or "需要人工审核。"
+                ),
+            )
         return AgentDecision(decision=DecisionType.HANDOFF, reasoning_summary=route.reason, state_patch=route.state_patch, next_agent=route.next_agent)
 
     def model_decision(
@@ -212,7 +224,11 @@ class SupervisorAgent(BaseAgent):
                 confidence=decision.confidence,
             )
         if expected_decision == DecisionType.HUMAN_REVIEW:
-            reason = str(state.human_review_reason or "需要人工审核。")
+            reason = str(
+                policy_route.state_patch.get("human_review_reason")
+                or state.human_review_reason
+                or "需要人工审核。"
+            )
             return AgentDecision(
                 decision=DecisionType.HUMAN_REVIEW,
                 reasoning_summary=decision.reasoning_summary,
@@ -268,7 +284,13 @@ class SupervisorAgent(BaseAgent):
             )
 
         outcome = str(state.working_memory.get("critic_outcome") or "")
-        if outcome and outcome != CriticOutcome.PASS.value:
+        readiness = str(state.working_memory.get("critic_readiness") or "")
+        if outcome and outcome not in {
+            CriticOutcome.PASS.value,
+            CriticOutcome.PRELIMINARY_COMPLETE.value,
+        }:
+            if outcome == CriticOutcome.BLOCKED.value:
+                return self._blocked_route(state)
             return self._replan_route(state, outcome)
 
         if state.raw_profile is None:
@@ -279,7 +301,13 @@ class SupervisorAgent(BaseAgent):
         if state.goal == WorkflowGoal.BACKGROUND_ASSESSMENT:
             if outcome != CriticOutcome.PASS.value:
                 return self._route("CriticAgent", "Background assessment needs a final bounded critic pass.", state)
-            return self._route("END", "Background assessment is complete.", state, final=True)
+            if readiness != CriticReadiness.PRELIMINARY_COMPLETE.value:
+                return self._route(
+                    "CriticAgent",
+                    "Legacy critic output lacks structured preliminary readiness; re-run the deterministic critic gate.",
+                    state,
+                )
+            return self._route("END", "Background assessment is preliminarily complete.", state, final=True)
 
         if not state.candidate_program_ids:
             return self._route("ResearchAgent", "No programme candidates have been researched yet.", state)
@@ -297,16 +325,78 @@ class SupervisorAgent(BaseAgent):
             return self._route("VerificationAgent", "Selected programmes require official-source verification before formal use.", state)
 
         if state.goal == WorkflowGoal.PROGRAM_RECOMMENDATION:
-            if outcome != CriticOutcome.PASS.value:
+            if outcome not in {
+                CriticOutcome.PASS.value,
+                CriticOutcome.PRELIMINARY_COMPLETE.value,
+            }:
                 return self._route("CriticAgent", "Programme portfolio requires grounded consistency review.", state)
-            return self._route("END", "Grounded programme recommendation is complete.", state, final=True)
+            if readiness not in {
+                CriticReadiness.FORMAL_PASS.value,
+                CriticReadiness.PRELIMINARY_COMPLETE.value,
+            }:
+                return self._route(
+                    "CriticAgent",
+                    "Programme delivery requires an explicit formal or preliminary Critic readiness result.",
+                    state,
+                )
+            reason = (
+                "Grounded programme recommendation is formally complete."
+                if readiness == CriticReadiness.FORMAL_PASS.value
+                else "Programme recommendation is complete for exploration only; formal use remains blocked by cited source gaps."
+            )
+            return self._route("END", reason, state, final=True)
 
         if state.goal in {WorkflowGoal.APPLICATION_PLANNING, WorkflowGoal.FULL_APPLICATION_PLAN} and not state.timeline:
             return self._route("PlanningAgent", "Application planning has not generated an evidence-gated timeline.", state)
         if state.goal in {WorkflowGoal.WRITING, WorkflowGoal.FULL_APPLICATION_PLAN} and not state.writing_draft:
             return self._route("WritingAgent", "Writing work has not generated a fact-bound draft.", state)
+        if state.goal in {WorkflowGoal.WRITING, WorkflowGoal.FULL_APPLICATION_PLAN} and not state.writing_ready:
+            # This is defence in depth for compatibility checkpoints: even if
+            # an old Critic result says PASS, a missing separate ClaimGraph
+            # validation turn cannot reach END.  Recompute the Critic writing
+            # gate rather than trusting its cached legacy result.
+            memory = deepcopy(state.working_memory)
+            memory.pop("critic_outcome", None)
+            memory.pop("critic_readiness", None)
+            memory.pop("critic_blockers", None)
+            tool_results = dict(memory.get("tool_results", {}))
+            tool_results.pop("validate_writing_grounding", None)
+            memory["tool_results"] = tool_results
+            return self._route(
+                "CriticAgent",
+                "Writing cannot complete until a separate ClaimGraph validation turn sets writing_ready=true.",
+                state,
+                {"working_memory": memory},
+            )
+        if state.goal == WorkflowGoal.APPLICATION_PLANNING:
+            if outcome not in {
+                CriticOutcome.PASS.value,
+                CriticOutcome.PRELIMINARY_COMPLETE.value,
+            }:
+                return self._route("CriticAgent", "The preparation plan needs a final consistency review.", state)
+            if readiness not in {
+                CriticReadiness.FORMAL_PASS.value,
+                CriticReadiness.PRELIMINARY_COMPLETE.value,
+            }:
+                return self._route(
+                    "CriticAgent",
+                    "Application planning requires an explicit formal or preliminary Critic readiness result.",
+                    state,
+                )
+            reason = (
+                "Application plan is formally complete."
+                if readiness == CriticReadiness.FORMAL_PASS.value
+                else "Application preparation plan is complete; formal dates and requirements remain blocked pending current official facts."
+            )
+            return self._route("END", reason, state, final=True)
         if outcome != CriticOutcome.PASS.value:
             return self._route("CriticAgent", "The requested deliverables need final consistency and grounding review.", state)
+        if readiness != CriticReadiness.FORMAL_PASS.value:
+            return self._route(
+                "CriticAgent",
+                "The workflow has an old or preliminary Critic result; formal delivery remains blocked pending a structured formal pass.",
+                state,
+            )
         return self._route("END", "All requested workflow deliverables are complete and reviewed.", state, final=True)
 
     def route_options(self, state: AgentState) -> list[SupervisorRoute]:
@@ -321,6 +411,32 @@ class SupervisorAgent(BaseAgent):
         """
 
         primary = self.route(state)
+        if primary.next_agent == "VerificationAgent":
+            options = [primary]
+            # Once a selection exists, source-planning and student-story
+            # preparation are independent of the later formal verification.
+            # Neither alternative can mark a fact, timeline or writing output
+            # ready, so exposing them creates genuine safe planning latitude.
+            if not state.working_memory.get("source_research_plan"):
+                options.append(
+                    self._route(
+                        "ResearchAgent",
+                        "Selected programmes still need a bounded official-source research plan before verification fetches begin.",
+                        state,
+                    )
+                )
+            if (
+                state.goal in {WorkflowGoal.WRITING, WorkflowGoal.FULL_APPLICATION_PLAN}
+                and not state.story_cards
+            ):
+                options.append(
+                    self._route(
+                        "WritingAgent",
+                        "Student story-card preparation can safely start while official programme verification is pending.",
+                        state,
+                    )
+                )
+            return options
         if not (
             primary.next_agent == "PlanningAgent"
             and state.goal == WorkflowGoal.FULL_APPLICATION_PLAN
@@ -374,6 +490,23 @@ class SupervisorAgent(BaseAgent):
             return self._route("WritingAgent", "Critic found unsupported writing claims and requested a rewrite.", state, {"writing_draft": None, "writing_ready": False, "working_memory": memory, "supervisor_replans": replans})
         return self._route("CriticAgent", "Critic outcome was not recognized; require an explicit follow-up review.", state, {"working_memory": memory, "supervisor_replans": replans})
 
+    def _blocked_route(self, state: AgentState) -> SupervisorRoute:
+        blockers = state.working_memory.get("critic_blockers", [])
+        if not isinstance(blockers, list):
+            blockers = [str(blockers)]
+        details = "；".join(str(item) for item in blockers[:4] if str(item).strip())
+        reason = (
+            "正式交付已被 Critic 阻断，需要人工审核或新的官方来源采集。"
+            + (f" 阻断项：{details}" if details else "")
+        )
+        return self._route(
+            "HUMAN_REVIEW",
+            reason,
+            state,
+            {"human_review_reason": reason},
+            human_review_reason=reason,
+        )
+
     def _route(
         self,
         next_agent: RouteTarget,
@@ -382,11 +515,14 @@ class SupervisorAgent(BaseAgent):
         patch: dict | None = None,
         *,
         user_question: str | None = None,
+        human_review_reason: str | None = None,
         final: bool = False,
     ) -> SupervisorRoute:
         state_patch = dict(patch or {})
         if user_question:
             state_patch["user_question"] = user_question
+        if human_review_reason:
+            state_patch["human_review_reason"] = human_review_reason
         if next_agent not in {"END", "ASK_USER", "HUMAN_REVIEW"}:
             task = WorkflowTask(
                 task_id=f"{next_agent}:{state.step_count + 1}",
@@ -402,6 +538,17 @@ class SupervisorAgent(BaseAgent):
 
 
 def _final_result(state: AgentState) -> dict:
+    readiness = str(state.working_memory.get("critic_readiness") or "")
+    blockers = state.working_memory.get("critic_blockers", [])
+    formal_ready = (
+        readiness == CriticReadiness.FORMAL_PASS.value
+        and not any(state.fields_needing_verification.values())
+        and not state.verification_conflicts
+        and (
+            state.goal not in {WorkflowGoal.WRITING, WorkflowGoal.FULL_APPLICATION_PLAN}
+            or state.writing_ready
+        )
+    )
     return {
         "workflow_id": state.workflow_id,
         "goal": state.goal.value,
@@ -411,5 +558,8 @@ def _final_result(state: AgentState) -> dict:
         "selected_program_ids": state.selected_program_ids,
         "timeline": state.timeline,
         "writing": state.writing_draft,
-        "formal_use_ready": not any(state.fields_needing_verification.values()) and not state.verification_conflicts,
+        "critic_readiness": readiness or None,
+        "delivery_status": readiness or "UNREVIEWED",
+        "blockers": blockers if isinstance(blockers, list) else [str(blockers)],
+        "formal_use_ready": formal_ready,
     }

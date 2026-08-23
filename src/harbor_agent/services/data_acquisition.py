@@ -39,17 +39,12 @@ from harbor_agent.services.information_store import (
     update_information_run_plan,
 )
 from harbor_agent.services.data_refresh import _source_ids_for_programs
+from harbor_agent.services.field_contract import ACQUISITION_FIELD_ORDER
 
 
-OFFICIAL_REQUIREMENT_FIELD_ORDER = [
-    "official_program_url",
-    "deadline",
-    "tuition_hkd",
-    "language_requirement",
-    "materials",
-    "application_url",
-    "essay_prompts",
-]
+# Compatibility exports used by a few integrations.  The canonical definition
+# lives in ``field_contract`` so crawler, review and report layers cannot drift.
+OFFICIAL_REQUIREMENT_FIELD_ORDER = list(ACQUISITION_FIELD_ORDER)
 OFFICIAL_REQUIREMENT_FIELDS = set(OFFICIAL_REQUIREMENT_FIELD_ORDER)
 TIMELINE_FIELDS = {"deadline", "application_url", "essay_prompts"}
 
@@ -62,6 +57,10 @@ class ProgramDataAcquisitionService:
     def run(self, request: DataAcquisitionRequest) -> DataAcquisitionReport:
         checked_at = datetime.now(UTC)
         run_id = f"acq_{uuid4().hex[:12]}"
+        live_fetch = (
+            not request.dry_run
+            and request.connection_mode.value in {"real", "hybrid"}
+        )
         programs = _select_programs(load_programs(), request.selected_program_ids)
         registry_sources = load_source_registry().sources
         config = load_acquisition_sources()
@@ -76,10 +75,10 @@ class ProgramDataAcquisitionService:
         )
         quality_metrics = [package.quality_metric for package in packages if package.quality_metric]
         crawler_capabilities = _crawler_capabilities(source_plan)
-        if not request.dry_run:
+        if live_fetch:
             start_information_run(
                 run_id,
-                mode="live_fetch",
+                mode=request.connection_mode.value,
                 selected_program_ids=[program.id for program in programs],
                 planned_source_count=len(source_plan),
             )
@@ -88,7 +87,7 @@ class ProgramDataAcquisitionService:
         pipeline_stats = {"attempted": 0, "successful": 0, "failed": 0, "binding_warnings": 0}
         run_warnings: list[str] = []
         try:
-            if not request.dry_run:
+            if live_fetch:
                 live_records, extraction_results, pipeline_stats, run_warnings = _run_live_snapshot_pipeline_with_run(
                     packages, checked_at, run_id
                 )
@@ -100,11 +99,11 @@ class ProgramDataAcquisitionService:
                 )
                 update_information_run_plan(run_id, len(source_plan))
             persisted_count = 0
-            if not request.dry_run:
+            if live_fetch:
                 persisted_count = upsert_field_evidence_records(_records_for_persistence(packages))
         except Exception as exc:
             run_warnings.append(f"{type(exc).__name__}: {exc}")
-            if not request.dry_run:
+            if live_fetch:
                 finish_information_run(
                     run_id,
                     status="FAILED",
@@ -117,9 +116,13 @@ class ProgramDataAcquisitionService:
             raise
         missing_official = sum(len(package.official_requirements) for package in packages)
         community_count = sum(len(package.community_experiences) for package in packages)
+        if not request.dry_run and not live_fetch:
+            run_warnings.append(
+                "connection_mode=mock：已拒绝联网采集；请显式选择 real 或 hybrid 后再由受控 operator 运行。"
+            )
         summary_prefix = (
             f"已写入 {persisted_count} 条字段级证据候选到 SQLite；"
-            if not request.dry_run
+            if live_fetch
             else ""
         )
         run_status = (
@@ -127,7 +130,7 @@ class ProgramDataAcquisitionService:
             if run_warnings or any(package.human_review_required for package in packages)
             else "COMPLETED"
         )
-        if not request.dry_run:
+        if live_fetch:
             finish_information_run(
                 run_id,
                 status=run_status,
@@ -139,7 +142,7 @@ class ProgramDataAcquisitionService:
             )
         return DataAcquisitionReport(
             run_id=run_id,
-            mode="dry_run" if request.dry_run else "live_fetch",
+            mode="live_fetch" if live_fetch else "dry_run",
             checked_at=checked_at,
             selected_program_ids=[program.id for program in programs],
             packages=packages,
@@ -815,7 +818,10 @@ def _coverage_next_action(field_name: str, record: FieldEvidenceRecord | None, v
         "official_program_url": "项目详情页",
         "deadline": "截止日期",
         "tuition_hkd": "学费",
+        "min_gpa": "最低 GPA",
         "language_requirement": "语言要求",
+        "required_backgrounds": "专业背景要求",
+        "portfolio_required": "作品集要求",
         "materials": "材料清单",
         "application_url": "申请入口",
         "essay_prompts": "文书题目",
@@ -920,7 +926,7 @@ def _official_source_plans(program: Program, registry_sources: list[SourcePolicy
                 url=detail_url,
                 channel="official_requirement",
                 trust_level=SourceTrustLevel.official,
-                allowed_fields=["official_program_url", "deadline", "tuition_hkd", "language_requirement", "materials", "essay_prompts", "application_url"],
+                allowed_fields=OFFICIAL_REQUIREMENT_FIELD_ORDER,
                 crawler_method="direct programme page snapshot and field parser",
                 source_scope=SourceScope.programme_detail,
                 target_program_id=program.id,
@@ -943,7 +949,10 @@ def _official_source_plans(program: Program, registry_sources: list[SourcePolicy
                     "official_program_url",
                     "deadline",
                     "tuition_hkd",
+                    "min_gpa",
                     "language_requirement",
+                    "required_backgrounds",
+                    "portfolio_required",
                     "materials",
                     "essay_prompts",
                     "application_url",

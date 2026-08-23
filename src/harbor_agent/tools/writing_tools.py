@@ -2,9 +2,22 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from harbor_agent.services.deterministic_writing import build_fact_bound_writing_draft, build_story_cards
-from harbor_agent.models import NormalizedProfile, ProgramMatch, QuestionnaireResponse, StoryCard, WritingDraft
+from harbor_agent.models import (
+    ClaimGraph,
+    NormalizedProfile,
+    ProgramMatch,
+    QuestionnaireResponse,
+    ResolvedProgramView,
+    StoryCard,
+    WritingDraft,
+)
 from harbor_agent.runtime.state import AgentState
+from harbor_agent.services.claim_graph import build_claim_graph, claim_graph_passed
+from harbor_agent.services.resolved_program import resolve_program_view
+from harbor_agent.services.deterministic_writing import (
+    build_fact_bound_writing_draft,
+    build_story_cards,
+)
 from harbor_agent.tools.base import EmptyToolInput, ToolDefinition
 
 
@@ -26,7 +39,10 @@ class WritingGapsResult(BaseModel):
 
 class WritingClaimsResult(BaseModel):
     grounded: bool
+    passed: bool
     unsupported_claims: list[str] = Field(default_factory=list)
+    blockers: list[str] = Field(default_factory=list)
+    graph: ClaimGraph
 
 
 class WritingDraftResult(BaseModel):
@@ -58,15 +74,34 @@ def _student_facts(state: AgentState, _: EmptyToolInput) -> StudentFactsResult:
 
 
 def _program_evidence(state: AgentState, _: EmptyToolInput) -> ProgramEvidenceResult:
+    """Return only currently formal programme facts to the writing specialist.
+
+    This tool is a prompt/input boundary, not an audit export.  Passing raw
+    catalogue values, ``data_status`` or legacy ``field_evidence`` here would
+    let a live writing model treat unreviewed seeds as source-backed facts even
+    though the later ClaimGraph rejects them.  The specialist receives the
+    same resolver projection that drives matching and formal gates.
+    """
+
     evidence: list[dict] = []
     for match in _matches(state):
+        view = resolve_program_view(match.program)
+        formal_facts = {
+            field_name: {
+                "value": fact.normalized_value,
+                "fact_id": fact.fact_id,
+                "evidence_id": fact.evidence_id,
+                "source_url": str(fact.source_url) if fact.source_url else None,
+            }
+            for field_name, fact in view.facts.items()
+            if fact.formal_use_ready
+        }
         evidence.append(
             {
                 "program_id": match.program.id,
-                "official_program_url": str(match.program.official_program_url) if match.program.official_program_url else None,
-                "application_url": str(match.program.application_url) if match.program.application_url else None,
-                "data_status": match.program.data_status.value,
-                "field_evidence": {key: value.model_dump(mode="json") for key, value in match.program.field_evidence.items()},
+                "formal_readiness": view.formal_readiness.value,
+                "formal_facts": formal_facts,
+                "formal_blockers": view.formal_blockers,
             }
         )
     return ProgramEvidenceResult(evidence=evidence)
@@ -92,9 +127,36 @@ def _gaps(state: AgentState, _: EmptyToolInput) -> WritingGapsResult:
 
 def _claims(state: AgentState, _: EmptyToolInput) -> WritingClaimsResult:
     draft = WritingDraft.model_validate(state.writing_draft) if state.writing_draft else None
-    flags = list(draft.review_flags) if draft else ["尚未生成文书草稿。"]
-    unsupported = [flag for flag in flags if "不能" in flag or "需要" in flag or "缺少" in flag]
-    return WritingClaimsResult(grounded=not unsupported, unsupported_claims=unsupported)
+    matches = _matches(state)
+    # A caller may provide an explicit read-only view in working memory for an
+    # offline/golden fixture.  Production paths intentionally leave this empty
+    # so build_claim_graph re-resolves from the persisted evidence store.
+    raw_views = state.working_memory.get("resolved_program_views")
+    views: dict[str, ResolvedProgramView] | None = None
+    if isinstance(raw_views, dict):
+        views = {
+            str(program_id): (
+                value
+                if isinstance(value, ResolvedProgramView)
+                else ResolvedProgramView.model_validate(value)
+            )
+            for program_id, value in raw_views.items()
+        }
+    graph = build_claim_graph(draft, matches, resolved_views=views)
+    unsupported = [
+        node.text
+        for node in graph.nodes
+        if node.required_for_formal and node.status.value != "SUPPORTED"
+    ]
+    grounded = claim_graph_passed(graph)
+    blockers = list(graph.blockers)
+    return WritingClaimsResult(
+        grounded=grounded,
+        passed=grounded,
+        unsupported_claims=unsupported,
+        blockers=blockers,
+        graph=graph,
+    )
 
 
 def _draft(state: AgentState, _: EmptyToolInput) -> WritingDraftResult:

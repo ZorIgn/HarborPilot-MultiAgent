@@ -18,7 +18,7 @@ from harbor_agent.runtime.errors import (
     ToolExecutionError,
     WorkflowLimitExceeded,
 )
-from harbor_agent.runtime.graph import can_handoff
+from harbor_agent.runtime.graph import SUPERVISOR_AGENT, can_handoff, can_terminate
 from harbor_agent.runtime.limits import RuntimeLimits, record_agent_turn
 from harbor_agent.runtime.state import (
     AgentState,
@@ -234,7 +234,12 @@ class AgentExecutor:
         last_error: Exception | None = None
         for attempt in range(1, max_attempts + 1):
             started = perf_counter()
-            model_tools = agent.model_tool_names(state)
+            policy = agent.step(state)
+            model_tools = (
+                {call.tool_name for call in policy.tool_calls}
+                if policy.decision == DecisionType.CALL_TOOL
+                else set()
+            )
             tracer.emit(
                 TraceEventType.LLM_REQUEST,
                 agent_name=agent.name,
@@ -297,9 +302,50 @@ class AgentExecutor:
             )
             if decision is None:
                 raise LLMStructuredOutputError("model decision unexpectedly empty")
+            self._validate_model_policy(agent, policy, decision)
             return decision
         assert last_error is not None
         raise last_error
+
+    @staticmethod
+    def _validate_model_policy(
+        agent: BaseAgent,
+        policy: AgentDecision,
+        decision: AgentDecision,
+    ) -> None:
+        """Keep model-driven Specialist calls an ordered policy subsequence.
+
+        BaseAgent reduces a model proposal to exact policy tool names and
+        arguments. This second executor-side assertion makes the invariant
+        visible at the final execution boundary and preserves the deterministic
+        tool order required by multi-step Specialists such as VerificationAgent.
+        Supervisor routing is handled by its own route-options gate and may
+        intentionally choose a non-primary safe route.
+        """
+
+        if agent.name == SUPERVISOR_AGENT:
+            return
+        if decision.decision != policy.decision:
+            raise LLMStructuredOutputError(
+                f"{agent.name} model decision {decision.decision.value} does not match "
+                f"the deterministic policy action {policy.decision.value}"
+            )
+        if decision.state_patch != policy.state_patch:
+            raise LLMStructuredOutputError(
+                f"{agent.name} model state patch differs from the policy-owned patch"
+            )
+        if decision.decision != DecisionType.CALL_TOOL:
+            return
+        policy_keys = [agent._call_key(call) for call in policy.tool_calls]
+        proposal_keys = [agent._call_key(call) for call in decision.tool_calls]
+        cursor = 0
+        for key in proposal_keys:
+            try:
+                cursor = policy_keys.index(key, cursor) + 1
+            except ValueError as exc:
+                raise LLMStructuredOutputError(
+                    f"{agent.name} model tool calls are not an ordered policy subsequence"
+                ) from exc
 
     @staticmethod
     def _validate_handoff(agent: BaseAgent, target: str | None) -> None:
@@ -324,13 +370,13 @@ class AgentExecutor:
                 f"{agent.name} cannot write state fields: {sorted(unauthorized)}"
             )
         protected = set(decision.state_patch) & _RUNTIME_OWNED_STATE_FIELDS
-        if agent.name != "SupervisorAgent":
+        if agent.name != SUPERVISOR_AGENT:
             protected |= set(decision.state_patch) & _SUPERVISOR_OWNED_STATE_FIELDS
         if protected:
             raise AgentDecisionValidationError(
                 f"{agent.name} cannot write runtime-owned state fields: {sorted(protected)}"
             )
-        if decision.decision == DecisionType.COMPLETE and agent.name != "SupervisorAgent":
+        if decision.decision == DecisionType.COMPLETE and not can_terminate(agent.name):
             raise AgentDecisionValidationError(
                 "only SupervisorAgent may complete the workflow"
             )

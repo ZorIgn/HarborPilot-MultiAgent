@@ -4,17 +4,20 @@ import { Button as IslandButton, Card as IslandCard, Tabs as IslandTabs, Title a
 import { BookOpenCheck, CheckCircle2, ClipboardList, ExternalLink, Search, Sparkles } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { dataStatusLabels, disciplineOptions, fieldLabels, materialLabels, previousCycleLabel, programCatalogCopy, studentTrustWarning } from "@/lib/copy";
-import type { ApplicantPayload, CatalogProgram, LayeredProgramPlanResult, ProgramMatch, ProgramSchemeState, WorkflowResult } from "@/lib/types";
+import type { ApplicantPayload, CatalogProgram, DecisionFact, DecisionStatus, LayeredProgramPlanResult, ProgramMatch, ProgramSchemeState, WorkflowResult } from "@/lib/types";
 
 type ProgramCatalogLoading = string | null;
 export type ProgramCatalogFilters = { q: string; region: string; discipline: string; verification_status: string; deadline_status: string };
 type ProgramCatalogState = Partial<WorkflowResult & LayeredProgramPlanResult> | null;
 type ProgramLike = ProgramMatch["program"] | CatalogProgram;
+type DecisionFacts = Record<string, DecisionFact>;
+type ProgramContext = { program: ProgramLike; decision_facts?: DecisionFacts; formal_gate_status?: DecisionStatus; formal_use_ready?: boolean; formal_recommendation?: boolean };
 type StrategyBand = NonNullable<ProgramMatch["strategy_band"]>;
 type PlanTrustStats = { total: number; currentOfficial: number; previousReference: number; needsReview: number; selectedNeedsReview: number };
 type CatalogReadinessStats = { total: number; currentOfficial: number; referenceReady: number; incomplete: number };
 
 const bandKeys: StrategyBand[] = ["reach", "target", "safer", "candidate", "blocked"];
+const decisionFieldOrder = ["official_program_url", "application_url", "deadline", "language_requirement", "materials", "tuition_hkd"];
 
 export function ProgramCatalogPage(props: {
   payload: ApplicantPayload;
@@ -194,9 +197,8 @@ function buildPlanTrustStats(matches: ProgramMatch[], selectedIds: string[]): Pl
   const activeMatches = matches.filter((item) => bandKey(item) !== "blocked");
   const selectedSet = new Set(selectedIds);
   return activeMatches.reduce<PlanTrustStats>((stats, item) => {
-    const trust = item.program.trust_detail;
-    const currentOfficial = Boolean(trust?.production_ready);
-    const previousReference = !currentOfficial && Boolean(trust?.reference_ready);
+    const currentOfficial = formalReady(item);
+    const previousReference = !currentOfficial && hasReferenceFields(item);
     const needsReview = !currentOfficial && !previousReference;
     return {
       total: stats.total + 1,
@@ -250,30 +252,30 @@ function EditablePlanTable({ matches, bandedMatches, selectedIds, onToggle, onIn
       <td><strong>{displayProgram(item.program)}</strong><small>{displayProgramSecondary(item.program)}</small><small>{programMeta(item.program)}</small><small>{formalUseLabel(item)}</small></td>
       <td><p>{item.consultant_note ?? item.explanation?.decision_basis?.[0] ?? item.reasons[0]}</p><small>匹配分 {Math.round(item.fit_score)} / 100</small></td>
       <td><p>{item.risks[0] ?? programCatalogCopy.defaultRisk}</p><small>{item.actions[0] ?? programCatalogCopy.defaultAction}</small></td>
-      <td><div className="scheme-info-stack"><span>DDL：{formatDeadlineForProgram(item.program)}</span><span>语言：{formatLanguageRequirement(item.program)}</span><span>材料：{formatMaterials(item.program)}</span></div></td>
+      <td><div className="scheme-info-stack"><span>DDL：{formatDeadlineForProgram(item.program, item.decision_facts)}</span><span>语言：{formatLanguageRequirement(item.program, item.decision_facts)}</span><span>材料：{formatMaterials(item.program, item.decision_facts)}</span></div></td>
       <td><div className="table-actions"><IslandButton type={selectedIds.includes(item.program.id) ? "default" : "primary"} size="small" onClick={() => onToggle(item.program.id)}>{selectedIds.includes(item.program.id) ? "已加入" : "加入清单"}</IslandButton><IslandButton type="default" size="small" loading={loading === "package"} onClick={() => onInspect(item.program.id)}>详情</IslandButton><button className="text-danger-button" type="button" onClick={() => onRemove(item.program.id)}>删除</button></div></td>
     </tr>)}</tbody></table></div>
     {!visible.length ? <EmptyState text="这个分档暂时没有项目，可以从下方推荐卡片或搜索结果加入。" /> : null}
   </IslandCard>;
 }
 
-function buildSelectedPrograms(ids: string[], matches: ProgramMatch[], catalog: CatalogProgram[]) {
-  const byId = new Map<string, ProgramLike>();
-  matches.forEach((item) => byId.set(item.program.id, item.program));
-  catalog.forEach((program) => byId.set(program.id, program));
-  return ids.map((id) => byId.get(id)).filter((item): item is ProgramLike => Boolean(item));
+function buildSelectedPrograms(ids: string[], matches: ProgramMatch[], catalog: CatalogProgram[]): ProgramContext[] {
+  const byId = new Map<string, ProgramContext>();
+  catalog.forEach((program) => byId.set(program.id, { program }));
+  matches.forEach((item) => byId.set(item.program.id, { program: item.program, decision_facts: item.decision_facts, formal_gate_status: item.formal_gate_status, formal_use_ready: item.formal_use_ready, formal_recommendation: item.formal_recommendation }));
+  return ids.map((id) => byId.get(id)).filter((item): item is ProgramContext => Boolean(item));
 }
 
-function SelectedProgramShelf({ programs, onToggle, onInspect, loading }: { programs: ProgramLike[]; onToggle: (id: string) => void; onInspect: (id: string) => void; loading: ProgramCatalogLoading }) {
-  return <IslandCard className="panel-card selected-shelf"><PanelTitle icon={<BookOpenCheck size={19} aria-hidden />} title="已保存的最终申请清单" />{programs.length ? <div className="selected-program-grid">{programs.map((program) => <article className="selected-program-card" key={program.id}><DataBadge status={studentSourceStatus(program)} /><h3>{displayProgram(program)}</h3><p>{programMeta(program)}</p><div className="card-actions"><IslandButton type="default" size="small" onClick={() => onInspect(program.id)} loading={loading === "package"}>项目信息</IslandButton><IslandButton type="default" size="small" onClick={() => onToggle(program.id)}>移出清单</IslandButton></div></article>)}</div> : <EmptyState text="还没有保存项目。先在下方 Agent 分档结果里点击“加入清单”。" />}</IslandCard>;
+function SelectedProgramShelf({ programs, onToggle, onInspect, loading }: { programs: ProgramContext[]; onToggle: (id: string) => void; onInspect: (id: string) => void; loading: ProgramCatalogLoading }) {
+  return <IslandCard className="panel-card selected-shelf"><PanelTitle icon={<BookOpenCheck size={19} aria-hidden />} title="已保存的最终申请清单" />{programs.length ? <div className="selected-program-grid">{programs.map((context) => <article className="selected-program-card" key={context.program.id}><DataBadge status={sourceStatus(context)} /><h3>{displayProgram(context.program)}</h3><p>{programMeta(context.program)}</p><small>{context.formal_recommendation ? "正式推荐" : context.formal_gate_status === "PASS" ? "字段已核验，仍需按方案确认" : "预评估 / 待官网核验"}</small><div className="card-actions"><IslandButton type="default" size="small" onClick={() => onInspect(context.program.id)} loading={loading === "package"}>项目信息</IslandButton><IslandButton type="default" size="small" onClick={() => onToggle(context.program.id)}>移出清单</IslandButton></div></article>)}</div> : <EmptyState text="还没有保存项目。先在下方 Agent 分档结果里点击“加入清单”。" />}</IslandCard>;
 }
 
 function ProgramRows({ matches, selectedIds, onToggle, onInspect, onRequestSourceUpdate, loading, muted = false }: { matches: ProgramMatch[]; selectedIds: string[]; onToggle: (id: string) => void; onInspect: (id: string) => void; onRequestSourceUpdate?: (id: string) => void; loading: ProgramCatalogLoading; muted?: boolean }) {
   if (!matches.length) return <EmptyState text={programCatalogCopy.noMatches} />;
   return <div className="program-list">{matches.map((item) => <article className={("program-row " + (muted ? "muted" : "")).trim()} key={item.program.id}>
-    <div className="program-main"><div className="program-title-row"><DataBadge status={studentSourceStatus(item.program)} /><span className={("band-pill " + (item.strategy_band ?? "candidate")).trim()}>{strategyLabel(item.strategy_band)} · {tierLabel(item)}</span></div><h3>{displayProgram(item.program)}</h3><p>{displayProgramSecondary(item.program)} · {programMeta(item.program)}</p>{item.consultant_note ? <p className="consultant-note">{item.consultant_note}</p> : null}<div className="program-signals"><Signal label="硬门槛" value={item.explanation?.hard_condition ?? (item.hard_rule_passed ? "通过" : "未通过")} /><Signal label="学术匹配" value={item.explanation?.academic_match ?? band(item.score_breakdown.academic)} /><Signal label="课程匹配" value={item.explanation?.course_match ?? band(item.score_breakdown.discipline_fit)} /><Signal label="经历匹配" value={item.explanation?.experience_match ?? band(item.score_breakdown.experience)} /><Signal label="预算匹配" value={item.explanation?.budget_match ?? band(item.score_breakdown.budget_fit)} /><Signal label="截止状态" value={formatDeadlineForProgram(item.program)} /><Signal label="语言要求" value={formatLanguageRequirement(item.program)} /><Signal label="材料清单" value={formatMaterials(item.program)} /><Signal label="项目官网" value={programDetailStatus(item.program)} /></div></div>
+    <div className="program-main"><div className="program-title-row"><DataBadge status={sourceStatus(item)} /><span className={("band-pill " + (item.strategy_band ?? "candidate")).trim()}>{strategyLabel(item.strategy_band)} · {tierLabel(item)}</span></div><h3>{displayProgram(item.program)}</h3><p>{displayProgramSecondary(item.program)} · {programMeta(item.program)}</p>{item.consultant_note ? <p className="consultant-note">{item.consultant_note}</p> : null}<div className="program-signals"><Signal label="硬门槛" value={item.explanation?.hard_condition ?? (item.hard_rule_passed ? "通过" : "未通过")} /><Signal label="学术匹配" value={item.explanation?.academic_match ?? band(item.score_breakdown.academic)} /><Signal label="课程匹配" value={item.explanation?.course_match ?? band(item.score_breakdown.discipline_fit)} /><Signal label="经历匹配" value={item.explanation?.experience_match ?? band(item.score_breakdown.experience)} /><Signal label="预算匹配" value={item.explanation?.budget_match ?? band(item.score_breakdown.budget_fit)} /><Signal label="截止状态" value={formatDeadlineForProgram(item.program, item.decision_facts)} /><Signal label="语言要求" value={formatLanguageRequirement(item.program, item.decision_facts)} /><Signal label="材料清单" value={formatMaterials(item.program, item.decision_facts)} /><Signal label="项目官网" value={programDetailStatus(item.program, item.decision_facts)} /></div></div>
     <div className="program-evidence"><AdviceList title="推荐依据" items={(item.explanation?.decision_basis ?? item.reasons).slice(0, 3)} /><AdviceList title="主要风险" items={[studentTrustWarning(item.program.trust_detail, item.source_warning ?? programCatalogCopy.defaultRisk), ...(item.explanation?.uncertainties ?? item.risks)].filter((value): value is string => Boolean(value)).slice(0, 4)} /></div>
-    <div className="program-actions"><IslandButton type={selectedIds.includes(item.program.id) ? "default" : "primary"} size="small" onClick={() => onToggle(item.program.id)}>{selectedIds.includes(item.program.id) ? programCatalogCopy.selected : programCatalogCopy.addToList}</IslandButton><IslandButton type="default" size="small" loading={loading === "package"} onClick={() => onInspect(item.program.id)}>{programCatalogCopy.inspect}</IslandButton><ProgramLinks program={item.program} onRequestSourceUpdate={onRequestSourceUpdate} /></div>
+    <div className="program-actions"><IslandButton type={selectedIds.includes(item.program.id) ? "default" : "primary"} size="small" onClick={() => onToggle(item.program.id)}>{selectedIds.includes(item.program.id) ? programCatalogCopy.selected : programCatalogCopy.addToList}</IslandButton><IslandButton type="default" size="small" loading={loading === "package"} onClick={() => onInspect(item.program.id)}>{programCatalogCopy.inspect}</IslandButton><ProgramLinks program={item.program} decisionFacts={item.decision_facts} onRequestSourceUpdate={onRequestSourceUpdate} /></div>
   </article>)}</div>;
 }
 
@@ -281,7 +283,7 @@ function CatalogRows({ programs, selectedIds, schemeIds, onToggle, onInspect, on
   if (!programs.length) return <EmptyState text={emptyReason} />;
   return <div className="catalog-list">{programs.map((program) => <article className="catalog-row" key={program.id}>
     <div><DataBadge status={studentSourceStatus(program)} /><h3>{displayProgram(program)}</h3><p>{displayProgramSecondary(program)} · {programMeta(program)} · {program.category_zh || program.discipline_tags.join(" / ")}</p></div>
-    <div className="catalog-evidence-cell"><div className="program-signals compact-signals"><Signal label="学费" value={formatMoney(program.tuition_hkd)} /><Signal label="学制" value={String(program.duration_months) + " 个月"} /><Signal label="截止" value={formatDeadlineForProgram(program)} /><Signal label="语言要求" value={formatLanguageRequirement(program)} /><Signal label="材料清单" value={formatMaterials(program)} /><Signal label="项目官网" value={programDetailStatus(program)} /></div><ProgramTrustPanel trust={program.trust_detail} /></div>
+    <div className="catalog-evidence-cell"><div className="program-signals compact-signals"><Signal label="学费" value={formatProgramMoney(program)} /><Signal label="学制" value={String(program.duration_months) + " 个月（目录信息）"} /><Signal label="截止" value={formatDeadlineForProgram(program)} /><Signal label="语言要求" value={formatLanguageRequirement(program)} /><Signal label="材料清单" value={formatMaterials(program)} /><Signal label="项目官网" value={programDetailStatus(program)} /></div><ProgramTrustPanel trust={program.trust_detail} /></div>
     <div className="program-actions"><IslandButton type="default" size="small" onClick={() => onAddToScheme(program.id)}>{schemeIds.includes(program.id) ? "已在方案" : "加入方案"}</IslandButton><IslandButton type={selectedIds.includes(program.id) ? "default" : "primary"} size="small" onClick={() => onToggle(program.id)}>{selectedIds.includes(program.id) ? programCatalogCopy.selected : programCatalogCopy.addToList}</IslandButton><IslandButton type="default" size="small" loading={loading === "package"} onClick={() => onInspect(program.id)}>{programCatalogCopy.inspect}</IslandButton><ProgramLinks program={program} onRequestSourceUpdate={onRequestSourceUpdate} /></div>
   </article>)}</div>;
 }
@@ -289,19 +291,16 @@ function CatalogRows({ programs, selectedIds, schemeIds, onToggle, onInspect, on
 function ProgramTrustPanel({ trust }: { trust?: CatalogProgram["trust_detail"] }) {
   if (!trust) return <p className="form-note">{programCatalogCopy.trustLoading}</p>;
   const records = trust.field_records.filter((record) => ["official_program_url", "deadline", "tuition_hkd", "language_requirement", "materials", "application_url"].includes(record.field_name));
-  return <div className="trust-panel"><div className="trust-panel-head"><DataBadge status={trust.production_ready ? "OFFICIAL_VERIFIED_CURRENT" : trust.reference_ready ? "OFFICIAL_PREVIOUS_CYCLE" : "MODEL_INFERRED"} /><span>{trust.status_label}</span></div><p>{studentTrustWarning(trust)}</p><div className="trust-field-list">{orderedTrustRecords(records).map((record, index) => <div className="trust-field-card" key={record.field_name + "-" + String(record.source_url ?? record.value ?? index)}><div className="trust-field-card-head"><span>{fieldLabels[record.field_name] ?? record.field_name}</span><DataBadge status={record.status} /></div><strong>{fieldRecordValue(record)}</strong><small>申请季 {record.cycle || trust.cycle}</small>{record.evidence_snippet ? <p>{fieldRecordExcerpt(record.evidence_snippet)}</p> : null}{record.source_url ? <a href={record.source_url} target="_blank" rel="noreferrer">打开来源</a> : null}</div>)}</div></div>;
+  return <div className="trust-panel"><div className="trust-panel-head"><DataBadge status={trust.production_ready || trust.formal_use_ready ? "OFFICIAL_VERIFIED_CURRENT" : trust.reference_ready ? "OFFICIAL_PREVIOUS_CYCLE" : "MODEL_INFERRED"} /><span>{trust.status_label}</span></div><p>{studentTrustWarning(trust)}</p><div className="trust-field-list">{orderedTrustRecords(records).map((record, index) => { const readiness = trustFieldReadiness(trust, record.field_name, record); return <div className="trust-field-card" key={record.field_name + "-" + String(record.source_url ?? record.value ?? index)}><div className="trust-field-card-head"><span>{fieldLabels[record.field_name] ?? record.field_name}</span><DataBadge status={readiness === "current" ? "OFFICIAL_VERIFIED_CURRENT" : readiness === "reference" ? "OFFICIAL_PREVIOUS_CYCLE" : "PENDING_REVIEW"} /></div><strong>{fieldRecordValue(record, readiness)}</strong><small>申请季 {record.cycle || trust.cycle}</small>{record.evidence_snippet ? <p>{fieldRecordExcerpt(record.evidence_snippet)}</p> : null}{record.source_url ? <a href={record.source_url} target="_blank" rel="noreferrer">{readiness === "current" || readiness === "reference" ? "打开已记录来源" : "查看候选来源（待核验）"}</a> : null}</div>; })}</div></div>;
 }
 
 function orderedTrustRecords(records: NonNullable<CatalogProgram["trust_detail"]>["field_records"]) { const order = ["official_program_url", "application_url", "deadline", "language_requirement", "materials", "tuition_hkd"]; return [...records].sort((a, b) => order.indexOf(a.field_name) - order.indexOf(b.field_name)); }
-function ProgramLinks({ program, onRequestSourceUpdate }: { program: ProgramLike; onRequestSourceUpdate?: (id: string) => void }) { const detailUrl = resolvedProgramDetailUrl(program); return <div className="link-row">{detailUrl ? <a href={detailUrl} target="_blank" rel="noreferrer"><ExternalLink size={13} aria-hidden />{programCatalogCopy.detailPage}</a> : <><span className="link-warning">{programCatalogCopy.missingDetailPage}</span>{onRequestSourceUpdate ? <button className="text-link source-update-button" type="button" onClick={() => onRequestSourceUpdate(program.id)}>{programCatalogCopy.queueSourceUpdate}</button> : null}</>}{program.application_url ? <a href={program.application_url} target="_blank" rel="noreferrer"><ExternalLink size={13} aria-hidden />{programCatalogCopy.applicationEntry}</a> : <span className="link-warning">{programCatalogCopy.missingApplicationEntry}</span>}</div>; }
-function resolvedProgramDetailUrl(program: ProgramLike) {
-  const evidence = program.trust_detail?.field_records.find((record) => record.field_name === "official_program_url");
-  const scopedEvidenceUrl = evidence?.source_scope === "programme_detail" && evidence.binding_status === "matched"
-    ? absoluteHttpUrl(evidence.value) ?? absoluteHttpUrl(evidence.final_url) ?? absoluteHttpUrl(evidence.source_url)
-    : null;
-  if (scopedEvidenceUrl) return scopedEvidenceUrl;
-  const catalogUrl = absoluteHttpUrl(program.official_program_url);
-  return catalogUrl && isLikelyProgramDetailUrl(catalogUrl) ? catalogUrl : null;
+function ProgramLinks({ program, decisionFacts, onRequestSourceUpdate }: { program: ProgramLike; decisionFacts?: DecisionFacts; onRequestSourceUpdate?: (id: string) => void }) {
+  const verifiedDetailUrl = verifiedFieldUrl(program, "official_program_url", decisionFacts);
+  const candidateDetailUrl = verifiedDetailUrl ? null : candidateFieldUrl(program, "official_program_url");
+  const verifiedApplicationUrl = verifiedFieldUrl(program, "application_url", decisionFacts);
+  const candidateApplicationUrl = verifiedApplicationUrl ? null : candidateFieldUrl(program, "application_url");
+  return <div className="link-row">{verifiedDetailUrl ? <a href={verifiedDetailUrl} target="_blank" rel="noreferrer"><ExternalLink size={13} aria-hidden />{programCatalogCopy.detailPage}（当前季已核验）</a> : candidateDetailUrl ? <a href={candidateDetailUrl} target="_blank" rel="noreferrer"><ExternalLink size={13} aria-hidden />项目页线索（待核验）</a> : <><span className="link-warning">{programCatalogCopy.missingDetailPage}</span>{onRequestSourceUpdate ? <button className="text-link source-update-button" type="button" onClick={() => onRequestSourceUpdate(program.id)}>{programCatalogCopy.queueSourceUpdate}</button> : null}</>}{verifiedApplicationUrl ? <a href={verifiedApplicationUrl} target="_blank" rel="noreferrer"><ExternalLink size={13} aria-hidden />{programCatalogCopy.applicationEntry}（当前季已核验）</a> : candidateApplicationUrl ? <a href={candidateApplicationUrl} target="_blank" rel="noreferrer"><ExternalLink size={13} aria-hidden />申请入口线索（待核验）</a> : <span className="link-warning">{programCatalogCopy.missingApplicationEntry}</span>}</div>;
 }
 function absoluteHttpUrl(value: unknown) { try { const url = new URL(String(value ?? "")); return ["http:", "https:"].includes(url.protocol) ? url.toString() : null; } catch { return null; } }
 function isLikelyProgramDetailUrl(urlValue: string) {
@@ -313,10 +312,16 @@ function isLikelyProgramDetailUrl(urlValue: string) {
   const generic = ["programme-list", "taught-postgraduate-programmes", "/admissions", "/graduate-admissions", "/programmes?", "/programs?", "/programme/index"];
   return !generic.some((pattern) => url.includes(pattern));
 }
-function hasProgramDetailPage(program: ProgramLike) { return Boolean(resolvedProgramDetailUrl(program)); }
-function programDetailStatus(program: ProgramLike) { return hasProgramDetailPage(program) ? "项目详情页" : "未找到项目详情页"; }
+type FieldReadiness = "current" | "reference" | "candidate" | "missing";
+type TrustRecord = NonNullable<CatalogProgram["trust_detail"]>["field_records"][number];
+
+function hasProgramDetailPage(program: ProgramLike, decisionFacts?: DecisionFacts) { return Boolean(verifiedFieldUrl(program, "official_program_url", decisionFacts) || candidateFieldUrl(program, "official_program_url")); }
+function programDetailStatus(program: ProgramLike, decisionFacts?: DecisionFacts) {
+  if (verifiedFieldUrl(program, "official_program_url", decisionFacts)) return "项目详情页（当前季已核验）";
+  return candidateFieldUrl(program, "official_program_url") ? "项目页线索（待官网核验）" : "未找到项目详情页";
+}
 function readinessKind(program: ProgramLike): "current" | "reference" | "incomplete" {
-  if (program.trust_detail?.production_ready) return "current";
+  if (program.trust_detail?.production_ready || program.trust_detail?.formal_use_ready) return "current";
   if (program.trust_detail?.reference_ready) return "reference";
   return "incomplete";
 }
@@ -325,6 +330,62 @@ function studentSourceStatus(program: ProgramLike) {
   if (readiness === "current") return "OFFICIAL_VERIFIED_CURRENT";
   if (readiness === "reference") return "OFFICIAL_PREVIOUS_CYCLE";
   return "MODEL_INFERRED";
+}
+function sourceStatus(context: ProgramContext | ProgramMatch) {
+  const program = context.program;
+  const formal = "formal_use_ready" in context && context.formal_use_ready === true
+    || "formal_gate_status" in context && context.formal_gate_status === "PASS"
+    || Boolean(program.trust_detail?.production_ready || program.trust_detail?.formal_use_ready);
+  if (formal) return "OFFICIAL_VERIFIED_CURRENT";
+  if (hasReferenceFields(context)) return "OFFICIAL_PREVIOUS_CYCLE";
+  return "MODEL_INFERRED";
+}
+function formalReady(item: ProgramMatch) {
+  return item.formal_use_ready === true || item.formal_gate_status === "PASS" || Boolean(item.program.trust_detail?.production_ready || item.program.trust_detail?.formal_use_ready);
+}
+function hasReferenceFields(context: ProgramContext | ProgramMatch) {
+  const program = context.program;
+  const facts = "decision_facts" in context ? context.decision_facts : undefined;
+  if (program.trust_detail?.reference_ready) return true;
+  const states = criticalDecisionFields(program).map((field) => fieldReadiness(program, field, facts));
+  return states.some((state) => state === "reference") && states.every((state) => state === "current" || state === "reference");
+}
+function criticalDecisionFields(program: ProgramLike) { void program; return decisionFieldOrder; }
+function trustFieldReadiness(trust: NonNullable<ProgramLike["trust_detail"]>, field: string, record?: TrustRecord): FieldReadiness {
+  if (trust.official_current_fields.includes(field) || (trust.production_ready && !trust.official_current_fields.length && record?.status === "OFFICIAL_VERIFIED_CURRENT")) return "current";
+  if (trust.stale_or_reference_fields.includes(field) || (trust.reference_ready && record?.status === "OFFICIAL_PREVIOUS_CYCLE")) return "reference";
+  if (record?.value && record.value !== "NOT_PUBLISHED") return "candidate";
+  return "missing";
+}
+function fieldReadiness(program: ProgramLike, field: string, decisionFacts?: DecisionFacts): FieldReadiness {
+  const fact = decisionFacts?.[field];
+  if (fact?.formal_use_ready && fact.decision_status === "PASS") return "current";
+  if (fact?.provenance_status === "REVIEWED_PREVIOUS") return "reference";
+  const record = program.trust_detail?.field_records.find((item) => item.field_name === field);
+  if (program.trust_detail) return trustFieldReadiness(program.trust_detail, field, record);
+  if (record?.value && record.value !== "NOT_PUBLISHED") return "candidate";
+  return "missing";
+}
+function factValue(facts: DecisionFacts | undefined, field: string, readiness: FieldReadiness) {
+  const fact = facts?.[field];
+  if (!fact || (readiness !== "current" && readiness !== "reference")) return null;
+  const value = fact.normalized_value ?? fact.raw_value;
+  return value === null || value === undefined || value === "" || value === "NOT_PUBLISHED" ? null : value;
+}
+function verifiedFieldUrl(program: ProgramLike, field: "official_program_url" | "application_url", decisionFacts?: DecisionFacts) {
+  const readiness = fieldReadiness(program, field, decisionFacts);
+  if (readiness !== "current") return null;
+  const factValueUrl = absoluteHttpUrl(factValue(decisionFacts, field, readiness));
+  if (factValueUrl) return field === "official_program_url" && !isLikelyProgramDetailUrl(factValueUrl) ? null : factValueUrl;
+  const record = program.trust_detail?.field_records.find((item) => item.field_name === field);
+  if (!record || record.status !== "OFFICIAL_VERIFIED_CURRENT") return null;
+  const recordUrl = absoluteHttpUrl(record.value);
+  return recordUrl && (field !== "official_program_url" || isLikelyProgramDetailUrl(recordUrl)) ? recordUrl : null;
+}
+function candidateFieldUrl(program: ProgramLike, field: "official_program_url" | "application_url") {
+  const value = absoluteHttpUrl(field === "official_program_url" ? program.official_program_url : program.application_url);
+  if (!value) return null;
+  return field === "official_program_url" && !isLikelyProgramDetailUrl(value) ? null : value;
 }
 function legacyStatusMatches(program: ProgramLike, value: string) {
   return program.data_status === value;
@@ -345,21 +406,46 @@ function displayProgramSecondary(program: ProgramLike) { return program.name_zh 
 function programMeta(program: ProgramLike) { return [program.institution_zh || program.institution, program.school_zh || program.school || programCatalogCopy.fallbackSchool, regionLabel(program.country)].filter(Boolean).join(" · "); }
 function regionLabel(country: ProgramLike["country"]) { return country === "HK" ? "香港" : "新加坡"; }
 function tierLabel(item: ProgramMatch) { if (item.tier === "not_recommended") return "不建议"; if (!item.formal_recommendation) return "预评估"; return { reach: "冲刺", target: "主申", safer: "相对稳妥", candidate: "候选" }[item.tier]; }
-function formalUseLabel(item: ProgramMatch) { return item.formal_recommendation ? "正式使用前仍建议打开官网复核" : "预评估 / 待官网核验"; }
+function formalUseLabel(item: ProgramMatch) {
+  if (item.formal_recommendation && formalReady(item)) return "正式推荐（字段已核验；提交前仍需打开官网复核）";
+  if (formalReady(item)) return "字段已核验，但当前结果仍是方案候选";
+  return "预评估 / 待官网核验";
+}
 function strategyLabel(value?: ProgramMatch["strategy_band"]) { return { reach: "冲刺", target: "主申", safer: "相对稳妥", candidate: "候选", blocked: "不建议" }[value ?? "candidate"]; }
 function intentLabel(intent: string) { return { "computer science": "计算机", "business analytics": "商业分析", artificial_intelligence: "人工智能", computer_science: "计算机科学", data_science: "数据科学", fintech: "金融科技", software_engineering: "软件工程", cyber_security: "网络安全", finance: "金融", management: "商科管理", education_language: "教育/语言", interdisciplinary: "跨学科" }[intent] ?? intent; }
 function band(value?: number) { if (value === undefined) return "未知"; if (value >= 78) return "高"; if (value >= 62) return "中"; return "低"; }
 function formatMoney(value: number | null | undefined) { return value ? String(Math.round(value / 10000)) + " 万港币" : programCatalogCopy.unverifiedMoney; }
 function deadlineRecord(program: ProgramLike) { return program.trust_detail?.field_records.find((record) => record.field_name === "deadline"); }
-function hasVerifiedCurrentDeadline(program: ProgramLike) { const record = deadlineRecord(program); return Boolean(record?.status === "OFFICIAL_VERIFIED_CURRENT" && record.value && record.value !== "NOT_PUBLISHED"); }
-function formatDeadlineForProgram(program: ProgramLike) {
-  const record = deadlineRecord(program);
-  if (record?.status === "OFFICIAL_VERIFIED_CURRENT" && record.value && record.value !== "NOT_PUBLISHED") return String(record.value);
-  if (record?.status === "OFFICIAL_PREVIOUS_CYCLE" && record.value && record.value !== "NOT_PUBLISHED") return `${String(record.value)}（${previousCycleLabel(record.cycle)}）`;
-  if (program.deadline && program.deadline !== "NOT_PUBLISHED") return `待官网核验（库内参考 ${program.deadline}）`;
-  return "当前季未发布 / 待官网核验";
+function hasVerifiedCurrentDeadline(program: ProgramLike) { const record = deadlineRecord(program); return fieldReadiness(program, "deadline") === "current" && Boolean(record?.value && record.value !== "NOT_PUBLISHED"); }
+function formatDeadlineForProgram(program: ProgramLike, decisionFacts?: DecisionFacts) {
+  const fallback = program.deadline && program.deadline !== "NOT_PUBLISHED" ? String(program.deadline) : null;
+  return formatProgramField(program, "deadline", fallback, "当前季未发布 / 待官网核验", decisionFacts);
 }
-function formatLanguageRequirement(program: ProgramLike) { const language = program.requirements?.language ?? {}; const parts = Object.entries(language).filter(([, value]) => value !== null && value !== undefined).map(([key, value]) => key.toUpperCase() + " " + String(value)); return parts.length ? parts.slice(0, 2).join(" / ") : "打开项目页核对"; }
-function formatMaterials(program: ProgramLike) { const materials = program.materials ?? []; return materials.length ? materials.slice(0, 3).map((item) => materialLabels[item] ?? item).join(" / ") : "成绩单 / 语言 / 推荐信 / CV / PS"; }
-function fieldRecordValue(record: NonNullable<CatalogProgram["trust_detail"]>["field_records"][number]) { if (!record.value || record.value === "NOT_PUBLISHED") return "当前季未发布，" + previousCycleLabel(record.cycle) + "可用于安排材料"; return String(record.value).length > 120 ? String(record.value).slice(0, 120) + "..." : String(record.value); }
+function formatLanguageRequirement(program: ProgramLike, decisionFacts?: DecisionFacts) { const language = program.requirements?.language ?? {}; const parts = Object.entries(language).filter(([, value]) => value !== null && value !== undefined).map(([key, value]) => key.toUpperCase() + " " + String(value)); const fallback = parts.length ? parts.slice(0, 2).join(" / ") : null; return formatProgramField(program, "language_requirement", fallback, "打开项目页核对", decisionFacts); }
+function formatMaterials(program: ProgramLike, decisionFacts?: DecisionFacts) { const materials = program.materials ?? []; const fallback = materials.length ? materials.slice(0, 3).map((item) => materialLabels[item] ?? item).join(" / ") : null; return formatProgramField(program, "materials", fallback, "成绩单 / 语言 / 推荐信 / CV / PS（待官网核验）", decisionFacts); }
+function formatProgramMoney(program: ProgramLike, decisionFacts?: DecisionFacts) {
+  const readiness = fieldReadiness(program, "tuition_hkd", decisionFacts);
+  const tuitionRecord = program.trust_detail?.field_records.find((item) => item.field_name === "tuition_hkd");
+  const value = factValue(decisionFacts, "tuition_hkd", readiness) ?? (readiness === "current" ? tuitionRecord?.value : null);
+  const amount = typeof value === "number" ? value : Number.parseFloat(String(value ?? ""));
+  if (readiness === "current" && Number.isFinite(amount) && amount > 0) return formatMoney(amount);
+  if (program.tuition_hkd) return `待官网核验（库内参考：${formatMoney(program.tuition_hkd)}）`;
+  return programCatalogCopy.unverifiedMoney;
+}
+function formatProgramField(program: ProgramLike, field: string, fallback: string | null, empty: string, decisionFacts?: DecisionFacts) {
+  const readiness = fieldReadiness(program, field, decisionFacts);
+  const fact = factValue(decisionFacts, field, readiness);
+  const record = program.trust_detail?.field_records.find((item) => item.field_name === field);
+  const value = fact ?? (readiness === "current" || readiness === "reference" ? record?.value : null);
+  if (value && value !== "NOT_PUBLISHED") return readiness === "current" ? String(value) : `${String(value)}（${previousCycleLabel(record?.cycle ?? decisionFacts?.[field]?.cycle ?? program.cycle)}）`;
+  return fallback ? `待官网核验（库内参考：${fallback}）` : empty;
+}
+function fieldRecordValue(record: TrustRecord, readiness: FieldReadiness) {
+  if (!record.value || record.value === "NOT_PUBLISHED") return readiness === "reference" ? `${previousCycleLabel(record.cycle)}可用于安排材料` : "当前季未发布 / 待官网核验";
+  const compact = String(record.value).replace(/\s+/g, " ").trim();
+  const value = compact.length > 120 ? compact.slice(0, 120) + "..." : compact;
+  if (readiness === "current") return value;
+  if (readiness === "reference") return `${value}（${previousCycleLabel(record.cycle)}）`;
+  return `待官网核验（目录/抓取线索：${value}）`;
+}
 function fieldRecordExcerpt(value: string) { const compact = value.replace(/\s+/g, " ").trim(); return compact.length > 150 ? compact.slice(0, 150) + "..." : compact; }

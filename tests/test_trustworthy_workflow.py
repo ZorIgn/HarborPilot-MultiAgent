@@ -14,7 +14,6 @@ from harbor_agent.services.writing_composer import STYLE_GUIDE, WritingComposer
 from harbor_agent.services.data_refresh import _extract_field_candidates
 from harbor_agent.core.llm import MockLLMProvider
 from harbor_agent.models import ApplicantProfileInput, FieldEvidenceRecord, FieldVerificationStatus, ProgramMatch, SourceScope, StoryCard
-from harbor_agent.services import evidence_graph
 from harbor_agent.services.evidence_graph import build_field_evidence_records
 from harbor_agent.services.data_loader import load_programs
 from harbor_agent.services.program_urls import has_application_entry, has_program_detail_page, is_generic_program_url
@@ -262,8 +261,8 @@ def test_previous_cycle_fields_are_reference_ready_not_formal_ready() -> None:
 
 
 
-def test_published_current_fields_drive_formal_timeline(monkeypatch) -> None:
-    from harbor_agent.services import evidence_graph
+def test_published_current_fields_drive_formal_timeline() -> None:
+    from harbor_agent.services.program_store import upsert_field_evidence_records
     from harbor_agent.services.formal_gate import accepted_deadline, accepted_url, program_field_gate
 
     program = next(item for item in load_programs() if item.id == "cuhk-msc-in-computer-science-2027")
@@ -272,6 +271,11 @@ def test_published_current_fields_drive_formal_timeline(monkeypatch) -> None:
     verified_at = datetime(2026, 7, 7, tzinfo=UTC)
 
     def record(field_name: str, value: str, source_type: str = "official_program_page") -> FieldEvidenceRecord:
+        source_scope = (
+            SourceScope.application_portal
+            if source_type == "official_application_system"
+            else SourceScope.programme_detail
+        )
         return FieldEvidenceRecord(
             program_id=program.id,
             field_name=field_name,
@@ -289,6 +293,10 @@ def test_published_current_fields_drive_formal_timeline(monkeypatch) -> None:
             reviewer_id="qa_reviewer",
             evidence_snippet=f"Verified current field: {field_name}",
             snapshot_url="data/source_snapshots/current/cuhk-cs.html",
+            source_scope=source_scope,
+            binding_status="matched",
+            binding_score=97,
+            review_decision_id=f"decision-{field_name}",
             execution_ref=None,
         )
 
@@ -300,7 +308,10 @@ def test_published_current_fields_drive_formal_timeline(monkeypatch) -> None:
         record("materials", "transcript, recommendation, CV, personal statement"),
         record("tuition_hkd", "HKD 180000"),
     ]
-    monkeypatch.setattr(evidence_graph, "load_published_field_records", lambda: published_records)
+    # Formal gates read the canonical SQLite evidence store.  Keeping the
+    # fixture here (instead of monkeypatching the legacy evidence graph)
+    # exercises the same publish -> resolve path used in production.
+    assert upsert_field_evidence_records(published_records) == len(published_records)
 
     gate = program_field_gate(program)
     assert gate["production_ready"] is True
@@ -333,8 +344,9 @@ def test_published_current_fields_drive_formal_timeline(monkeypatch) -> None:
 
 
 
-def test_persisted_review_publish_is_visible_to_student_catalog(monkeypatch) -> None:
-    from harbor_agent.services import evidence_graph, review_gate
+def test_persisted_review_publish_is_visible_to_student_catalog() -> None:
+    from harbor_agent.services import review_gate
+    from harbor_agent.services.program_store import load_field_evidence_records, upsert_field_evidence_records
 
     program_id = "hku-master-of-science-in-computer-science-2027"
     verified_at = datetime(2026, 7, 7, tzinfo=UTC)
@@ -360,11 +372,7 @@ def test_persisted_review_publish_is_visible_to_student_catalog(monkeypatch) -> 
         binding_score=92,
         execution_ref=None,
     )
-    published_records: list[FieldEvidenceRecord] = []
-
-    monkeypatch.setattr(review_gate, "build_field_evidence_records", lambda: [candidate])
-    monkeypatch.setattr(review_gate, "save_published_field_record", lambda record: published_records.append(record))
-    monkeypatch.setattr(evidence_graph, "load_published_field_records", lambda: published_records)
+    assert upsert_field_evidence_records([candidate]) == 1
 
     client = TestClient(app)
     queue_response = client.get(f"/api/admin/review-queue?program_id={program_id}&limit=10")
@@ -387,7 +395,13 @@ def test_persisted_review_publish_is_visible_to_student_catalog(monkeypatch) -> 
     published = publish_response.json()
     assert published["ok"] is True
     assert published["published_record"]["status"] == "OFFICIAL_VERIFIED_CURRENT"
-    assert published_records
+    persisted = load_field_evidence_records([program_id])
+    assert any(
+        record.field_name == "deadline"
+        and record.status == FieldVerificationStatus.official_verified_current
+        and record.review_required is False
+        for record in persisted
+    )
 
     trust_response = client.get(f"/api/programs/{program_id}/trust")
     assert trust_response.status_code == 200
@@ -404,9 +418,7 @@ def test_persisted_review_publish_is_visible_to_student_catalog(monkeypatch) -> 
     catalog_deadline = next(record for record in catalog_program["trust_detail"]["field_records"] if record["field_name"] == "deadline")
     assert catalog_deadline["value"] == "2027-03-20"
 
-def test_field_status_can_vary_independently(monkeypatch) -> None:
-    monkeypatch.setattr(evidence_graph, "load_field_evidence_records", lambda _program_ids=None: [])
-    monkeypatch.setattr(evidence_graph, "load_published_field_records", lambda: [])
+def test_field_status_can_vary_independently() -> None:
     program = next(item for item in load_programs() if item.id == "cityu-ma-communication-and-new-media-2027")
     records = [record for record in build_field_evidence_records([program]) if record.program_id == program.id]
     by_field = {record.field_name: record for record in records}
@@ -594,13 +606,11 @@ def test_explicitly_selected_risky_program_is_not_silently_dropped() -> None:
     assert any(program.id in task.linked_program_ids for task in timeline)
 
 
-def test_unverified_catalog_deadline_is_not_accepted_as_previous_cycle_evidence(monkeypatch) -> None:
-    from harbor_agent.services import evidence_graph
+def test_unverified_catalog_deadline_is_not_accepted_as_previous_cycle_evidence() -> None:
     from harbor_agent.services.formal_gate import accepted_deadline
 
     program = next(item for item in load_programs() if item.id == "smu-master-of-it-in-business-2027")
     assert program.deadline != "NOT_PUBLISHED"
-    monkeypatch.setattr(evidence_graph, "load_published_field_records", lambda: [])
 
     assert accepted_deadline(program, include_previous=True) is None
 
@@ -630,7 +640,13 @@ def test_writing_agent_removes_unsupported_program_claims_from_live_model_output
     assert any("\u5b66\u6821\u5b9a\u5236\u53e5\u8bc1\u636e\u6765\u6e90" in item for item in draft.school_customization)
 
     rubric = WritingComposer(MockLLMProvider()).review_rubric(draft, [])
-    assert rubric.unsupported_claims == 0
+    # The unsafe text was stripped, but a direct Composer preview has not gone
+    # through WritingAgent + Critic and has no current DecisionFacts.  It must
+    # therefore stay a non-formal artifact instead of returning a clean-looking
+    # export recommendation.
+    assert rubric.formal_use_ready is False
+    assert rubric.export_recommendation == "不建议导出"
+    assert rubric.formal_blockers
 
 def test_985_ielts_65_cs_plan_keeps_core_tech_mix() -> None:
     payload = _sample()

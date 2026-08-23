@@ -537,6 +537,18 @@ def test_student_model_settings_are_read_only_and_admin_managed() -> None:
     assert "Admin Token" not in app_source
     assert "Admin Token" not in student_sources
 
+
+def test_live_acquisition_is_an_explicit_real_mode_opt_in() -> None:
+    api_source = Path("web/lib/api.ts").read_text(encoding="utf-8")
+    app_source = Path("web/app/HarborPilotApp.tsx").read_text(encoding="utf-8")
+    admin_source = Path("web/app/AdminDataCenter.tsx").read_text(encoding="utf-8")
+
+    assert "DataAcquisitionRequest" in api_source
+    assert 'connection_mode: dryRun ? "mock" : "real"' in app_source
+    assert "Legacy refresh is intentionally offline-only" in app_source
+    assert "Run live crawler" in admin_source
+    assert "explicitly uses real mode" in admin_source
+
 def test_frontend_dev_and_build_outputs_are_isolated_and_plan_is_labeled_preliminary() -> None:
     import json
 

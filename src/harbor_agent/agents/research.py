@@ -10,7 +10,7 @@ from harbor_agent.runtime.state import AgentState
 
 class ResearchAgent(BaseAgent):
     name = "ResearchAgent"
-    description = "Recalls and narrows catalogue programmes using the normalized profile and stated direction."
+    description = "Recalls catalogue programmes and creates a bounded official-source research plan for Verification."
     allowed_tools = AGENT_TOOL_PERMISSIONS[name]
     input_state_fields = ("normalized_profile", "assessment", "candidate_program_ids")
     output_state_fields = ("candidate_program_ids", "researched_program_ids", "working_memory")
@@ -25,12 +25,20 @@ class ResearchAgent(BaseAgent):
                 reasoning_summary="Search the programme catalogue for the normalized applicant profile.",
                 tool_calls=[ToolCallRequest(tool_name="search_program_catalog", arguments={})],
             )
+        source_plan = results.get("build_source_research_plan")
+        if not source_plan:
+            return AgentDecision(
+                decision=DecisionType.CALL_TOOL,
+                reasoning_summary="The catalogue candidates are ready; build a bounded official-source plan before handoff.",
+                tool_calls=[ToolCallRequest(tool_name="build_source_research_plan", arguments={})],
+            )
         memory = deepcopy(state.working_memory)
         memory["candidate_programs"] = catalogue.get("programs", [])
+        memory["source_research_plan"] = source_plan
         ids = list(catalogue.get("program_ids", []))
         return AgentDecision(
             decision=DecisionType.HANDOFF,
-            reasoning_summary=f"Research recalled {len(ids)} catalogue candidates for matching.",
+            reasoning_summary=f"Research recalled {len(ids)} catalogue candidates and prepared a bounded official-source plan for Verification.",
             state_patch={"candidate_program_ids": ids, "researched_program_ids": ids, "working_memory": memory},
             next_agent="SupervisorAgent",
         )

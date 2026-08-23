@@ -3,10 +3,11 @@ from __future__ import annotations
 import inspect
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from harbor_agent.app import app
-from harbor_agent.agents.orchestrator import WorkflowOrchestrator
+from harbor_agent.agents.orchestrator import WorkflowDeliveryBlockedError, WorkflowOrchestrator
 from harbor_agent.core.llm import MockLLMProvider
 from harbor_agent.models import ApplicantProfileInput
 from harbor_agent.runtime.state import WorkflowGoal
@@ -110,19 +111,22 @@ def test_agent_system_api_exposes_contracts() -> None:
 
 def test_runtime_traces_expose_dynamic_runtime_contracts() -> None:
     orchestrator = WorkflowOrchestrator(MockLLMProvider())
-    assessment = orchestrator.run_assessment(_sample())
+    with pytest.raises(WorkflowDeliveryBlockedError) as exc_info:
+        orchestrator.run_assessment(_sample())
+    blocked_assessment = exc_info.value.state
     program_plan = orchestrator.run_program_plan_stage(_sample())
     selected_ids = [item.program.id for item in program_plan.application_mix[:2]]
     application_plan = orchestrator.run_application_plan_stage(_sample(), selected_ids)
 
     expected_by_workflow = {
-        "assessment": {"AssessmentAgent", "ResearchAgent", "MatchingAgent", "VerificationAgent", "PlanningAgent", "WritingAgent", "CriticAgent"},
+        "blocked_assessment": {"AssessmentAgent", "ResearchAgent", "MatchingAgent", "VerificationAgent", "CriticAgent"},
         "program_plan": {"AssessmentAgent", "ResearchAgent", "MatchingAgent", "VerificationAgent", "CriticAgent"},
         "application_plan": {"AssessmentAgent", "ResearchAgent", "MatchingAgent", "VerificationAgent", "PlanningAgent", "CriticAgent"},
     }
     runtime_agents = {"AssessmentAgent", "ResearchAgent", "MatchingAgent", "VerificationAgent", "PlanningAgent", "WritingAgent", "CriticAgent"}
+    assert blocked_assessment.status.value == "WAITING_HUMAN"
+    assert expected_by_workflow["blocked_assessment"] <= set(blocked_assessment.visited_agents)
     for workflow_name, trace in [
-        ("assessment", assessment.trace),
         ("program_plan", program_plan.trace),
         ("application_plan", application_plan.trace),
     ]:

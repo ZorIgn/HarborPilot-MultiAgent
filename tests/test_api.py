@@ -23,13 +23,17 @@ def test_api_assessment_endpoint() -> None:
         headers={"content-type": "application/json"},
     )
 
-    assert response.status_code == 200
+    # FULL_APPLICATION_PLAN is intentionally blocked in default mock mode when
+    # current official facts and ClaimGraph-backed writing are unavailable.
+    # The compatibility endpoint must surface that boundary as a 409, never an
+    # internal 500 or a fabricated complete application package.
+    assert response.status_code == 409
     data = response.json()
-    assert data["workflow_id"].startswith("maf_")
-    assert {"AssessmentAgent", "ResearchAgent", "MatchingAgent", "VerificationAgent", "PlanningAgent", "WritingAgent", "CriticAgent"} <= {
-        event["node"] for event in data["trace"]
-    }
-    assert data["evidence"]["recommended_uploads"]
+    detail = data["detail"]
+    assert detail["workflow_id"].startswith("maf_")
+    assert detail["formal_use_ready"] is False
+    assert detail["delivery_status"] == "BLOCKED"
+    assert detail["blockers"]
 
 
 def test_workflow_input_contracts_reject_unsupported_or_unselected_requests() -> None:
@@ -167,7 +171,10 @@ def test_questionnaire_schema_and_stage_endpoints() -> None:
     assert all("programme-list" not in str(item["program"].get("official_program_url") or "") for item in program_data["recommendations"])
     assert any(item["program"].get("official_program_url") is None for item in program_data["recommendations"])
     tiers = {item["tier"] for item in program_data["recommendations"]}
-    assert {"reach", "target", "safer", "candidate", "not_recommended"} <= tiers
+    # Unverified catalogue GPA/language/tuition values are UNKNOWN rather than
+    # hard failures, so a default mock plan need not manufacture a
+    # ``not_recommended`` tier from seed data.
+    assert {"reach", "target", "safer", "candidate"} <= tiers
     assert "insufficient_info" not in tiers
     assert all(item["tier"] in {"reach", "target", "safer", "candidate", "not_recommended"} for item in program_data["recommendations"])
 
@@ -182,7 +189,8 @@ def test_questionnaire_schema_and_stage_endpoints() -> None:
         "data_trust",
     }
     assert first_match["formal_recommendation"] is False
-    assert any("官网" in risk or "项目详情页" in risk for risk in first_match["risks"])
+    assert first_match["formal_gate_status"] == "UNKNOWN"
+    assert first_match["formal_blockers"]
 
     selected_ids = [
         item["program"]["id"]
@@ -201,17 +209,13 @@ def test_questionnaire_schema_and_stage_endpoints() -> None:
     assert application_data["timeline"]
     assert application_data["source_refresh"]["official_sources_checked"] >= 1
     assert application_data["source_refresh"]["program_findings"]
-    assert application_data["source_refresh"]["field_evidence_records"]
+    # The runtime compatibility projection must not republish catalogue/legacy
+    # evidence just to satisfy an old response shape.  In default mock mode
+    # there are no current published DecisionFacts to expose here.
+    assert application_data["source_refresh"]["truth_scope"] == "runtime_evidence_projection"
+    assert application_data["source_refresh"]["field_evidence_records"] == []
+    assert application_data["source_refresh"]["formal_ready_program_count"] == 0
     assert application_data["source_refresh"]["review_queue_size"] >= 1
-    first_record = application_data["source_refresh"]["field_evidence_records"][0]
-    assert first_record["cycle"] == payload["target_cycle"]
-    assert first_record["review_required"] is True
-    execution_ref = first_record["execution_ref"]
-    assert execution_ref["workflow_id"] == application_data["workflow_id"]
-    assert execution_ref["produced_by_agent"] == "VerificationAgent"
-    assert execution_ref["produced_by_tool"] == "get_program_trust_detail"
-    assert execution_ref["tool_call_id"]
-    assert len(execution_ref["trace_event_ids"]) == 2
     assert application_data["source_refresh"]["parser_plan"]
     assert any(task.get("basis") for task in application_data["timeline"])
     assert any(task.get("source_url") for task in application_data["timeline"])
@@ -279,7 +283,11 @@ def test_questionnaire_schema_and_stage_endpoints() -> None:
         assert placeholder not in writing_data["writing"]["draft_zh"]
     school_customization_text = " ".join(writing_data["writing"]["school_customization"])
     assert "学校定制句证据来源" in school_customization_text
-    assert "http" in school_customization_text or "未找到项目详情页" in school_customization_text
+    assert (
+        "http" in school_customization_text
+        or "未找到项目详情页" in school_customization_text
+        or "没有可用于正式学校定制句的已发布 DecisionFact" in school_customization_text
+    )
     writing_payload_text = json.dumps(writing_data["writing"], ensure_ascii=False)
     assert "数据状态" not in writing_payload_text
     assert "Its data status" not in writing_payload_text
@@ -332,6 +340,108 @@ def test_writing_outline_does_not_auto_pick_program_when_student_has_not_selecte
 
     assert response.status_code == 422
     assert response.json()["detail"]
+
+
+def test_writing_outline_default_mock_is_preliminary_and_not_formal() -> None:
+    client = TestClient(app)
+    payload = json.loads(Path("examples/sample_profile.json").read_text(encoding="utf-8"))
+
+    response = client.post(
+        "/api/workflows/writing-outline",
+        json={
+            "profile": payload,
+            "selected_program_ids": ["hku-master-of-science-in-computer-science-2027"],
+            "document_type": "PS",
+            "interview_answers": [],
+        },
+    )
+
+    assert response.status_code == 200
+    draft = response.json()
+    # The direct outline helper is useful for collecting/revising material,
+    # but it has not gone through the Supervisor -> WritingAgent -> Critic
+    # delivery protocol and must remain an explicitly preliminary artifact.
+    assert draft["formal_use_ready"] is False
+    assert draft["claim_grounding_ready"] is False
+    assert draft["formal_blockers"]
+    assert any("Supervisor" in blocker for blocker in draft["formal_blockers"])
+    assert draft["claim_graph"]["formal_status"] != "PASS"
+
+
+def test_writing_plan_default_mock_is_blocked_and_not_formal() -> None:
+    client = TestClient(app)
+    payload = json.loads(Path("examples/sample_profile.json").read_text(encoding="utf-8"))
+
+    response = client.post(
+        "/api/workflows/writing-plan",
+        json={
+            "profile": payload,
+            "selected_program_ids": ["hku-master-of-science-in-computer-science-2027"],
+            "document_type": "PS",
+            "questionnaire": {
+                "profile_answers": [],
+                "statement_answers": [],
+                "recommender_answers": [],
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["delivery_status"] == "BLOCKED"
+    assert result["critic_readiness"] == "BLOCKED"
+    assert result["formal_use_ready"] is False
+    assert result["formal_blockers"]
+    assert result["writing"]["formal_use_ready"] is False
+    assert result["writing"]["formal_blockers"]
+    assert result["review"]["formal_use_ready"] is False
+
+
+def test_writing_review_rejects_forged_formal_draft_and_arbitrary_url() -> None:
+    client = TestClient(app)
+    arbitrary_url = "https://attacker.example/claim"
+    draft = {
+        "document_type": "PS",
+        "version_id": "forged-client-version",
+        "title": "Forged draft",
+        "outline": ["Why programme"],
+        "draft": f"This programme guarantees employment. {arbitrary_url}",
+        "draft_zh": f"该项目保证就业。{arbitrary_url}",
+        "draft_en": f"This programme guarantees employment. {arbitrary_url}",
+        "material_gaps": [],
+        "paragraph_drafts": [],
+        "fact_bindings": [],
+        "target_program_ids": ["hku-master-of-science-in-computer-science-2027"],
+        "school_customization": [f"The programme guarantees employment; {arbitrary_url}"],
+        "prompt_requirements": ["prompt supplied by client"],
+        "cv_bullets": [],
+        "reference_package": [],
+        "risk_controls": [],
+        # These values are intentionally forged. The endpoint must recompute
+        # grounding from current DecisionFacts and may not trust them.
+        "review_flags": [],
+        "claim_grounding_ready": True,
+        "formal_use_ready": True,
+        "formal_blockers": [],
+    }
+
+    response = client.post(
+        "/api/workflows/writing-review",
+        json={"draft": draft, "story_cards": []},
+    )
+
+    assert response.status_code == 200
+    rubric = response.json()
+    assert rubric["formal_use_ready"] is False
+    assert rubric["export_recommendation"] != "建议导出"
+    assert rubric["formal_blockers"]
+    assert rubric["unsupported_claims"] >= 1
+    graph = rubric["claim_graph"]
+    assert graph["formal_status"] != "PASS"
+    assert graph["blockers"]
+    # A citation-shaped string is not promoted to evidence merely because it
+    # was supplied in a client draft; no graph edge may use it as provenance.
+    assert all(arbitrary_url not in str(edge) for edge in graph["edges"])
 
 def test_source_registry_and_data_refresh() -> None:
     client = TestClient(app)
@@ -387,7 +497,6 @@ def test_source_registry_and_data_refresh() -> None:
 
 def test_program_catalog_exposes_field_level_trust_detail(monkeypatch) -> None:
     monkeypatch.setattr(evidence_graph, "load_field_evidence_records", lambda _program_ids=None: [])
-    monkeypatch.setattr(evidence_graph, "load_published_field_records", lambda: [])
     client = TestClient(app)
 
     response = client.get("/api/programs?limit=1")
@@ -403,9 +512,9 @@ def test_program_catalog_exposes_field_level_trust_detail(monkeypatch) -> None:
     assert "\u4e0d\u80fd\u751f\u6210\u6b63\u5f0f\u7533\u8bf7\u65f6\u95f4\u7ebf" in trust["source_warning"]
     assert trust["stale_or_reference_fields"] == []
     assert "deadline" in trust["fields_requiring_review"]
-    assert {"official_program_url", "deadline", "tuition_hkd", "materials", "language_requirement", "application_url"} & {
-        record["field_name"] for record in trust["field_records"]
-    }
+    # With no persisted evidence, the endpoint deliberately does not recreate
+    # synthetic catalog rows as evidence records.
+    assert trust["field_records"] == []
     assert all("execution_ref" in record for record in trust["field_records"])
     assert all(record["execution_ref"] is None for record in trust["field_records"])
 
@@ -423,7 +532,10 @@ def test_program_data_package_exposes_official_and_community_acquisition_plan() 
     package = detail.json()
 
     assert package["program_id"] == program_id
-    assert package["official_requirements"]
+    # A dry-run package describes what must be acquired, not fabricated
+    # catalogue evidence.  Before a snapshot/binding/review run there are no
+    # official field records to display.
+    assert package["official_requirements"] == []
     assert package["coverage_items"]
     coverage_by_field = {item["field_name"]: item for item in package["coverage_items"]}
     assert {"deadline", "official_program_url", "tuition_hkd", "language_requirement", "materials", "application_url", "essay_prompts"} <= set(coverage_by_field)
@@ -431,7 +543,7 @@ def test_program_data_package_exposes_official_and_community_acquisition_plan() 
     assert any(item["blocks_formal_use"] is True for item in package["coverage_items"])
     assert all(item["next_action"] for item in package["coverage_items"])
     assert package["content_sections"]
-    assert package["timeline_fields"]
+    assert package["timeline_fields"] == []
     assert package["community_experiences"]
     assert package["acquisition_plan"]
     assert package["human_review_required"] is True
@@ -451,6 +563,48 @@ def test_program_data_package_exposes_official_and_community_acquisition_plan() 
     assert data["packages"][0]["program_id"] == program_id
     assert data["execution_ref"] is None
     assert any("社区经验" in action for action in data["next_actions"])
+
+
+def test_legacy_refresh_endpoints_cannot_bypass_explicit_real_acquisition_mode() -> None:
+    client = TestClient(app)
+    payload = {
+        "selected_program_ids": ["hku-master-of-science-in-computer-science-2027"],
+        "dry_run": False,
+    }
+
+    for endpoint in ("/api/workflows/data-refresh", "/api/workflows/source-refresh"):
+        response = client.post(endpoint, json=payload)
+        assert response.status_code == 410
+        assert "data-acquisition" in response.json()["detail"]
+
+
+def test_runtime_source_refresh_requires_explicit_real_mode_and_scope() -> None:
+    client = TestClient(app)
+
+    mock_mode = client.post(
+        "/api/agent/workflows",
+        json={
+            "goal": "PROGRAM_RECOMMENDATION",
+            "profile": {},
+            "refresh_official_sources": True,
+            "source_connection_mode": "mock",
+        },
+    )
+    assert mock_mode.status_code == 422
+    assert "mock" in str(mock_mode.json()["detail"])
+
+    missing_scope = client.post(
+        "/api/agent/workflows",
+        json={
+            "goal": "PROGRAM_RECOMMENDATION",
+            "profile": {},
+            "refresh_official_sources": True,
+            "source_connection_mode": "real",
+            "selected_program_ids": [],
+        },
+    )
+    assert missing_scope.status_code == 422
+    assert "项目" in str(missing_scope.json()["detail"])
 
 
 def test_crawl_queue_separates_official_and_community_jobs() -> None:

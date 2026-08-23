@@ -3,18 +3,35 @@
 def test_human_conflict_resolution_is_typed_and_does_not_rewait() -> None:
     from uuid import uuid4
 
+    from harbor_agent.models import FieldEvidenceRecord, FieldVerificationStatus, SourceScope
     from harbor_agent.runtime.checkpoint import save_checkpoint
     from harbor_agent.runtime.state import WorkflowStatus
     from harbor_agent.services.agent_runtime import create_multi_agent_workflow
 
     workflow_id = f"human_resolution_{uuid4().hex}"
-    conflict = {
-        "program_id": "cityu-ma-communication-and-new-media-2027",
-        "field_name": "deadline",
-        "record_id": "official-record-a",
-        "source_type": "official_program_page",
-        "status": "CONFLICTED",
-    }
+    # Human review is only meaningful for a real, durable evidence candidate.
+    # A synthetic ``record_id`` with no source/binding/snapshot metadata must
+    # not be enough to clear a conflict gate.
+    conflict = FieldEvidenceRecord(
+        evidence_id="official-record-a",
+        program_id="cityu-ma-communication-and-new-media-2027",
+        field_name="deadline",
+        value="2027-02-28",
+        cycle="2027-fall",
+        source_url="https://www.cityu.edu.hk/programmes/communication-new-media",
+        source_type="official_program_page",
+        page_hash="sha256:conflict-record-a",
+        confidence="high",
+        source_priority=1,
+        status=FieldVerificationStatus.conflicted,
+        review_required=True,
+        evidence_snippet="Application deadline: 28 February 2027.",
+        snapshot_url="https://snapshots.cityu.edu.hk/conflict-record-a.html",
+        source_scope=SourceScope.programme_detail,
+        binding_status="matched",
+        binding_score=98,
+    ).model_dump(mode="json")
+    conflict["record_id"] = "official-record-a"
     state = AgentState(
         workflow_id=workflow_id,
         goal=WorkflowGoal.PROGRAM_RECOMMENDATION,
@@ -30,7 +47,8 @@ def test_human_conflict_resolution_is_typed_and_does_not_rewait() -> None:
         working_memory={
             "verification_cursor": 1,
             "verification_complete": True,
-            "critic_outcome": "PASS",
+                "critic_outcome": "PRELIMINARY_COMPLETE",
+                "critic_readiness": "PRELIMINARY_COMPLETE",
             "tool_results": {
                 "compare_evidence_records": {
                     "conflicts": [dict(conflict)],
@@ -138,7 +156,7 @@ from pydantic import ValidationError
 
 from harbor_agent.app import app
 from harbor_agent.runtime.decision import AgentDecision, DecisionType
-from harbor_agent.runtime.errors import ToolPermissionError
+from harbor_agent.runtime.errors import ToolExecutionError, ToolPermissionError
 from harbor_agent.runtime.state import AgentState, WorkflowGoal, apply_state_patch
 from harbor_agent.runtime.workflow import (
     MultiAgentRuntime,
@@ -180,6 +198,27 @@ def test_registry_enforces_agent_tool_permission() -> None:
             arguments={"url": "https://example.com", "dry_run": True},
             tracer=RuntimeTracer(state.workflow_id),
         )
+
+
+def test_live_snapshot_requires_runtime_source_fetch_capability() -> None:
+    from harbor_agent.observability.trace import RuntimeTracer
+
+    state = AgentState(workflow_id="source_capability", goal=WorkflowGoal.PROGRAM_RECOMMENDATION)
+    with pytest.raises(ToolExecutionError, match="snapshot_official_source failed: PermissionError") as exc_info:
+        build_default_tool_registry().execute(
+            agent_name="VerificationAgent",
+            allowed_tools={"snapshot_official_source"},
+            state=state,
+            tool_name="snapshot_official_source",
+            arguments={
+                "program_id": "hku-master-of-science-in-computer-science-2027",
+                "url": "https://example.com",
+                "dry_run": False,
+            },
+            tracer=RuntimeTracer(state.workflow_id),
+        )
+    assert exc_info.value.__cause__ is not None
+    assert "server-issued operator authorization" in str(exc_info.value.__cause__)
 
 
 def test_background_runtime_uses_real_agent_and_tool_events() -> None:
@@ -249,7 +288,12 @@ def test_budget_is_not_admissions_eligibility() -> None:
     tools = state.working_memory["tool_results"]
     financial = tools["evaluate_financial_feasibility"]["assessments"]
     admissions = tools["evaluate_admissions_eligibility"]["checks"]
-    assert any(item["status"] == "FAIL" for item in financial)
+    # No current reviewed tuition exists in the default catalogue, so a hard
+    # budget cannot be fabricated from a seed price.  This is deliberately an
+    # UNKNOWN financial result, while admissions remains separate.
+    assert financial
+    assert all(item["status"] == "UNKNOWN" for item in financial)
+    assert all(item["blocks_user_selection"] is False for item in financial)
     assert all(item["check_id"] != "tuition_budget" for item in admissions)
 
 
@@ -414,7 +458,7 @@ def test_model_driven_supervisor_executes_via_executor_and_records_llm_trace() -
         raw_profile={},
         normalized_profile={},
         assessment={},
-        working_memory={"critic_outcome": "PASS"},
+        working_memory={"critic_outcome": "PASS", "critic_readiness": "PRELIMINARY_COMPLETE"},
     )
     provider = DeterministicMockToolCallingProvider(
         responses=[
@@ -488,7 +532,10 @@ def test_explicit_ineligible_program_is_retained_as_review_gated_preparation_pla
     assert state.status.value == "COMPLETED"
     assert state.selected_program_ids == [program_id]
     assert state.selected_matches[0]["program"]["id"] == program_id
-    assert state.selected_matches[0]["hard_rule_passed"] is False
+    # The catalogue's GPA threshold is not a published DecisionFact, so this
+    # low GPA cannot be labelled a confirmed hard failure.  The explicit
+    # programme remains a preparation-only, non-formal plan instead.
+    assert state.selected_matches[0]["hard_rule_passed"] is True
     assert state.timeline
     assert state.final_result is not None
     assert state.final_result["formal_use_ready"] is False
@@ -559,3 +606,126 @@ def test_retryable_tool_retries_only_transient_execution_failures() -> None:
     events = list_runtime_trace_events(workflow_id)
     assert [item["event_type"] for item in events].count(TraceEventType.TOOL_CALL.value) == 2
     assert TraceEventType.RETRY.value in [item["event_type"] for item in events]
+
+def test_model_driven_specialist_rejects_reordered_policy_tools_at_executor_boundary():
+    from harbor_agent.agents.base import BaseAgent
+    from harbor_agent.llm.provider import DeterministicMockToolCallingProvider
+    from harbor_agent.llm.response import LLMResponse, LLMUsage
+    from harbor_agent.observability.trace import RuntimeTracer
+    from harbor_agent.runtime.errors import LLMStructuredOutputError
+    from harbor_agent.runtime.executor import AgentExecutor
+    from harbor_agent.runtime.limits import RuntimeLimits
+    from harbor_agent.tools.registry import ToolRegistry
+
+    class OrderedPolicyAgent(BaseAgent):
+        name = "OrderedPolicyAgent"
+        description = "Test-only ordered policy agent."
+        allowed_tools = {"first_tool", "second_tool"}
+        output_state_fields = ("working_memory",)
+
+        def step(self, state: AgentState) -> AgentDecision:
+            return AgentDecision(
+                decision=DecisionType.CALL_TOOL,
+                reasoning_summary="The policy requires first_tool before second_tool.",
+                tool_calls=[
+                    {"tool_name": "first_tool", "arguments": {}},
+                    {"tool_name": "second_tool", "arguments": {}},
+                ],
+                state_patch={"working_memory": {"policy_marker": "safe"}},
+            )
+
+    response = LLMResponse(
+        json_content={
+            "decision": "CALL_TOOL",
+            "reasoning_summary": "Try to skip the required tool order.",
+            "tool_calls": [
+                {"tool_name": "second_tool", "arguments": {}},
+                {"tool_name": "first_tool", "arguments": {}},
+            ],
+        },
+        usage=LLMUsage(prompt_tokens=1, completion_tokens=1),
+        model="mock",
+        provider="mock",
+    )
+    provider = DeterministicMockToolCallingProvider(responses=[response, response, response])
+    workflow_id = "model_order_policy"
+    outcome = AgentExecutor(ToolRegistry(), RuntimeLimits()).execute_agent(
+        OrderedPolicyAgent(llm=provider, model_driven=True),
+        AgentState(workflow_id=workflow_id, goal=WorkflowGoal.BACKGROUND_ASSESSMENT),
+        RuntimeTracer(workflow_id),
+    )
+
+    assert outcome.decision.decision == DecisionType.FAIL
+    assert outcome.state.status.value == "FAILED"
+    assert any("ordered policy subsequence" in item for item in outcome.state.errors)
+
+
+def test_model_driven_specialist_cannot_write_state_or_complete_workflow():
+    from harbor_agent.agents.base import BaseAgent
+    from harbor_agent.llm.provider import DeterministicMockToolCallingProvider
+    from harbor_agent.llm.response import LLMResponse, LLMUsage
+    from harbor_agent.observability.trace import RuntimeTracer
+    from harbor_agent.runtime.executor import AgentExecutor
+    from harbor_agent.runtime.limits import RuntimeLimits
+    from harbor_agent.tools.registry import ToolRegistry
+
+    class UnsafeSpecialist(BaseAgent):
+        name = "UnsafeSpecialist"
+        description = "Test-only unsafe specialist."
+        allowed_tools = set()
+        output_state_fields = ()
+
+        def step(self, state: AgentState) -> AgentDecision:
+            return AgentDecision(
+                decision=DecisionType.HANDOFF,
+                reasoning_summary="Return to Supervisor.",
+                next_agent="SupervisorAgent",
+            )
+
+    response = LLMResponse(
+        json_content={
+            "decision": "HANDOFF",
+            "reasoning_summary": "Attempt a privileged patch.",
+            "next_agent": "SupervisorAgent",
+            "state_patch": {"status": "COMPLETED"},
+        },
+        usage=LLMUsage(prompt_tokens=1, completion_tokens=1),
+        model="mock",
+        provider="mock",
+    )
+    provider = DeterministicMockToolCallingProvider(responses=[response, response, response])
+    workflow_id = "model_state_acl"
+    outcome = AgentExecutor(ToolRegistry(), RuntimeLimits()).execute_agent(
+        UnsafeSpecialist(llm=provider, model_driven=True),
+        AgentState(workflow_id=workflow_id, goal=WorkflowGoal.BACKGROUND_ASSESSMENT),
+        RuntimeTracer(workflow_id),
+    )
+
+    assert outcome.decision.decision == DecisionType.FAIL
+    assert outcome.state.status.value == "FAILED"
+    assert outcome.state.final_result is None
+    assert any("may not write shared state" in item for item in outcome.state.errors)
+
+
+def test_executor_allows_workflow_completion_only_for_supervisor():
+    from harbor_agent.agents.base import BaseAgent
+    from harbor_agent.observability.trace import RuntimeTracer
+    from harbor_agent.runtime.errors import AgentDecisionValidationError
+    from harbor_agent.runtime.executor import AgentExecutor
+
+    class CompletingSpecialist(BaseAgent):
+        name = "CompletingSpecialist"
+        description = "Test-only specialist."
+        allowed_tools = set()
+
+        def step(self, state: AgentState) -> AgentDecision:
+            return AgentDecision(
+                decision=DecisionType.COMPLETE,
+                reasoning_summary="Attempt to terminate the workflow.",
+            )
+
+    with pytest.raises(AgentDecisionValidationError, match="only SupervisorAgent"):
+        AgentExecutor._validate_decision_contract(
+            CompletingSpecialist(),
+            CompletingSpecialist().step(AgentState(workflow_id="specialist_complete", goal=WorkflowGoal.BACKGROUND_ASSESSMENT)),
+        )

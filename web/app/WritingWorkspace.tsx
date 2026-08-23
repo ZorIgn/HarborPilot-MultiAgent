@@ -541,7 +541,7 @@ function DraftVersionPanel({ history, currentTitle }: { history: DraftHistoryIte
 }
 
 function FactLockSummary({ writing, rubric, bindingItems }: { writing: WorkflowResult["writing"]; rubric: WritingReviewRubric | null; bindingItems: string[] }) {
-  const unsupported = rubric?.unsupported_claims ?? 0;
+  const unsupported = unsupportedClaimCount(writing, rubric);
   const locked = bindingItems.length;
   const controls = writing.risk_controls.length;
   return <section className="writing-fact-lock-panel" aria-label="事实锁定表">
@@ -687,14 +687,24 @@ function writingExportGate(writing: WorkflowResult["writing"], rubric: WritingRe
   const trust = targetProgram?.program.trust_detail;
   const production_ready = trust?.production_ready === true;
   const reference_ready = trust?.reference_ready === true;
-  const unsupportedClaims = rubric?.unsupported_claims ?? 0;
+  const unsupportedClaims = unsupportedClaimCount(writing, rubric);
+  // A standalone writing review receives client-controlled prose. Its result
+  // is useful lint, but it cannot grant or revoke the runtime formal result.
+  // Word export therefore uses only the Supervisor/Critic-delivered draft.
+  const formalUseReady = writing.formal_use_ready === true && writing.claim_grounding_ready === true;
+  const graphBlockers = writing.claim_graph?.blockers ?? [];
+  const formalBlockers = Array.from(new Set([
+    ...(writing.formal_blockers ?? []),
+    ...graphBlockers,
+  ])).filter(Boolean);
   const materialGapCount = cleanMaterialGaps(writing, documentType).length;
-  const projectSourceMissing = !targetProgram || (!production_ready && !reference_ready);
+  const projectSourceMissing = !targetProgram || writing.claim_grounding_ready !== true;
   const englishNeedsRevision = writing.draft_en.includes("[English revision required");
   const cycleLabel = trust?.cycle || targetProgram?.program.cycle || "上一申请季";
   const items: string[] = [];
 
-  if (production_ready) items.push("项目来源：当前季官方信息已进入写作复核范围。");
+  if (formalUseReady) items.push("项目来源：当前季 DecisionFact 已通过运行时写作门禁。");
+  else if (production_ready) items.push("项目来源：当前季官方信息已进入写作复核范围，但尚未取得正式文书交付许可。");
   else if (reference_ready) items.push("项目来源：" + cycleLabel + " 往届参考，提交前需要核对当前季官网。");
   else items.push("项目来源：缺少可用于学校定制句的官方或往届来源，不能作为最终稿。");
 
@@ -706,12 +716,13 @@ function writingExportGate(writing: WorkflowResult["writing"], rubric: WritingRe
   if (englishNeedsRevision) items.push("英文状态：中文事实尚未完成英文翻译和润色，不能导出为可提交 Word。");
 
   if (documentType === "REFERENCE_PACKAGE") items.push("推荐信材料包必须由推荐人确认事实、语气和签名信息后提交。");
+  if (formalBlockers.length) items.push("正式门禁：" + formalBlockers.slice(0, 2).join("；"));
 
-  if (projectSourceMissing || unsupportedClaims > 0 || englishNeedsRevision) {
+  if (!formalUseReady || projectSourceMissing || unsupportedClaims > 0 || englishNeedsRevision) {
     return {
       level: "blocked",
       title: "不能作为最终稿",
-      summary: "可以复制或下载带复核标记的 Markdown 继续修改；Word 导出已暂停，避免误交。",
+      summary: "可以复制或下载带复核标记的 Markdown 继续修改；只有 Supervisor/Critic 正式通过且 ClaimGraph 无阻断时才可导出 Word。",
       items,
       markdownLabel: "下载带复核标记 Markdown",
       wordLabel: "Word 暂停导出",
@@ -740,6 +751,13 @@ function writingExportGate(writing: WorkflowResult["writing"], rubric: WritingRe
     wordLabel: "下载 Word 文档",
     canDownloadWord: true,
   };
+}
+
+function unsupportedClaimCount(writing: WorkflowResult["writing"], rubric: WritingReviewRubric | null) {
+  const graphUnsupported = (writing.claim_graph?.nodes ?? []).filter(
+    (node) => node.required_for_formal && node.status !== "SUPPORTED",
+  ).length;
+  return Math.max(rubric?.unsupported_claims ?? 0, graphUnsupported);
 }
 
 

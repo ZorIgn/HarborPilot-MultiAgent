@@ -16,7 +16,9 @@ from harbor_agent.models import (
 )
 from harbor_agent.services import program_store
 from harbor_agent.services.data_loader import load_programs
-from harbor_agent.services.evidence_graph import REVIEWER_GATE_FIELDS, build_field_evidence_records
+from harbor_agent.services.evidence_graph import build_field_evidence_records
+from harbor_agent.services.field_contract import FORMAL_RECOMMENDATION_FIELDS
+from harbor_agent.services.resolved_program import normalize_field_value
 from harbor_agent.services.review_store import (
     load_review_decisions,
     save_published_field_record,
@@ -25,6 +27,7 @@ from harbor_agent.services.review_store import (
 from harbor_agent.services.source_identity import is_allowed_official_url, same_official_institution
 
 CURRENT_CYCLE_DATE_FIELDS = {"deadline", "scholarship_deadline", "recommendation_deadline"}
+REVIEWER_GATE_FIELDS = list(FORMAL_RECOMMENDATION_FIELDS)
 
 
 def build_review_queue(program_id: str | None = None, limit: int = 80) -> ReviewQueueSummary:
@@ -328,6 +331,18 @@ def _validate_confirmed_value(item: ReviewQueueItem, value: str | None) -> str |
     if item.field_name == "tuition_hkd":
         if not re.search(r"(HK\$|HKD)\s*[0-9][0-9,]{3,}", text, re.IGNORECASE):
             return "tuition_hkd 只能确认 HKD/HK$ 金额；其他币种必须保留为原币，不能直接混写为港币。"
+    if item.field_name == "min_gpa" and normalize_field_value("min_gpa", text) is None:
+        return (
+            "min_gpa 必须是可审计的 100 分制值（例如 82 或 {\"value\": 82, \"scale\": \"100\"}）；"
+            "3.6/4.0、5 分制或未声明尺度的原文可保留为候选，但不能直接发布为硬门槛。"
+        )
+    if item.field_name == "required_backgrounds" and normalize_field_value("required_backgrounds", text) is None:
+        return (
+            "required_backgrounds 必须确认成受支持的结构化标签列表（computing、business、statistics、engineering）；"
+            "原始官网文字可保留在 evidence snippet，不能直接转成硬背景限制。"
+        )
+    if item.field_name == "portfolio_required" and normalize_field_value("portfolio_required", text) is None:
+        return "portfolio_required 必须确认成 true/false，不能用模糊网页片段发布为硬门槛。"
     if item.field_name in {"official_program_url", "application_url"}:
         if not _is_allowed_official_url(text):
             return "项目页和申请入口只能发布 HTTPS 学校官方域名。"

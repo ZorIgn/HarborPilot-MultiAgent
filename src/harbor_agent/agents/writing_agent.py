@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from harbor_agent.agents.base import BaseAgent
+from harbor_agent.models import WritingDraft
 from harbor_agent.policies.tool_permissions import AGENT_TOOL_PERMISSIONS
 from harbor_agent.runtime.decision import AgentDecision, DecisionType, ToolCallRequest
 from harbor_agent.runtime.state import AgentState
@@ -80,12 +81,85 @@ class WritingWorkflowAgent(BaseAgent):
             return AgentDecision(
                 decision=DecisionType.CALL_TOOL,
                 reasoning_summary="Validate the generated draft's fact bindings before handing it to the critic.",
-                state_patch={"writing_draft": draft.get("draft"), "writing_ready": True},
+                # Validation is a separate executor turn.  A draft is never
+                # ready merely because the validator was scheduled.
+                state_patch={
+                    "writing_draft": _draft_with_claim_validation(
+                        draft.get("draft"),
+                        {},
+                        claim_grounding_ready=False,
+                        fallback_blockers=["ClaimGraph 验证尚未完成，文书不能标记为 ready。"],
+                    ),
+                    "writing_ready": False,
+                },
                 tool_calls=[ToolCallRequest(tool_name="validate_writing_claims", arguments={})],
+            )
+        validation = results.get("validate_writing_claims") or {}
+        # Require both structured flags.  In particular, do not treat the
+        # presence of a result, a non-empty graph, or legacy review_flags as a
+        # successful grounding decision.
+        grounded = validation.get("grounded") is True
+        passed = validation.get("passed") is True
+        blockers = validation.get("blockers") or []
+        unsupported = validation.get("unsupported_claims") or []
+        if not (grounded and passed and not blockers and not unsupported):
+            return AgentDecision(
+                decision=DecisionType.HANDOFF,
+                reasoning_summary="Writing claim validation is blocked; keep writing_ready=false and ask Supervisor/Critic to rewrite.",
+                state_patch={
+                    "writing_draft": _draft_with_claim_validation(
+                        draft.get("draft"),
+                        validation,
+                        claim_grounding_ready=False,
+                        fallback_blockers=["ClaimGraph 未通过；不能把文书标记为 ready。"],
+                    ),
+                    "writing_ready": False,
+                },
+                next_agent="SupervisorAgent",
             )
         return AgentDecision(
             decision=DecisionType.HANDOFF,
             reasoning_summary="Writing draft is ready for deterministic grounding review.",
-            state_patch={"writing_draft": draft.get("draft"), "writing_ready": True},
+            state_patch={
+                "writing_draft": _draft_with_claim_validation(
+                    draft.get("draft"),
+                    validation,
+                    claim_grounding_ready=True,
+                ),
+                "writing_ready": True,
+            },
             next_agent="SupervisorAgent",
         )
+
+
+def _draft_with_claim_validation(
+    raw_draft: object,
+    validation: dict,
+    *,
+    claim_grounding_ready: bool,
+    fallback_blockers: list[str] | None = None,
+) -> dict:
+    """Attach structured validation metadata without trusting review prose.
+
+    ``formal_use_ready`` deliberately stays false here.  The Critic/Supervisor
+    owns the final delivery decision after source and formal gates complete.
+    """
+
+    draft = WritingDraft.model_validate(raw_draft)
+    payload = draft.model_dump(mode="json")
+    graph = validation.get("graph") if isinstance(validation, dict) else None
+    blockers = validation.get("blockers") if isinstance(validation, dict) else None
+    if not isinstance(blockers, list):
+        blockers = []
+    blockers = [str(item).strip() for item in blockers if str(item).strip()]
+    if not blockers and fallback_blockers:
+        blockers = list(fallback_blockers)
+    payload.update(
+        {
+            "claim_graph": graph,
+            "claim_grounding_ready": claim_grounding_ready,
+            "formal_use_ready": False,
+            "formal_blockers": list(dict.fromkeys(blockers)),
+        }
+    )
+    return payload

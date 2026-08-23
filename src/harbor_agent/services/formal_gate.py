@@ -3,42 +3,40 @@ from __future__ import annotations
 from datetime import date, datetime
 import re
 
-from harbor_agent.models import FieldEvidenceRecord, FieldVerificationStatus, Program, ProgramMatch
-from harbor_agent.services.evidence_graph import build_program_trust_detail
-from harbor_agent.services.program_urls import student_application_url, student_program_url
+from harbor_agent.models import DecisionStatus, FieldEvidenceRecord, Program, ProgramMatch, ResolvedProgramView
+from harbor_agent.services.field_contract import CRITICAL_TIMELINE_FIELDS, FORMAL_RECOMMENDATION_FIELDS
+from harbor_agent.services.program_store import load_field_evidence_records
+from harbor_agent.services.resolved_program import resolve_program_view
 
-CRITICAL_TIMELINE_FIELDS = [
-    "official_program_url",
-    "deadline",
-    "application_url",
-    "language_requirement",
-    "materials",
-    "tuition_hkd",
-]
+# Retain a list-valued compatibility export for existing API consumers.
+CRITICAL_TIMELINE_FIELDS = list(CRITICAL_TIMELINE_FIELDS)
 
 
-def program_field_gate(program: Program) -> dict[str, object]:
-    trust = build_program_trust_detail(program)
-    by_field = {record.field_name: record for record in trust.field_records}
+def program_field_gate(
+    program: Program | ResolvedProgramView,
+) -> dict[str, object]:
+    """Evaluate the timeline gate from canonical decision facts only."""
+
+    view = _resolved_view(program)
     current_fields: list[str] = []
     previous_cycle_fields: list[str] = []
     missing_or_blocked: list[str] = []
     field_status: dict[str, str] = {}
 
     for field in CRITICAL_TIMELINE_FIELDS:
-        record = by_field.get(field)
-        field_status[field] = record.status.value if record else "MISSING"
-        if record is None or not _has_publishable_value(record):
-            missing_or_blocked.append(field)
-            continue
-        if field == "deadline" and _parse_date_value(str(record.value)) is None:
-            missing_or_blocked.append(field)
-            continue
-        if record.status == FieldVerificationStatus.official_verified_current and not record.review_required:
-            current_fields.append(field)
-            continue
-        if record.status == FieldVerificationStatus.official_previous_cycle:
+        fact = view.fact(field)
+        field_status[field] = fact.provenance_status.value
+        if fact.provenance_status.value == "REVIEWED_PREVIOUS":
             previous_cycle_fields.append(field)
+            continue
+        if fact.decision_status != DecisionStatus.PASS:
+            missing_or_blocked.append(field)
+            continue
+        if field == "deadline" and _parse_date_value(str(fact.normalized_value)) is None:
+            missing_or_blocked.append(field)
+            continue
+        if fact.formal_use_ready:
+            current_fields.append(field)
             continue
         missing_or_blocked.append(field)
 
@@ -60,18 +58,27 @@ def program_field_gate(program: Program) -> dict[str, object]:
 
 
 def formal_timeline_ready(match: ProgramMatch) -> bool:
-    gate = program_field_gate(match.program)
+    gate = program_field_gate(_view_from_match(match))
     return bool(gate["production_ready"])
 
 
 def formal_timeline_blockers(match: ProgramMatch) -> list[str]:
-    gate = program_field_gate(match.program)
+    gate = program_field_gate(_view_from_match(match))
     return list(gate["missing_or_blocked_fields"])
 
 
 def primary_record(program: Program, field_name: str) -> FieldEvidenceRecord | None:
-    trust = build_program_trust_detail(program)
-    return next((record for record in trust.field_records if record.field_name == field_name), None)
+    fact = resolve_program_view(program).fact(field_name)
+    if not fact.formal_use_ready or not fact.evidence_id:
+        return None
+    return next(
+        (
+            record
+            for record in load_field_evidence_records([program.id])
+            if record.evidence_id == fact.evidence_id
+        ),
+        None,
+    )
 
 def accepted_field_record(
     program: Program,
@@ -79,14 +86,11 @@ def accepted_field_record(
     *,
     include_previous: bool = True,
 ) -> FieldEvidenceRecord | None:
-    record = primary_record(program, field_name)
-    if record is None or not _has_publishable_value(record):
-        return None
-    if record.status == FieldVerificationStatus.official_verified_current and not record.review_required:
-        return record
-    if include_previous and record.status == FieldVerificationStatus.official_previous_cycle:
-        return record
-    return None
+    # ``include_previous`` is retained for API compatibility only.  Previous
+    # cycle values may be displayed as references elsewhere, but cannot be
+    # returned through this formal-decision API.
+    del include_previous
+    return primary_record(program, field_name)
 
 
 def accepted_field_value(
@@ -95,10 +99,15 @@ def accepted_field_value(
     *,
     include_previous: bool = True,
 ) -> str | None:
-    record = accepted_field_record(program, field_name, include_previous=include_previous)
-    if record is None or record.value is None:
+    del include_previous
+    fact = resolve_program_view(program).fact(field_name)
+    if not fact.formal_use_ready or fact.normalized_value is None:
         return None
-    return str(record.value)
+    if isinstance(fact.normalized_value, (list, dict)):
+        import json
+
+        return json.dumps(fact.normalized_value, ensure_ascii=False, sort_keys=True)
+    return str(fact.normalized_value)
 
 
 def accepted_url(
@@ -107,16 +116,8 @@ def accepted_url(
     *,
     include_previous: bool = True,
 ) -> str | None:
-    value = accepted_field_value(program, field_name, include_previous=include_previous)
-    if value:
-        return value
-    if field_name == "official_program_url":
-        fallback = student_program_url(program)
-    elif field_name == "application_url":
-        fallback = student_application_url(program)
-    else:
-        fallback = None
-    return str(fallback) if fallback else None
+    del include_previous
+    return accepted_field_value(program, field_name)
 
 
 def accepted_deadline(
@@ -124,15 +125,22 @@ def accepted_deadline(
     *,
     include_previous: bool = True,
 ) -> date | None:
-    value = accepted_field_value(program, "deadline", include_previous=include_previous)
+    del include_previous
+    value = accepted_field_value(program, "deadline")
     parsed = _parse_date_value(value)
     if parsed:
         return parsed
     return None
 
 
-def _has_publishable_value(record: FieldEvidenceRecord) -> bool:
-    return bool(record.value and str(record.value).strip() and str(record.value).strip() != "NOT_PUBLISHED")
+def _resolved_view(program: Program | ResolvedProgramView) -> ResolvedProgramView:
+    return program if isinstance(program, ResolvedProgramView) else resolve_program_view(program)
+
+
+def _view_from_match(match: ProgramMatch) -> ResolvedProgramView:
+    # Rebuild from the persisted canonical store so a stale checkpoint cannot
+    # keep an old seed-derived readiness decision alive after a revocation.
+    return resolve_program_view(match.program)
 
 
 def _parse_date_value(value: str | None) -> date | None:

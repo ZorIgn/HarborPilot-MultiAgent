@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from harbor_agent.services.claim_graph import build_claim_graph, claim_graph_passed
 from harbor_agent.services.deterministic_review import run_review_gate
 from harbor_agent.models import ProgramMatch, WritingDraft
 from harbor_agent.runtime.state import AgentState
@@ -56,13 +57,31 @@ def _writing(state: AgentState, _: EmptyToolInput) -> GateResult:
     if state.writing_draft is None:
         return GateResult(passed=False, blockers=["writing draft is missing"])
     draft = WritingDraft.model_validate(state.writing_draft)
-    blockers = [item for item in draft.review_flags if "不能" in item or "缺少" in item]
-    return GateResult(passed=not blockers, blockers=blockers)
+    graph = build_claim_graph(draft, _matches(state))
+    grounded = claim_graph_passed(graph)
+    blockers = list(graph.blockers)
+    if not state.writing_ready:
+        blockers.append("WritingAgent 尚未在独立 ClaimGraph 验证 turn 中把 writing_ready 设为 true。")
+    blockers = list(dict.fromkeys(blockers))
+    return GateResult(
+        passed=grounded and state.writing_ready and not blockers,
+        blockers=blockers,
+        details={
+            "claim_graph": graph.model_dump(mode="json"),
+            "claim_grounding_ready": grounded,
+            "writing_ready": state.writing_ready,
+        },
+    )
 
 
 def _review_gate(state: AgentState, _: EmptyToolInput) -> GateResult:
-    draft = WritingDraft.model_validate(state.writing_draft) if state.writing_draft else WritingDraft.model_construct()
-    result = run_review_gate(_matches(state), draft)
+    draft = WritingDraft.model_validate(state.writing_draft) if state.writing_draft else None
+    result = run_review_gate(
+        _matches(state),
+        draft,
+        writing_ready=state.writing_ready,
+        writing_required=state.goal.value in {"writing", "full_application_plan"},
+    )
     return GateResult(passed=bool(result.get("passed")), blockers=list(result.get("blockers", [])), details=result)
 
 

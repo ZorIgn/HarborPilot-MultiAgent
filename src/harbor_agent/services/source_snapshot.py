@@ -257,7 +257,10 @@ def extract_field_candidates(text: str) -> list[FieldExtractionCandidate]:
     candidates = [
         _deadline_candidate(cleaned),
         _tuition_candidate(cleaned),
+        _min_gpa_candidate(cleaned),
         _language_candidate(cleaned),
+        _required_backgrounds_candidate(cleaned),
+        _portfolio_candidate(cleaned),
         _materials_candidate(cleaned),
         _application_candidate(cleaned),
         _essay_candidate(cleaned),
@@ -493,11 +496,78 @@ def _tuition_candidate(text: str) -> FieldExtractionCandidate | None:
     )
 
 
+def _min_gpa_candidate(text: str) -> FieldExtractionCandidate | None:
+    """Extract a GPA statement as a review candidate, never a conversion.
+
+    A university's 4.0/5.0 scale cannot safely be converted to this project's
+    100-point eligibility unit automatically.  We retain the original scale
+    for a reviewer; ``ResolvedProgramView`` will refuse to use it formally
+    until the reviewer publishes an explicit supported normalization.
+    """
+
+    snippet = _snippet(
+        text,
+        "minimum (?:cumulative )?(?:gpa|grade point average)|minimum gpa|gpa requirement|"
+        "最低(?:平均)?(?:gpa|绩点|成绩)",
+    )
+    if not snippet:
+        return None
+    scaled = re.search(r"(?<!\d)(\d(?:\.\d+)?)\s*/\s*(4(?:\.0)?|5(?:\.0)?|100)(?!\d)", snippet)
+    if scaled:
+        value = f"{scaled.group(1)}/{scaled.group(2)}"
+    else:
+        plain = re.search(r"(?<!\d)(\d{2,3}(?:\.\d+)?)(?!\d)", snippet)
+        value = plain.group(1) if plain else None
+    return FieldExtractionCandidate(
+        field_name="min_gpa",
+        value=value,
+        evidence_snippet=snippet,
+        confidence="medium" if value else "low",
+    )
+
+
 def _language_candidate(text: str) -> FieldExtractionCandidate | None:
     snippet = _snippet(text, "IELTS|TOEFL|PTE|English language|language requirement|\u96c5\u601d|\u6258\u798f|\u82f1\u8bed")
     if not snippet:
         return None
     return FieldExtractionCandidate(field_name="language_requirement", value=snippet[:220], evidence_snippet=snippet, confidence="medium")
+
+
+def _required_backgrounds_candidate(text: str) -> FieldExtractionCandidate | None:
+    """Keep source wording for human normalization into the finite taxonomy."""
+
+    snippet = _snippet(
+        text,
+        "relevant (?:academic )?(?:background|discipline|degree)|eligible (?:discipline|background)|"
+        "admission requirement|本科专业|相关(?:专业|背景)|专业背景|先修",
+    )
+    if not snippet:
+        return None
+    return FieldExtractionCandidate(
+        field_name="required_backgrounds",
+        value=snippet[:260],
+        evidence_snippet=snippet,
+        confidence="low",
+    )
+
+
+def _portfolio_candidate(text: str) -> FieldExtractionCandidate | None:
+    snippet = _snippet(text, "portfolio|creative work|作品集|作品证明")
+    if not snippet:
+        return None
+    lowered = snippet.lower()
+    if re.search(r"(?:no|not)\s+portfolio\s+(?:is\s+)?required|(?:无需|不需要)作品集", lowered):
+        value = "false"
+    elif re.search(r"portfolio.{0,80}(?:required|must|should submit|need)|(?:必须|需要|须提交).{0,30}作品集", lowered):
+        value = "true"
+    else:
+        value = None
+    return FieldExtractionCandidate(
+        field_name="portfolio_required",
+        value=value,
+        evidence_snippet=snippet,
+        confidence="medium" if value is not None else "low",
+    )
 
 
 def _materials_candidate(text: str) -> FieldExtractionCandidate | None:

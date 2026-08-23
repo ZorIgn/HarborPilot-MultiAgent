@@ -267,7 +267,7 @@ def load_field_evidence_records(
     with _connect(db_path) as conn:
         rows = conn.execute(
             f"""
-            SELECT program_id, field_name, value, cycle, source_url, source_type, extracted_at,
+            SELECT id, program_id, field_name, value, cycle, source_url, source_type, extracted_at,
                    verified_at, page_hash, confidence, source_priority, status, review_required,
                    reviewer_id, evidence_snippet, snapshot_url, execution_ref_json,
                    source_scope, page_title, final_url, binding_status, binding_score,
@@ -416,7 +416,7 @@ def _program_row(program: Program) -> dict[str, object]:
 
 def _field_evidence_row(record: FieldEvidenceRecord) -> dict[str, object]:
     dumped = record.model_dump(mode="json")
-    record_id = _field_evidence_id(record)
+    record_id = record.evidence_id or _field_evidence_id(record)
     return {
         "id": record_id,
         "program_id": record.program_id,
@@ -463,30 +463,31 @@ def _field_evidence_id(record: FieldEvidenceRecord) -> str:
 
 def _field_evidence_record_from_row(row: tuple) -> FieldEvidenceRecord:
     return FieldEvidenceRecord(
-        program_id=row[0],
-        field_name=row[1],
-        value=row[2],
-        cycle=row[3],
-        source_url=row[4],
-        source_type=row[5],
-        extracted_at=row[6],
-        verified_at=row[7],
-        page_hash=row[8],
-        confidence=row[9],
-        source_priority=row[10],
-        status=FieldVerificationStatus(row[11]),
-        review_required=bool(row[12]),
-        reviewer_id=row[13],
-        evidence_snippet=row[14],
-        snapshot_url=row[15],
-        execution_ref=json.loads(row[16]) if row[16] else None,
-        source_scope=row[17] if row[17] else None,
-        page_title=row[18],
-        final_url=row[19],
-        binding_status=row[20] or "not_checked",
-        binding_score=int(row[21] or 0),
-        reviewer_note=row[22],
-        review_decision_id=row[23],
+        evidence_id=row[0],
+        program_id=row[1],
+        field_name=row[2],
+        value=row[3],
+        cycle=row[4],
+        source_url=row[5],
+        source_type=row[6],
+        extracted_at=row[7],
+        verified_at=row[8],
+        page_hash=row[9],
+        confidence=row[10],
+        source_priority=row[11],
+        status=FieldVerificationStatus(row[12]),
+        review_required=bool(row[13]),
+        reviewer_id=row[14],
+        evidence_snippet=row[15],
+        snapshot_url=row[16],
+        execution_ref=json.loads(row[17]) if row[17] else None,
+        source_scope=row[18] if row[18] else None,
+        page_title=row[19],
+        final_url=row[20],
+        binding_status=row[21] or "not_checked",
+        binding_score=int(row[22] or 0),
+        reviewer_note=row[23],
+        review_decision_id=row[24],
     )
 
 

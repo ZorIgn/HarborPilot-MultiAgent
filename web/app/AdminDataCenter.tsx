@@ -104,11 +104,16 @@ export function AdminDataCenter(props: Props) {
 
 export function SourceRefreshSummary({ report, evidenceGraph }: { report: DataRefreshReport | null; evidenceGraph?: EvidenceGraphSummary | null }) {
   if (!report && !evidenceGraph) return <EmptyState text="No source check results yet." />;
+  const operationalScope = report?.truth_scope === "runtime_evidence_projection"
+    ? "runtime evidence projection"
+    : "offline source check";
   return <div className="source-report">
     <section className="status-grid three">
       <Metric label="Field records" value={`${evidenceGraph?.field_record_count ?? report?.field_evidence_records.length ?? 0}`} detail="deadline / tuition / language / materials" />
       <Metric label="Official sources" value={`${evidenceGraph?.official_source_count ?? report?.official_sources_checked ?? 0}`} detail="school site, programme page, portal" />
       <Metric label="Need review" value={`${report?.review_queue_size ?? evidenceGraph?.pending_review_field_count ?? 0}`} detail="review against source text" />
+      <Metric label="Formal-ready programs" value={`${report?.formal_ready_program_count ?? 0}`} detail="current DecisionFacts only" />
+      <Metric label="Report scope" value={operationalScope} detail="transport/candidates are not verification" />
     </section>
     {report ? <><p className="form-note">{report.summary}</p><AdviceList title="Next actions" items={report.next_actions ?? []} /></> : null}
   </div>;
@@ -116,12 +121,13 @@ export function SourceRefreshSummary({ report, evidenceGraph }: { report: DataRe
 
 function AcquisitionPanel({ report, loading, onRun }: { report: DataAcquisitionReport | null; loading: boolean; onRun: (dryRun: boolean) => void }) {
   if (!report) return <div className="source-report">
-    <p>The acquisition agent saves official HTML/PDF snapshots, creates page hashes, extracts field candidates, and routes candidates to human review.</p>
+    <p>The acquisition agent saves official HTML/PDF snapshots, creates page hashes, extracts field candidates, and routes candidates to human review. “Run live crawler” explicitly uses real mode; it still creates review candidates, never published facts.</p>
     <div className="card-actions"><IslandButton type="default" loading={loading} onClick={() => onRun(true)}>Preview plan</IslandButton><IslandButton type="primary" loading={loading} onClick={() => onRun(false)}>Run live crawler</IslandButton></div>
   </div>;
   return <div className="source-report">
     <section className="status-grid three"><Metric label="Packages" value={`${report.packages.length}`} detail={report.mode === "live_fetch" ? "live fetch" : "dry run"} /><Metric label="Extraction results" value={`${report.extraction_results.length}`} detail="HTML/PDF parser output" /><Metric label="Persisted evidence" value={`${report.persisted_evidence_count}`} detail="SQLite review candidates" /></section>
     <p className="form-note">{report.summary}</p>
+    {report.run_warnings?.length ? <AdviceList title="Run warnings" items={report.run_warnings} /> : null}
     <AdviceList title="Crawler capabilities" items={report.crawler_capabilities} />
     <ExtractionCompareList results={report.extraction_results} />
     <EvidenceRecordList records={report.field_evidence_records} />

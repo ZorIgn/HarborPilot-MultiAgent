@@ -4,11 +4,21 @@ import hashlib
 from collections import Counter
 from datetime import UTC
 
-from harbor_agent.models import DataStatus, EvidenceGraphSummary, FieldEvidenceRecord, FieldVerificationStatus, Program, ProgramTrustDetail
+from harbor_agent.models import (
+    DataStatus,
+    DecisionStatus,
+    EvidenceGraphSummary,
+    FactProvenanceStatus,
+    FieldEvidenceRecord,
+    FieldVerificationStatus,
+    Program,
+    ProgramTrustDetail,
+)
 from harbor_agent.services.data_loader import load_programs, load_source_registry
 from harbor_agent.services.program_store import load_field_evidence_records
 from harbor_agent.services.program_urls import has_program_detail_page, student_application_url, student_program_url
-from harbor_agent.services.review_store import load_published_field_records
+from harbor_agent.services.field_contract import FORMAL_RECOMMENDATION_FIELDS
+from harbor_agent.services.resolved_program import resolve_program_view, resolve_program_views
 
 
 PRODUCTION_FIELDS = [
@@ -24,16 +34,11 @@ PRODUCTION_FIELDS = [
     "essay_prompts",
 ]
 
-REVIEWER_GATE_FIELDS = [
-    "deadline",
-    "official_program_url",
-    "tuition_hkd",
-    "materials",
-    "language_requirement",
-    "application_url",
-    "scholarship_deadline",
-    "essay_prompts",
-]
+# This public compatibility constant used to include a mixture of UI fields
+# and seed-derived fields.  It now intentionally mirrors the DecisionFact
+# contract: if a field is not in this list it may still be collected for
+# exploration, but it cannot make a programme formally ready.
+REVIEWER_GATE_FIELDS = list(FORMAL_RECOMMENDATION_FIELDS)
 
 STUDENT_TIMELINE_GATE_FIELDS = [
     "official_program_url",
@@ -54,22 +59,43 @@ OFFICIAL_PRIORITY = [
 ]
 
 
+def load_published_field_records() -> list[FieldEvidenceRecord]:
+    """Compatibility accessor for legacy audit/evaluation callers.
+
+    New decision consumers must use ``resolve_program_view`` rather than this
+    row-oriented helper.  Keeping the name avoids breaking existing local
+    evaluation fixtures while the underlying review store remains a SQLite
+    ledger, not a second DecisionFact source.
+    """
+
+    from harbor_agent.services.review_store import load_published_field_records as load_records
+
+    return load_records()
+
+
 def build_evidence_graph_summary(limit: int = 12) -> EvidenceGraphSummary:
     programs = load_programs()
     registry = load_source_registry()
     records = build_field_evidence_records(programs)
+    views = resolve_program_views(programs)
     status_counts = Counter(record.status.value for record in records)
     field_counts = Counter(record.field_name for record in records)
     review_required_count = sum(1 for record in records if record.review_required)
+    formal_fact_count = sum(
+        fact.formal_use_ready
+        for view in views.values()
+        for fact in view.facts.values()
+    )
 
     return EvidenceGraphSummary(
         program_count=len(programs),
         field_record_count=len(records),
-        verified_field_count=status_counts[FieldVerificationStatus.official_verified_current.value],
-        extracted_field_count=(
-            status_counts[FieldVerificationStatus.official_previous_cycle.value]
-            + status_counts[FieldVerificationStatus.model_inferred.value]
-        ),
+        # This is deliberately a DecisionFact count, not a count of rows whose
+        # legacy label happens to say "verified".  It prevents the overview
+        # from overstating formal coverage while preserving candidate records
+        # for a reviewer to inspect.
+        verified_field_count=formal_fact_count,
+        extracted_field_count=max(0, len(records) - formal_fact_count),
         pending_review_field_count=review_required_count,
         official_source_count=sum(1 for source in registry.sources if source.trust_level.value == "official"),
         community_source_count=sum(1 for source in registry.sources if source.trust_level.value == "community"),
@@ -83,6 +109,15 @@ def build_evidence_graph_summary(limit: int = 12) -> EvidenceGraphSummary:
 
 
 def build_field_evidence_records(programs: list[Program] | None = None) -> list[FieldEvidenceRecord]:
+    """Return candidate/audit records without promoting them to decision facts.
+
+    Legacy catalogue evidence is intentionally included so operators can see
+    what needs re-verification.  Formal consumers must use
+    :func:`resolve_program_view`; this function is never a published-evidence
+    fallback.  The SQLite store is the only runtime persistence source and the
+    old JSON "published" export is not re-imported here.
+    """
+
     programs = programs or load_programs()
     program_ids = {program.id for program in programs}
     records: list[FieldEvidenceRecord] = []
@@ -90,10 +125,6 @@ def build_field_evidence_records(programs: list[Program] | None = None) -> list[
         records.extend(_records_from_existing_evidence(program))
         records.extend(_synthetic_review_records(program))
     records.extend(load_field_evidence_records(program_ids))
-    records.extend(
-        record for record in load_published_field_records()
-        if record.program_id in program_ids
-    )
     deduped: dict[tuple[str, str, str, str, str, str], FieldEvidenceRecord] = {}
     for record in records:
         key = (
@@ -109,27 +140,51 @@ def build_field_evidence_records(programs: list[Program] | None = None) -> list[
 
 
 def build_program_trust_detail(program: Program) -> ProgramTrustDetail:
-    field_records = _primary_records_by_field(build_field_evidence_records([program]))
+    """Build a student-facing trust detail from the canonical DecisionFact view.
+
+    ``Program.field_evidence`` and the old JSON review export remain useful
+    as discovery/audit clues, but neither can make this detail say "current
+    official verified".  The status and readiness fields below are therefore
+    projected solely from reviewed SQLite evidence through ``ResolvedProgramView``.
+    """
+
+    view = resolve_program_view(program)
+    # Expose only persisted candidates in the detail.  This lets a reviewer
+    # inspect pending records without resurrecting synthetic seed evidence as
+    # a second source of truth.
+    field_records = _primary_records_by_field(load_field_evidence_records([program.id]))
     gate_fields = list(REVIEWER_GATE_FIELDS)
     official_fields = [
-        record.field_name
-        for record in field_records
-        if record.status == FieldVerificationStatus.official_verified_current
+        field
+        for field in gate_fields
+        if view.fact(field).formal_use_ready
     ]
     review_fields = [
         field
         for field in gate_fields
-        if _record_for_field(field_records, field) is None
-        or _record_for_field(field_records, field).review_required
-        or _record_for_field(field_records, field).status != FieldVerificationStatus.official_verified_current
+        if not view.fact(field).formal_use_ready
     ]
     reference_fields = [
-        record.field_name
-        for record in field_records
-        if record.status == FieldVerificationStatus.official_previous_cycle
+        field
+        for field in gate_fields
+        if view.fact(field).provenance_status
+        in {FactProvenanceStatus.REVIEWED_PREVIOUS, FactProvenanceStatus.STALE}
     ]
-    production_ready = not review_fields
-    reference_ready = not production_ready and set(STUDENT_TIMELINE_GATE_FIELDS).issubset(set(reference_fields))
+    production_ready = view.formal_readiness == DecisionStatus.PASS
+    timeline_fields = [view.fact(field) for field in STUDENT_TIMELINE_GATE_FIELDS]
+    reference_ready = (
+        not production_ready
+        and bool(timeline_fields)
+        and all(
+            fact.formal_use_ready
+            or fact.provenance_status == FactProvenanceStatus.REVIEWED_PREVIOUS
+            for fact in timeline_fields
+        )
+        and any(
+            fact.provenance_status == FactProvenanceStatus.REVIEWED_PREVIOUS
+            for fact in timeline_fields
+        )
+    )
     previous_label = _previous_cycle_label(program.cycle)
     if production_ready:
         status_label = "官网当前季已核验"
@@ -143,8 +198,8 @@ def build_program_trust_detail(program: Program) -> ProgramTrustDetail:
     else:
         status_label = "缺少关键项目字段"
         source_warning = (
-            f"{len(review_fields)} 个关键字段缺少当前季官网核验或明确往届字段；"
-            "补齐前只能展示项目清单，不能生成正式申请时间线。"
+            f"{len(review_fields)} 个关键字段未达到当前季字段级正式核验；"
+            "catalog 值仅用于检索与展示，补齐前不能生成正式申请时间线或正式推荐。"
         )
 
     return ProgramTrustDetail(
@@ -158,7 +213,14 @@ def build_program_trust_detail(program: Program) -> ProgramTrustDetail:
         fields_requiring_review=review_fields,
         stale_or_reference_fields=reference_fields,
         reviewer_gate_fields=gate_fields,
-        last_official_verified_at=program.last_verified_at,
+        last_official_verified_at=max(
+            (
+                fact.verified_at
+                for fact in view.facts.values()
+                if fact.formal_use_ready and fact.verified_at is not None
+            ),
+            default=None,
+        ),
         field_records=field_records,
     )
 
@@ -293,30 +355,24 @@ def _synthetic_evidence_snippet(program: Program, field_name: str) -> str:
     return "当前信息来自项目库抽取或规则推断，正式展示前需要回到项目详情页、PDF/FAQ 或申请系统确认。"
 
 def _field_status(program: Program, field_name: str, value: str | None) -> FieldVerificationStatus:
-    if field_name == "official_program_url" and not has_program_detail_page(program):
-        return FieldVerificationStatus.model_inferred
     if not value or value == "NOT_PUBLISHED":
         return FieldVerificationStatus.not_published
-    if program.last_verified_at and program.data_status == DataStatus.verified:
-        return FieldVerificationStatus.official_verified_current
-    if program.data_status == DataStatus.stale and field_name in {"deadline", "tuition_hkd", "materials", "language_requirement", "application_url", "official_program_url"}:
-        return FieldVerificationStatus.official_previous_cycle
+    # Catalogue values are seeds, including rows whose old `data_status` said
+    # VERIFIED.  No source scope, immutable snapshot, binding and independent
+    # review decision has been established at this layer, so never mint a
+    # current official verification label from them.
     return FieldVerificationStatus.model_inferred
 
 
 def _status_from_legacy(status: DataStatus, source_type: str) -> FieldVerificationStatus:
     if "community" in source_type:
         return FieldVerificationStatus.community_only
-    if status == DataStatus.verified:
-        return FieldVerificationStatus.official_verified_current
     if status == DataStatus.not_published:
         return FieldVerificationStatus.not_published
-    if status == DataStatus.changed:
-        return FieldVerificationStatus.conflicted
-    if status == DataStatus.stale:
-        return FieldVerificationStatus.official_previous_cycle
-    if status in {DataStatus.extracted, DataStatus.pending_review, DataStatus.discovered}:
-        return FieldVerificationStatus.model_inferred
+    # A legacy catalogue status is not an independently reviewed field record.
+    # It can guide a later fetch, but it cannot be re-labelled as current,
+    # previous-cycle, or conflicted published evidence.
+    del status
     return FieldVerificationStatus.model_inferred
 
 

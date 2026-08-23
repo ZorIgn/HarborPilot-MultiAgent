@@ -13,6 +13,7 @@ from harbor_agent.agents.supervisor import SupervisorAgent, SupervisorRoute
 from harbor_agent.llm.provider import RuntimeLLMProvider
 from harbor_agent.observability.events import TraceEventType
 from harbor_agent.observability.trace import RuntimeTracer
+from harbor_agent.models import SourceConnectionMode
 from harbor_agent.runtime.checkpoint import CheckpointPolicy, load_checkpoint, save_checkpoint
 from harbor_agent.runtime.decision import AgentDecision, DecisionType
 from harbor_agent.runtime.errors import WorkflowLimitExceeded
@@ -43,7 +44,13 @@ class WorkflowStartRequest(BaseModel):
     questionnaire: dict[str, Any] | None = None
     selected_program_ids: list[str] = Field(default_factory=list, max_length=20)
     document_type: str = "PS"
+    # Runtime source fetches are safe-by-default exactly like the dedicated
+    # acquisition API.  The authorization flag is server-injected after the
+    # public API validates an operator, an explicit scope and real/hybrid mode;
+    # callers cannot turn a bare boolean into network authority.
     refresh_official_sources: bool = False
+    source_connection_mode: SourceConnectionMode = SourceConnectionMode.mock
+    source_fetch_authorized: bool = False
 
 
 class WorkflowResumeRequest(BaseModel):
@@ -82,6 +89,30 @@ class MultiAgentRuntime:
         safe_profile = sanitize_runtime_payload(request.profile)
         safe_questionnaire = sanitize_runtime_payload(request.questionnaire)
         safe_user_request = sanitize_runtime_payload(request.user_request) or ""
+        live_source_mode = request.source_connection_mode in {
+            SourceConnectionMode.real,
+            SourceConnectionMode.hybrid,
+        }
+        source_fetch_enabled = bool(
+            request.refresh_official_sources
+            and live_source_mode
+            and request.source_fetch_authorized
+            and request.selected_program_ids
+        )
+        source_fetch_refusal_reason = None
+        if request.refresh_official_sources and not source_fetch_enabled:
+            if not live_source_mode:
+                source_fetch_refusal_reason = (
+                    "refresh_official_sources requires explicit source_connection_mode=real or hybrid; mock mode never fetches the network."
+                )
+            elif not request.source_fetch_authorized:
+                source_fetch_refusal_reason = (
+                    "refresh_official_sources requires server-issued operator authorization and an explicit programme scope."
+                )
+            else:
+                source_fetch_refusal_reason = (
+                    "refresh_official_sources requires at least one explicit programme ID."
+                )
         state = AgentState(
             workflow_id=workflow_id,
             goal=request.goal,
@@ -93,7 +124,11 @@ class MultiAgentRuntime:
             max_steps=self.limits.max_workflow_steps,
             working_memory={
                 "explicit_selected_program_ids": list(request.selected_program_ids),
-                "verification_source_fetch_enabled": bool(request.refresh_official_sources),
+                "verification_source_fetch_requested": bool(request.refresh_official_sources),
+                "verification_source_connection_mode": request.source_connection_mode.value,
+                "verification_source_fetch_enabled": source_fetch_enabled,
+                "verification_source_fetch_dry_run": not source_fetch_enabled,
+                "verification_source_fetch_refusal_reason": source_fetch_refusal_reason,
             },
         )
         create_multi_agent_workflow(workflow_id, state.goal.value, state.model_dump(mode="json"), owner_id=owner_id)
