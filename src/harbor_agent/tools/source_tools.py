@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from harbor_agent.policies.source_policy import ensure_safe_https_url
 from harbor_agent.runtime.errors import HumanReviewRequired
@@ -46,6 +46,25 @@ class SourceBindingProposal(BaseModel):
     program_id: str
     source_url: str
     field_names: list[str] = Field(min_length=1)
+    # A binding is an authorization for one immutable source observation.  The
+    # identifiers are part of the typed tool arguments so ToolRegistry's
+    # one-shot approval hash covers them as well as program/url/fields.
+    snapshot_id: str = Field(min_length=1, max_length=512)
+    page_hash: str = Field(min_length=1, max_length=256)
+
+    @field_validator("source_url", mode="before")
+    @classmethod
+    def _normalize_source_url(cls, value: object) -> str:
+        return str(value or "").strip()
+
+    @field_validator("field_names", mode="before")
+    @classmethod
+    def _normalize_field_names(cls, value: object) -> object:
+        if not isinstance(value, (list, tuple, set)):
+            return value
+        return sorted(
+            dict.fromkeys(str(item).strip() for item in value if str(item).strip())
+        )
 
 
 class SourceBindingResult(BaseModel):
@@ -54,7 +73,8 @@ class SourceBindingResult(BaseModel):
     program_id: str
     source_url: str
     field_names: list[str]
-    page_hash: str | None = None
+    page_hash: str
+    snapshot_id: str
     approval_id: str
     reviewer_id: str
     created_at: str
@@ -98,6 +118,9 @@ def _binding(state: AgentState, args: SourceBindingProposal) -> SourceBindingRes
     approval = state.active_tool_approval
     if approval is None or approval.tool_name != "bind_source_to_program" or not approval.reviewer_id:
         raise HumanReviewRequired("source binding requires an active exact approval")
+    approved_arguments = approval.arguments
+    if approved_arguments != args.model_dump(mode="json"):
+        raise PermissionError("source binding approval does not match the exact snapshot-bound arguments")
     # Binding does not perform a network request.  The URL was already fetched
     # through snapshot_official_source's SSRF gateway; re-running DNS policy
     # here would make an auditable stored snapshot depend on later DNS answers.
@@ -133,14 +156,20 @@ def _binding(state: AgentState, args: SourceBindingProposal) -> SourceBindingRes
     ):
         raise ValueError("source binding requires the successful current programme snapshot")
     page_hash = snapshot.get("page_hash") if isinstance(snapshot, dict) else None
+    snapshot_id = snapshot.get("snapshot_id") if isinstance(snapshot, dict) else None
+    if not page_hash or not snapshot_id:
+        raise ValueError("source binding requires a successful snapshot id and page hash")
+    if str(args.page_hash) != str(page_hash) or str(args.snapshot_id) != str(snapshot_id):
+        raise ValueError("source binding snapshot_id/page_hash do not match the current source snapshot")
     persisted = save_program_source_binding(
         workflow_id=state.workflow_id,
         program_id=args.program_id,
         source_url=source_url,
         field_names=args.field_names,
-        page_hash=str(page_hash) if page_hash else None,
         approval_id=approval.approval_id,
         reviewer_id=approval.reviewer_id,
+        page_hash=str(page_hash),
+        snapshot_id=str(snapshot_id),
     )
     return SourceBindingResult.model_validate(persisted)
 

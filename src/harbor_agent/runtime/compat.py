@@ -216,7 +216,11 @@ def _review_summary(state: AgentState, matches: list[ProgramMatch] | None = None
     )
     writing = WritingDraft.model_validate(state.writing_draft) if state.writing_draft else None
     writing_required = state.goal in {WorkflowGoal.WRITING, WorkflowGoal.FULL_APPLICATION_PLAN}
-    graph = build_claim_graph(writing, reviewed_matches) if writing is not None else None
+    graph = (
+        build_claim_graph(writing, reviewed_matches, student_facts=state.story_cards)
+        if writing is not None
+        else None
+    )
     claim_grounding_ready = claim_graph_passed(graph)
     writing_ready = (
         not writing_required
@@ -293,7 +297,7 @@ def _writing_with_delivery_status(state: AgentState) -> WritingDraft:
         raise RuntimeError("writing draft missing")
     draft = WritingDraft.model_validate(state.writing_draft)
     matches = _selected_matches(state) or _matches(state)
-    graph = build_claim_graph(draft, matches)
+    graph = build_claim_graph(draft, matches, student_facts=state.story_cards)
     claim_grounding_ready = state.writing_ready and claim_graph_passed(graph)
     runtime_final = state.final_result if isinstance(state.final_result, dict) else {}
     critic_readiness = str(state.working_memory.get("critic_readiness") or "")

@@ -724,6 +724,8 @@ def test_review_queue_blocks_legacy_candidates_without_page_binding() -> None:
     rejected = reject_response.json()
     assert rejected["ok"] is True
     assert rejected["item"]["status"] == "REJECTED"
+    assert rejected["item"]["reviewer_id"] == "test_admin"
+    assert rejected["item"]["reviewer_id"] != "qa_reviewer"
     assert rejected["published_record"] is None
 
     approve_response = client.post(

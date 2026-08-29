@@ -124,7 +124,10 @@ class WritingComposer:
         school_name = _school_name(target)
         outline = _outline_for(doc_type)
         fact_bindings = [
-            {"claim": card.title, "fact_id": ",".join(card.evidence_ids) or card.id}
+            {
+                "claim": _card_text(card, card.title),
+                "fact_id": ",".join(card.evidence_ids) or card.id,
+            }
             for card in story_cards
         ]
         draft_zh, draft_en = _local_draft(profile, target, story_cards, doc_type)
@@ -257,7 +260,11 @@ class WritingComposer:
             risk_controls=risk_controls,
             review_flags=flags,
         )
-        return _preliminary_writing_draft(draft, [target] if target is not None else [])
+        return _preliminary_writing_draft(
+            draft,
+            [target] if target is not None else [],
+            student_facts=story_cards,
+        )
 
     def interview_questions(
         self,
@@ -395,7 +402,10 @@ class WritingComposer:
             for program in load_programs()
             if program.id in set(draft.target_program_ids)
         ]
-        graph = build_claim_graph(draft, selected_programs)
+        # The draft's IDs are only references.  ClaimGraph must resolve them
+        # against the story cards supplied by this request before marking a
+        # student claim supported.
+        graph = build_claim_graph(draft, selected_programs, student_facts=story_cards)
         claim_grounding_ready = claim_graph_passed(graph)
         unsupported = sum(
             node.required_for_formal and node.status.value != "SUPPORTED"
@@ -1203,6 +1213,8 @@ def _writing_program_context(target: ProgramMatch | None) -> dict:
 def _preliminary_writing_draft(
     draft: WritingDraft,
     matches: list[ProgramMatch],
+    *,
+    student_facts: list[StoryCard] | None = None,
 ) -> WritingDraft:
     """Annotate direct-composer output as an explicitly non-formal artifact.
 
@@ -1211,7 +1223,7 @@ def _preliminary_writing_draft(
     protocol, so they can never grant formal writing readiness on their own.
     """
 
-    graph = build_claim_graph(draft, matches)
+    graph = build_claim_graph(draft, matches, student_facts=student_facts)
     blockers = list(graph.blockers)
     blockers.append("直接预览/大纲接口未经过 Supervisor、独立 WritingAgent 验证与 Critic 正式交付。")
     claim_grounding_ready = claim_graph_passed(graph)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from typing import ClassVar
 
 import pytest
@@ -87,13 +88,13 @@ def test_model_state_patch_and_policy_skip_fail_closed(tmp_path, monkeypatch) ->
     assert outcome.decision.decision == DecisionType.FAIL
 
 
-def test_model_can_choose_order_inside_a_deterministic_tool_envelope(tmp_path, monkeypatch) -> None:
+def test_model_can_choose_an_ordered_prefix_inside_a_deterministic_tool_envelope(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(agent_runtime, "DB_PATH", tmp_path / "agent_runtime.sqlite")
     observed: list[str] = []
 
     class OrderedAgent(BaseAgent):
         name = "OrderedAgent"
-        description = "test-only agentic ordering policy"
+        description = "test-only ordered-prefix policy"
         allowed_tools: ClassVar[set[str]] = {"check_a", "check_b"}
 
         def step(self, state: AgentState) -> AgentDecision:
@@ -129,12 +130,12 @@ def test_model_can_choose_order_inside_a_deterministic_tool_envelope(tmp_path, m
     provider = DeterministicMockToolCallingProvider(
         responses=[
             LLMResponse(
-                tool_calls=[LLMToolCall(call_id="choose_b", name="check_b", arguments={})],
+                tool_calls=[LLMToolCall(call_id="choose_a", name="check_a", arguments={})],
                 model="ordering-model",
                 provider="test",
             ),
             LLMResponse(
-                tool_calls=[LLMToolCall(call_id="then_a", name="check_a", arguments={})],
+                tool_calls=[LLMToolCall(call_id="then_b", name="check_b", arguments={})],
                 model="ordering-model",
                 provider="test",
             ),
@@ -157,7 +158,7 @@ def test_model_can_choose_order_inside_a_deterministic_tool_envelope(tmp_path, m
     )
 
     assert outcome.decision.decision == DecisionType.HANDOFF
-    assert observed == ["check_b", "check_a"]
+    assert observed == ["check_a", "check_b"]
 
 
 def test_specialist_cannot_complete_or_write_final_result(tmp_path, monkeypatch) -> None:
@@ -186,6 +187,32 @@ def test_specialist_cannot_complete_or_write_final_result(tmp_path, monkeypatch)
 
     assert outcome.state.status == WorkflowStatus.FAILED
     assert outcome.state.final_result is None
+    assert outcome.decision.decision == DecisionType.FAIL
+
+
+def test_specialist_cannot_create_a_retryable_delivery_block(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(agent_runtime, "DB_PATH", tmp_path / "agent_runtime.sqlite")
+
+    class RogueAgent(BaseAgent):
+        name = "RogueBlockedAgent"
+        description = "test-only rogue specialist"
+        allowed_tools: ClassVar[set[str]] = set()
+
+        def step(self, state: AgentState) -> AgentDecision:
+            return AgentDecision(
+                decision=DecisionType.BLOCKED,
+                reasoning_summary="A specialist attempts to terminate as retryable blocked.",
+            )
+
+    state = AgentState(
+        workflow_id="rogue_blocked",
+        goal=WorkflowGoal.BACKGROUND_ASSESSMENT,
+    )
+    outcome = AgentExecutor(ToolRegistry(), RuntimeLimits()).execute_agent(
+        RogueAgent(), state, RuntimeTracer(state.workflow_id)
+    )
+
+    assert outcome.state.status == WorkflowStatus.FAILED
     assert outcome.decision.decision == DecisionType.FAIL
 
 
@@ -292,7 +319,9 @@ def test_legacy_tool_name_approvals_are_discarded() -> None:
 
 def test_workflow_owner_cannot_self_approve_human_review(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(agent_runtime, "DB_PATH", tmp_path / "agent_runtime.sqlite")
-    monkeypatch.setattr(settings, "admin_token", "independent-admin-secret")
+    admin_secret = "independent-admin-secret"
+    monkeypatch.setattr(settings, "admin_token", admin_secret)
+    reviewer_id = "admin_token:" + hashlib.sha256(admin_secret.encode("utf-8")).hexdigest()[:12]
     state = AgentState(
         workflow_id="owner_cannot_review",
         goal=WorkflowGoal.PROGRAM_RECOMMENDATION,
@@ -312,6 +341,7 @@ def test_workflow_owner_cannot_self_approve_human_review(tmp_path, monkeypatch) 
         state.workflow_id,
         state.goal.value,
         state.model_dump(mode="json"),
+        owner_id=reviewer_id,
     )
     save_checkpoint(state)
     client = TestClient(app)
@@ -326,13 +356,15 @@ def test_workflow_owner_cannot_self_approve_human_review(tmp_path, monkeypatch) 
                 ],
             }
         },
+        headers={"x-harbor-admin-token": admin_secret},
     )
     assert owner_response.status_code == 403
+    assert "owner" in owner_response.json()["detail"]
 
     free_text_response = client.post(
         f"/api/agent/workflows/{state.workflow_id}/resume",
         json={"human_resolution": "管理员确认后继续执行。"},
-        headers={"x-harbor-admin-token": "independent-admin-secret"},
+        headers={"x-harbor-admin-token": admin_secret},
     )
     assert free_text_response.status_code == 422
 
@@ -397,6 +429,8 @@ def test_binding_and_review_candidate_are_really_persisted(tmp_path, monkeypatch
         "program_id": program.id,
         "source_url": source_url,
         "field_names": ["deadline"],
+        "snapshot_id": "snapshots/test.html",
+        "page_hash": "sha256:persisted-candidate",
     }
     with pytest.raises(HumanReviewRequired) as binding_gate:
         registry.execute(
@@ -435,6 +469,8 @@ def test_binding_and_review_candidate_are_really_persisted(tmp_path, monkeypatch
         "field_name": "deadline",
         "proposed_value": "2027-12-01",
         "reason": "Exact extracted candidate awaiting publication review.",
+        "snapshot_id": "snapshots/test.html",
+        "page_hash": "sha256:persisted-candidate",
     }
     with pytest.raises(HumanReviewRequired) as candidate_gate:
         registry.execute(

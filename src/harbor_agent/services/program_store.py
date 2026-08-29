@@ -3,8 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Iterable
+from uuid import uuid4
 
 from harbor_agent.models import (
     FieldEvidenceRecord,
@@ -203,6 +205,14 @@ def upsert_field_evidence_records(
     rows = [_field_evidence_row(record) for record in records]
     if not rows:
         return 0
+    with _connect(db_path) as conn:
+        _upsert_field_evidence_rows(conn, rows)
+        conn.commit()
+    _clear_data_loader_caches_after_write()
+    return len(rows)
+
+
+def _upsert_field_evidence_rows(conn: sqlite3.Connection, rows: list[dict[str, object]]) -> None:
     sql = """
         INSERT INTO program_field_evidence (
             id, program_id, field_name, value, cycle, source_url, source_type, extracted_at,
@@ -243,11 +253,188 @@ def upsert_field_evidence_records(
             review_decision_id=excluded.review_decision_id,
             updated_at=CURRENT_TIMESTAMP
     """
+    conn.executemany(sql, rows)
+
+
+def persist_conflict_resolution(
+    records: Iterable[FieldEvidenceRecord],
+    *,
+    action: str,
+    conflict_id: str,
+    reviewer_id: str,
+    selected_record_id: str | None = None,
+    reviewer_note: str | None = None,
+    db_path: Path | None = None,
+) -> tuple[FieldEvidenceRecord | None, str]:
+    """Atomically apply one human conflict decision to evidence and its ledger.
+
+    The caller supplies every member of the conflict group.  ``accept`` must
+    name one durable ``evidence_id``/record ID from that set; that row becomes
+    the sole current official row for its program/field/cycle and all sibling
+    rows are superseded in the same SQLite transaction.  ``reject`` marks the
+    supplied members as not published.  The review decision is written on the
+    same connection, so a canonical resolver can never observe half of a
+    decision.
+    """
+
+    normalized_action = str(action or "").strip().lower()
+    if normalized_action not in {"accept", "reject"}:
+        raise ValueError(f"unsupported conflict decision: {action}")
+    if not str(conflict_id or "").strip():
+        raise ValueError("conflict_id is required")
+    if not str(reviewer_id or "").strip():
+        raise ValueError("reviewer_id is required")
+    members = list(records)
+    if not members:
+        raise ValueError("conflict resolution requires at least one evidence record")
+
+    member_ids: list[str] = []
+    normalized_members: list[FieldEvidenceRecord] = []
+    for record in members:
+        evidence_id = field_evidence_id(record)
+        if evidence_id in member_ids:
+            continue
+        member_ids.append(evidence_id)
+        normalized_members.append(record.model_copy(update={"evidence_id": evidence_id}))
+    first = normalized_members[0]
+    group_key = (first.program_id, first.field_name, first.cycle)
+    if any(
+        (record.program_id, record.field_name, record.cycle) != group_key
+        for record in normalized_members[1:]
+    ):
+        raise ValueError("all conflict members must belong to the same program field and cycle")
+    if normalized_action == "accept":
+        if not selected_record_id:
+            raise ValueError("accept requires selected_record_id")
+        if str(selected_record_id) not in member_ids:
+            raise ValueError("selected_record_id must identify a member evidence record")
+        if str(selected_record_id) == str(conflict_id) and str(conflict_id).startswith(("conflict_", "fact_conflict_")):
+            raise ValueError("selected_record_id must be a durable evidence record ID, not the conflict ID")
+    elif selected_record_id:
+        raise ValueError("reject applies to the whole conflict group and cannot select a record")
+
+    db_path = db_path or DB_PATH
+    init_program_store(db_path)
+    decision_id = f"decision_{uuid4().hex[:14]}"
+    decided_at = datetime.now(UTC)
     with _connect(db_path) as conn:
-        conn.executemany(sql, rows)
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS review_decisions (
+                decision_id TEXT PRIMARY KEY,
+                review_id TEXT NOT NULL,
+                program_id TEXT NOT NULL,
+                field_name TEXT NOT NULL,
+                decision TEXT NOT NULL,
+                reviewer_id TEXT NOT NULL,
+                reviewer_note TEXT,
+                decided_at TEXT NOT NULL
+            )
+            """
+        )
+        _upsert_field_evidence_rows(conn, [_field_evidence_row(record) for record in normalized_members])
+        conn.execute(
+            """
+            INSERT INTO review_decisions
+            (decision_id, review_id, program_id, field_name, decision, reviewer_id, reviewer_note, decided_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                decision_id,
+                str(conflict_id),
+                first.program_id,
+                first.field_name,
+                normalized_action,
+                reviewer_id,
+                reviewer_note,
+                decided_at.isoformat(),
+            ),
+        )
+        if normalized_action == "accept":
+            selected = next(record for record in normalized_members if field_evidence_id(record) == str(selected_record_id))
+            # Supersede every sibling in the same current programme field.  A
+            # prior reviewer decision is intentionally replaced only inside
+            # this transaction, never by a second out-of-band upsert.
+            cycle_clause = "cycle = ?" if selected.cycle is not None else "cycle IS NULL"
+            cycle_params: tuple[object, ...] = (selected.cycle,) if selected.cycle is not None else ()
+            conn.execute(
+                f"""
+                UPDATE program_field_evidence
+                SET status = 'NOT_PUBLISHED', review_required = 0,
+                    reviewer_id = ?, reviewer_note = ?, review_decision_id = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE program_id = ? AND field_name = ? AND {cycle_clause}
+                  AND id <> ?
+                """,
+                (
+                    reviewer_id,
+                    reviewer_note or f"superseded by accepted evidence record {selected_record_id}",
+                    decision_id,
+                    selected.program_id,
+                    selected.field_name,
+                    *cycle_params,
+                    str(selected_record_id),
+                ),
+            )
+            conn.execute(
+                """
+                UPDATE program_field_evidence
+                SET status = 'OFFICIAL_VERIFIED_CURRENT', review_required = 0,
+                    reviewer_id = ?, reviewer_note = ?, review_decision_id = ?,
+                    verified_at = ?, confidence = 'high', updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (
+                    reviewer_id,
+                    reviewer_note,
+                    decision_id,
+                    decided_at.isoformat(),
+                    str(selected_record_id),
+                ),
+            )
+            result = selected.model_copy(
+                update={
+                    "status": FieldVerificationStatus.official_verified_current,
+                    "review_required": False,
+                    "reviewer_id": reviewer_id,
+                    "reviewer_note": reviewer_note,
+                    "review_decision_id": decision_id,
+                    "verified_at": decided_at,
+                    "confidence": "high",
+                }
+            )
+        else:
+            placeholders = ",".join("?" for _ in member_ids)
+            conn.execute(
+                f"""
+                UPDATE program_field_evidence
+                SET status = 'NOT_PUBLISHED', review_required = 0,
+                    reviewer_id = ?, reviewer_note = ?, review_decision_id = ?,
+                    verified_at = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id IN ({placeholders})
+                """,
+                (
+                    reviewer_id,
+                    reviewer_note,
+                    decision_id,
+                    decided_at.isoformat(),
+                    *member_ids,
+                ),
+            )
+            result = normalized_members[0].model_copy(
+                update={
+                    "status": FieldVerificationStatus.not_published,
+                    "review_required": False,
+                    "reviewer_id": reviewer_id,
+                    "reviewer_note": reviewer_note,
+                    "review_decision_id": decision_id,
+                    "verified_at": decided_at,
+                }
+            )
         conn.commit()
     _clear_data_loader_caches_after_write()
-    return len(rows)
+    return result, decision_id
 
 
 def load_field_evidence_records(
@@ -459,6 +646,12 @@ def _field_evidence_id(record: FieldEvidenceRecord) -> str:
         ]
     )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+
+def field_evidence_id(record: FieldEvidenceRecord) -> str:
+    """Return the durable SQLite identity used for one evidence row."""
+
+    return str(record.evidence_id or _field_evidence_id(record))
 
 
 def _field_evidence_record_from_row(row: tuple) -> FieldEvidenceRecord:

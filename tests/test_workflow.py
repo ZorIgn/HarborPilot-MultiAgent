@@ -30,14 +30,16 @@ def test_profile_agent_uses_structured_courses_and_skills_for_direction() -> Non
     assert "core courses or prerequisites" not in profile.missing_fields
 
 
-def test_full_assessment_is_explicitly_blocked_without_current_formal_sources() -> None:
+def test_full_assessment_is_retryably_blocked_without_current_formal_sources() -> None:
     with pytest.raises(WorkflowDeliveryBlockedError) as exc_info:
         WorkflowOrchestrator(MockLLMProvider()).run_assessment(load_sample())
 
     state = exc_info.value.state
-    assert state.status.value == "WAITING_HUMAN"
+    assert state.status.value == "FAILED_RETRYABLE"
     assert state.working_memory["critic_readiness"] == "BLOCKED"
     assert state.working_memory["critic_blockers"]
+    assert state.human_review_item is None
+    assert state.human_review_reason is None
     assert state.assessment is not None
     assert state.program_matches
     assert state.writing_ready is False

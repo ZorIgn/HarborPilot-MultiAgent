@@ -5,7 +5,8 @@ def test_human_conflict_resolution_is_typed_and_does_not_rewait() -> None:
 
     from harbor_agent.models import FieldEvidenceRecord, FieldVerificationStatus, SourceScope
     from harbor_agent.runtime.checkpoint import save_checkpoint
-    from harbor_agent.runtime.state import WorkflowStatus
+    from harbor_agent.runtime.state import HumanReviewItem, WorkflowStatus
+    from harbor_agent.runtime.workflow import _ensure_human_review_item
     from harbor_agent.services.agent_runtime import create_multi_agent_workflow
 
     workflow_id = f"human_resolution_{uuid4().hex}"
@@ -32,6 +33,15 @@ def test_human_conflict_resolution_is_typed_and_does_not_rewait() -> None:
         binding_score=98,
     ).model_dump(mode="json")
     conflict["record_id"] = "official-record-a"
+    conflicting_sibling = {
+        **conflict,
+        "evidence_id": "official-record-b",
+        "record_id": "official-record-b",
+        "value": "2027-03-15",
+        "page_hash": "sha256:conflict-record-b",
+        "snapshot_url": "https://snapshots.cityu.edu.hk/conflict-record-b.html",
+        "evidence_snippet": "Application deadline: 15 March 2027.",
+    }
     state = AgentState(
         workflow_id=workflow_id,
         goal=WorkflowGoal.PROGRAM_RECOMMENDATION,
@@ -42,7 +52,7 @@ def test_human_conflict_resolution_is_typed_and_does_not_rewait() -> None:
         candidate_program_ids=["cityu-ma-communication-and-new-media-2027"],
         program_matches={"cityu-ma-communication-and-new-media-2027": {}},
         selected_program_ids=["cityu-ma-communication-and-new-media-2027"],
-        verification_conflicts=[conflict],
+        verification_conflicts=[conflict, conflicting_sibling],
         human_review_reason="Choose the authoritative deadline record.",
         working_memory={
             "verification_cursor": 1,
@@ -51,13 +61,17 @@ def test_human_conflict_resolution_is_typed_and_does_not_rewait() -> None:
                 "critic_readiness": "PRELIMINARY_COMPLETE",
             "tool_results": {
                 "compare_evidence_records": {
-                    "conflicts": [dict(conflict)],
+                    "conflicts": [dict(conflict), dict(conflicting_sibling)],
                     "human_review_required": True,
                     "consistent": False,
                 }
             },
         },
     )
+    state = _ensure_human_review_item(state)
+    assert state.human_review_item is not None
+    review_item = HumanReviewItem.model_validate(state.human_review_item)
+    group_id = review_item.conflict_groups[0].conflict_id
     create_multi_agent_workflow(workflow_id, state.goal.value, state.model_dump(mode="json"))
     save_checkpoint(state)
 
@@ -67,7 +81,7 @@ def test_human_conflict_resolution_is_typed_and_does_not_rewait() -> None:
             "human_resolution": {
                 "action": "resolve_conflicts",
                 "conflict_resolutions": [
-                    {"conflict_id": "official-record-a", "action": "reject", "reviewer_note": "The record is not authoritative."}
+                    {"conflict_id": group_id, "action": "reject", "reviewer_note": "The record is not authoritative."}
                 ]
             }
         },
@@ -78,7 +92,7 @@ def test_human_conflict_resolution_is_typed_and_does_not_rewait() -> None:
     assert resumed.status == WorkflowStatus.COMPLETED
     assert resumed.verification_conflicts == []
     assert resumed.human_review_reason is None
-    assert resumed.resolved_conflicts[0].conflict_id == "official-record-a"
+    assert resumed.resolved_conflicts[0].conflict_id == group_id
     assert resumed.resolved_conflicts[0].action == "reject"
     comparison = resumed.working_memory["tool_results"]["compare_evidence_records"]
     assert comparison["conflicts"] == []
@@ -657,7 +671,59 @@ def test_model_driven_specialist_rejects_reordered_policy_tools_at_executor_boun
 
     assert outcome.decision.decision == DecisionType.FAIL
     assert outcome.state.status.value == "FAILED"
-    assert any("ordered policy subsequence" in item for item in outcome.state.errors)
+    assert any("ordered policy prefix" in item for item in outcome.state.errors)
+
+
+def test_model_driven_specialist_cannot_skip_a_policy_prerequisite():
+    from harbor_agent.agents.base import BaseAgent
+    from harbor_agent.llm.provider import DeterministicMockToolCallingProvider
+    from harbor_agent.llm.response import LLMResponse, LLMUsage
+    from harbor_agent.observability.trace import RuntimeTracer
+    from harbor_agent.runtime.executor import AgentExecutor
+    from harbor_agent.runtime.limits import RuntimeLimits
+    from harbor_agent.tools.registry import ToolRegistry
+
+    class OrderedPolicyAgent(BaseAgent):
+        name = "OrderedPolicyAgent"
+        description = "Test-only ordered policy agent."
+        allowed_tools = {"inspect_prerequisite", "publish_result"}
+
+        def step(self, state: AgentState) -> AgentDecision:
+            return AgentDecision(
+                decision=DecisionType.CALL_TOOL,
+                reasoning_summary="Inspect before publishing.",
+                tool_calls=[
+                    {"tool_name": "inspect_prerequisite", "arguments": {}},
+                    {"tool_name": "publish_result", "arguments": {}},
+                ],
+            )
+
+    response = LLMResponse(
+        json_content={
+            "decision": "CALL_TOOL",
+            "reasoning_summary": "Skip inspection.",
+            "tool_calls": [{"tool_name": "publish_result", "arguments": {}}],
+        },
+        usage=LLMUsage(prompt_tokens=1, completion_tokens=1),
+        model="mock",
+        provider="mock",
+    )
+    provider = DeterministicMockToolCallingProvider(
+        responses=[response, response, response]
+    )
+    workflow_id = "model_skip_prerequisite"
+    outcome = AgentExecutor(ToolRegistry(), RuntimeLimits()).execute_agent(
+        OrderedPolicyAgent(llm=provider, model_driven=True),
+        AgentState(
+            workflow_id=workflow_id,
+            goal=WorkflowGoal.BACKGROUND_ASSESSMENT,
+        ),
+        RuntimeTracer(workflow_id),
+    )
+
+    assert outcome.decision.decision == DecisionType.FAIL
+    assert outcome.state.status.value == "FAILED"
+    assert any("policy prefix" in item for item in outcome.state.errors)
 
 
 def test_model_driven_specialist_cannot_write_state_or_complete_workflow():

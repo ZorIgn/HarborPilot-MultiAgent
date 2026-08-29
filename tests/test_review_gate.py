@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 from harbor_agent.models import (
@@ -52,13 +53,8 @@ def test_review_gate_blocks_not_published_official_candidate(monkeypatch) -> Non
 def test_review_store_persists_published_record_to_sqlite(monkeypatch, tmp_path) -> None:
     from harbor_agent.services import review_store
 
-    persisted: list[FieldEvidenceRecord] = []
+    monkeypatch.setattr(review_store, "DB_PATH", tmp_path / "evidence.sqlite3")
     monkeypatch.setattr(review_store, "STORE_PATH", tmp_path / "published.json")
-    monkeypatch.setattr(
-        review_store,
-        "upsert_field_evidence_records",
-        lambda records, **_: persisted.extend(records) or len(records),
-    )
 
     record = FieldEvidenceRecord(
         program_id="demo-program",
@@ -81,13 +77,36 @@ def test_review_store_persists_published_record_to_sqlite(monkeypatch, tmp_path)
 
     review_store.save_published_field_record(record)
 
-    assert len(persisted) == 1
-    assert persisted[0].program_id == "demo-program"
-    assert persisted[0].status == FieldVerificationStatus.official_verified_current
     stored = review_store.load_published_field_records()
     assert len(stored) == 1
+    assert stored[0].program_id == "demo-program"
+    assert stored[0].status == FieldVerificationStatus.official_verified_current
     assert stored[0].field_name == "deadline"
     assert stored[0].value == "2027-03-20"
+
+
+def test_review_store_never_revives_a_stale_json_export(monkeypatch, tmp_path) -> None:
+    from harbor_agent.services import review_store
+
+    monkeypatch.setattr(review_store, "DB_PATH", tmp_path / "empty-evidence.sqlite3")
+    export_path = tmp_path / "published.json"
+    monkeypatch.setattr(review_store, "STORE_PATH", export_path)
+    stale = FieldEvidenceRecord(
+        program_id="demo-program",
+        field_name="deadline",
+        value="2027-03-20",
+        cycle="2027-fall",
+        source_type="official_program_page",
+        status=FieldVerificationStatus.official_verified_current,
+        review_required=False,
+        reviewer_id="stale-reviewer",
+    )
+    export_path.write_text(
+        json.dumps([stale.model_dump(mode="json")]),
+        encoding="utf-8",
+    )
+
+    assert review_store.load_published_field_records() == []
 
 
 def _deadline_candidate(source_url: str, value: str, snippet: str) -> FieldEvidenceRecord:
@@ -105,6 +124,7 @@ def _deadline_candidate(source_url: str, value: str, snippet: str) -> FieldEvide
         status=FieldVerificationStatus.official_previous_cycle,
         review_required=True,
         evidence_snippet=snippet,
+        snapshot_url="snapshots/review-gate-deadline.html",
         execution_ref=None,
     )
 

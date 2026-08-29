@@ -18,33 +18,17 @@ STORE_PATH = DATA_DIR / "reviewed_field_evidence.local.json"
 
 
 def load_published_field_records() -> list[FieldEvidenceRecord]:
-    # SQLite is the runtime source of truth.  The JSON file is retained only
-    # as a backwards-compatible export for older local workspaces.
+    """Load formal records only from the canonical SQLite evidence store."""
+
     try:
         persisted = [
             record
             for record in load_field_evidence_records(db_path=DB_PATH)
             if record.status.value == "OFFICIAL_VERIFIED_CURRENT" and not record.review_required
         ]
-        if persisted:
-            return _dedupe_records(persisted)
+        return _dedupe_records(persisted)
     except Exception:
-        pass
-    if not STORE_PATH.exists():
         return []
-    try:
-        raw = json.loads(STORE_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return []
-    if not isinstance(raw, list):
-        return []
-    records: list[FieldEvidenceRecord] = []
-    for item in raw:
-        try:
-            records.append(FieldEvidenceRecord.model_validate(item))
-        except Exception:
-            continue
-    return _dedupe_records(records)
 
 
 def save_published_field_record(record: FieldEvidenceRecord) -> None:

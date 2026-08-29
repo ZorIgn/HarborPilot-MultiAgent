@@ -19,6 +19,7 @@ import hashlib
 import json
 import re
 from collections.abc import Iterable, Mapping
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from harbor_agent.models import (
@@ -121,6 +122,13 @@ PROGRAM_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
         "入学要求",
         "先修",
         "背景要求",
+    ),
+    "portfolio_required": (
+        "portfolio required",
+        "portfolio requirement",
+        "portfolio",
+        "作品集要求",
+        "作品集",
     ),
     "materials": (
         "application materials",
@@ -249,6 +257,7 @@ def build_claim_graph(
     resolved_views: Mapping[str, ResolvedProgramView]
     | Iterable[ResolvedProgramView]
     | None = None,
+    student_facts: Mapping[str, Any] | Iterable[Any] | None = None,
 ) -> ClaimGraph:
     """Build a stable claim graph for one writing draft.
 
@@ -286,7 +295,7 @@ def build_claim_graph(
     if model is None:
         graph_blockers.append("尚未生成文书草稿，无法建立 ClaimGraph。")
     else:
-        nodes.extend(_student_binding_nodes(model, edges))
+        nodes.extend(_student_binding_nodes(model, edges, student_facts=student_facts))
         program_claims = _extract_program_claims(model, target_ids, normalized_matches)
         for claim_index, (text, field_names, program_id) in enumerate(program_claims, start=1):
             claim_id = _claim_id("program", claim_index, text, program_id)
@@ -408,16 +417,76 @@ def _resolve_current_view(program: Program) -> ResolvedProgramView:
         )
 
 
-def _student_binding_nodes(draft: WritingDraft, edges: list[ClaimEdge]) -> list[ClaimNode]:
+def _student_binding_nodes(
+    draft: WritingDraft,
+    edges: list[ClaimEdge],
+    *,
+    student_facts: Mapping[str, Any] | Iterable[Any] | None = None,
+) -> list[ClaimNode]:
+    """Validate student bindings against the trusted story/fact registry.
+
+    A draft controls neither the registry nor the meaning of an identifier.
+    Consequently an arbitrary non-empty ``fact_id`` is blocked unless the
+    caller supplies a matching trusted record.  Concrete numbers in a claim
+    are also checked against the registered record so a valid ID cannot be
+    reused to support a changed claim.
+    """
+
     nodes: list[ClaimNode] = []
     bindings = list(draft.fact_bindings or [])
+    registry = _normalise_student_facts(student_facts)
     for index, binding in enumerate(bindings, start=1):
-        text = str(binding.get("claim") or binding.get("text") or "").strip()
-        source_ids = _split_ids(binding.get("fact_id") or binding.get("evidence_id"))
+        binding_map = binding if isinstance(binding, Mapping) else _as_mapping(binding)
+        text = str(binding_map.get("claim") or binding_map.get("text") or "").strip()
+        source_ids = _split_ids(binding_map.get("fact_id") or binding_map.get("evidence_id"))
         if not text:
             text = f"未命名学生事实绑定 {index}"
         claim_id = _claim_id("student", index, text, None)
-        if source_ids:
+        blockers: list[str] = []
+        if not source_ids:
+            blockers.append("学生事实 claim 缺少显式 fact/evidence id。")
+        else:
+            unknown_ids = [source_id for source_id in source_ids if source_id not in registry]
+            if unknown_ids:
+                blockers.append(
+                    "学生事实 ID 不存在于可信 registry：" + ", ".join(unknown_ids) + "。"
+                )
+            for source_id in source_ids:
+                record = registry.get(source_id)
+                if record is None:
+                    continue
+                if not _student_binding_content_matches(text, binding_map, record):
+                    blockers.append(
+                        f"学生事实绑定 {source_id} 的 claim 内容与可信记录不一致。"
+                    )
+                binding_cycle = binding_map.get("cycle") or binding_map.get("target_cycle")
+                record_cycle = record.get("cycle")
+                if binding_cycle and not record_cycle:
+                    blockers.append(
+                        f"学生事实绑定 {source_id} 声明了 cycle，但可信记录没有可核验的 cycle。"
+                    )
+                elif binding_cycle and _cycle_key(binding_cycle) != _cycle_key(record_cycle):
+                    blockers.append(
+                        f"学生事实绑定 {source_id} 的 cycle 与可信记录不一致。"
+                    )
+
+                # A cycle embedded in the claimed prose is still an objective
+                # assertion.  It cannot evade the registry contract merely by
+                # omitting the optional binding metadata field.
+                claim_cycles = _claim_cycle_hints(text)
+                if claim_cycles and not record_cycle:
+                    blockers.append(
+                        f"学生事实绑定 {source_id} 的 claim 包含 cycle，但可信记录没有可核验的 cycle。"
+                    )
+                elif claim_cycles and any(
+                    claim_cycle != _cycle_key(record_cycle)
+                    for claim_cycle in claim_cycles
+                ):
+                    blockers.append(
+                        f"学生事实绑定 {source_id} 的 claim cycle 与可信记录不一致。"
+                    )
+
+        if not blockers:
             node = ClaimNode(
                 claim_id=claim_id,
                 text=text,
@@ -431,7 +500,7 @@ def _student_binding_nodes(draft: WritingDraft, edges: list[ClaimEdge]) -> list[
                     source_id=source_id,
                     target_claim_id=claim_id,
                     relation="SUPPORTS",
-                    reason="显式 student fact binding",
+                    reason="可信 student fact registry 中的显式 binding",
                 )
                 for source_id in source_ids
             )
@@ -441,10 +510,135 @@ def _student_binding_nodes(draft: WritingDraft, edges: list[ClaimEdge]) -> list[
                 text=text,
                 claim_type="student_fact",
                 status=ClaimValidationStatus.BLOCKED,
-                blockers=["学生事实 claim 缺少显式 fact/evidence id。"],
+                evidence_ids=source_ids,
+                blockers=_stable_unique(blockers),
             )
         nodes.append(node)
     return nodes
+
+
+def _normalise_student_facts(
+    values: Mapping[str, Any] | Iterable[Any] | None,
+) -> dict[str, dict[str, Any]]:
+    """Convert story cards/fact records into an ID-indexed trusted registry."""
+
+    if values is None:
+        return {}
+    items: list[tuple[Any, Any]]
+    if isinstance(values, Mapping):
+        direct_fields = {
+            "id", "fact_id", "evidence_id", "claim", "text", "title", "content", "value"
+        }
+        items = [(None, values)] if direct_fields.intersection(values) else list(values.items())
+    elif isinstance(values, (str, bytes)):
+        items = [(None, values)]
+    else:
+        items = [(None, value) for value in values]
+
+    registry: dict[str, dict[str, Any]] = {}
+    for key, value in items:
+        payload = _as_mapping(value)
+        candidate_ids: list[str] = []
+        if key is not None and not isinstance(key, (dict, list, tuple, set)):
+            candidate_ids.extend(_split_ids(key))
+        for field_name in ("id", "fact_id", "evidence_id", "source_id"):
+            candidate_ids.extend(_split_ids(payload.get(field_name)))
+        candidate_ids.extend(_split_ids(payload.get("evidence_ids")))
+        candidate_ids = _stable_unique(candidate_ids)
+        if not candidate_ids:
+            continue
+
+        text_parts: list[str] = []
+        for field_name in (
+            "claim", "text", "content", "title", "situation", "task", "action",
+            "result", "reflection", "related_skills", "target_relevance", "value", "fact_value",
+            "target_program_relevance",
+        ):
+            field_value = payload.get(field_name)
+            if field_value is not None and str(field_value).strip():
+                text_parts.append(_stringify_fact_value(field_value))
+        record = {
+            "id": candidate_ids[0],
+            "text": " ".join(dict.fromkeys(part for part in text_parts if part)),
+            "value": payload.get("value", payload.get("fact_value")),
+            "cycle": payload.get("cycle", payload.get("target_cycle")),
+        }
+        for candidate_id in candidate_ids:
+            registry[candidate_id] = record
+    return registry
+
+
+def _as_mapping(value: Any) -> dict[str, Any]:
+    if isinstance(value, Mapping):
+        return dict(value)
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        try:
+            dumped = model_dump(mode="json")
+        except TypeError:
+            dumped = model_dump()
+        if isinstance(dumped, Mapping):
+            return dict(dumped)
+    return {"value": value}
+
+
+def _stringify_fact_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, Mapping):
+        return " ".join(
+            f"{key} {_stringify_fact_value(item)}" for key, item in value.items() if item is not None
+        )
+    if isinstance(value, (list, tuple, set)):
+        return " ".join(_stringify_fact_value(item) for item in value)
+    return str(value).strip()
+
+
+def _student_binding_content_matches(
+    claim_text: str,
+    binding: Mapping[str, Any],
+    record: Mapping[str, Any],
+) -> bool:
+    record_text = " ".join(
+        part for part in (str(record.get("text") or ""), _stringify_fact_value(record.get("value"))) if part
+    ).lower()
+    if not record_text:
+        return False
+    claim_terms = _meaningful_terms(claim_text)
+    record_terms = _meaningful_terms(record_text)
+    # A trusted ID may support a concise excerpt of its registry record, but
+    # must not be reused to add new substantive details.  Lexical containment
+    # is intentionally stricter than a loose overlap: a shared word such as
+    # "dashboard" cannot validate an invented client, outcome or role.
+    if claim_terms and (not record_terms or not claim_terms.issubset(record_terms)):
+        return False
+    claim_numbers = _number_tokens(claim_text)
+    if claim_numbers:
+        record_numbers = _number_tokens(record_text)
+        if not all(any(_numbers_equal(number, candidate) for candidate in record_numbers) for number in claim_numbers):
+            return False
+    explicit_value = binding.get("value") or binding.get("fact_value")
+    if explicit_value is not None:
+        expected = _stringify_fact_value(explicit_value).strip().lower()
+        if expected and expected not in record_text:
+            expected_numbers = _number_tokens(expected)
+            if not expected_numbers or not all(
+                any(_numbers_equal(number, candidate) for candidate in _number_tokens(record_text))
+                for number in expected_numbers
+            ):
+                return False
+    return True
+
+
+def _meaningful_terms(value: Any) -> set[str]:
+    lowered = str(value or "").lower()
+    stop_words = {
+        "a", "an", "and", "the", "for", "of", "to", "in", "on", "with", "by",
+        "my", "our", "this", "that", "student", "story", "experience", "经历", "项目",
+        "我的", "一个", "一段", "负责", "参与",
+    }
+    terms = set(re.findall(r"[a-z][a-z0-9_]{2,}|[\u4e00-\u9fff]{2,}", lowered))
+    return {term for term in terms if term not in stop_words}
 
 
 def _extract_program_claims(
@@ -531,7 +725,12 @@ def _extract_program_claims(
         if not text:
             continue
         lower = text.lower()
-        if not (_has_program_term(lower) or _SUBSTANTIVE_NUMBER.search(lower)):
+        # A numerical student story (for example, an error-rate reduction) is
+        # not a programme claim merely because it contains a number.  Concrete
+        # programme assertions are already extracted from the actual draft
+        # prose above; binding-only claims must explicitly refer to a programme
+        # context before they enter programme-fact validation.
+        if not _has_program_term(lower):
             continue
         program_id = _program_id_for_text(lower, target_ids, target_names)
         if program_id is None and len(target_ids) == 1:
@@ -629,6 +828,59 @@ def _validate_program_claim(
             [],
         )
 
+    identity_fields = {"institution", "program_name"}
+    if set(field_names).issubset(identity_fields) and _matches_catalog_identity(
+        text,
+        view,
+        field_names,
+    ):
+        # The acquisition contract deliberately collects decision-bearing
+        # admissions fields, not duplicate display-name rows.  A current,
+        # reviewed official-program URL is the durable binding between the
+        # selected catalogue identity and its official programme page.  It may
+        # therefore support an identity-only sentence ("X at Y"), while any
+        # tuition, deadline, requirement or other objective claim still goes
+        # through its own field-specific DecisionFact below.
+        binding_fact = view.fact("official_program_url")
+        if (
+            binding_fact.program_id == view.program_id
+            and _cycle_key(binding_fact.cycle) == _cycle_key(view.cycle)
+            and binding_fact.decision_status == DecisionStatus.PASS
+            and binding_fact.formal_use_ready
+            and binding_fact.normalized_value
+        ):
+            evidence_ids = [binding_fact.evidence_id] if binding_fact.evidence_id else []
+            edges = [
+                ClaimEdge(
+                    source_id=binding_fact.fact_id,
+                    target_claim_id=claim_id,
+                    relation="SUPPORTS",
+                    reason="current reviewed official programme binding",
+                )
+            ]
+            if binding_fact.evidence_id:
+                edges.append(
+                    ClaimEdge(
+                        source_id=binding_fact.evidence_id,
+                        target_claim_id=claim_id,
+                        relation="SUPPORTS",
+                        reason="published official programme binding evidence",
+                    )
+                )
+            return (
+                ClaimNode(
+                    claim_id=claim_id,
+                    text=text,
+                    claim_type="program_fact",
+                    program_id=program_id,
+                    status=ClaimValidationStatus.SUPPORTED,
+                    decision_fact_ids=[binding_fact.fact_id],
+                    evidence_ids=evidence_ids,
+                    blockers=[],
+                ),
+                edges,
+            )
+
     decision_fact_ids: list[str] = []
     evidence_ids: list[str] = []
     blockers: list[str] = []
@@ -637,7 +889,28 @@ def _validate_program_claim(
     for field_name in field_names:
         fact = view.fact(field_name)
         statuses.append(fact.decision_status)
-        if fact.decision_status == DecisionStatus.PASS and fact.formal_use_ready and fact.normalized_value is not None:
+        if (
+            fact.program_id != view.program_id
+            or _cycle_key(fact.cycle) != _cycle_key(view.cycle)
+        ):
+            blockers.append(
+                f"{field_name}: DecisionFact 的 program/cycle 与当前 ResolvedProgramView 不一致。"
+            )
+            continue
+        if (
+            fact.decision_status == DecisionStatus.PASS
+            and fact.formal_use_ready
+            and fact.normalized_value is not None
+        ):
+            value_matches, value_blocker = _claim_value_matches(
+                field_name,
+                text,
+                fact.normalized_value,
+                cycle=view.cycle,
+            )
+            if not value_matches:
+                blockers.append(f"{field_name}: {value_blocker or 'claim 中的值与 DecisionFact 不一致。'}")
+                continue
             decision_fact_ids.append(fact.fact_id)
             if fact.evidence_id:
                 evidence_ids.append(fact.evidence_id)
@@ -688,6 +961,351 @@ def _validate_program_claim(
         ),
         edges,
     )
+
+
+def _matches_catalog_identity(
+    text: str,
+    view: ResolvedProgramView,
+    field_names: Iterable[str],
+) -> bool:
+    """Require exact selected-program names before using the URL binding."""
+
+    lowered = str(text or "").lower()
+    program = view.catalog
+    values_by_field = {
+        "program_name": (program.name, program.name_zh),
+        "institution": (
+            program.institution,
+            program.institution_zh,
+            program.school,
+            program.school_zh,
+        ),
+    }
+    for field_name in field_names:
+        candidates = [
+            str(value).strip().lower()
+            for value in values_by_field.get(field_name, ())
+            if value and len(str(value).strip()) >= 2
+        ]
+        if not candidates or not any(candidate in lowered for candidate in candidates):
+            return False
+    return True
+
+
+_NUMERIC_TOKEN = re.compile(
+    r"(?<![A-Za-z0-9_])(?:\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)(?![A-Za-z0-9_])"
+)
+_ISO_DATE_TOKEN = re.compile(r"(?<!\d)(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})(?!\d)")
+_CHINESE_DATE_TOKEN = re.compile(r"(?<!\d)(20\d{2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日?")
+_MONTH_DATE_TOKEN = re.compile(
+    r"\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
+    r"Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|"
+    r"Dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?[,]?\s+(20\d{2})\b",
+    re.IGNORECASE,
+)
+_DAY_MONTH_DATE_TOKEN = re.compile(
+    r"\b(\d{1,2})\s+(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|"
+    r"May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|"
+    r"Nov(?:ember)?|Dec(?:ember)?)\s+(20\d{2})\b",
+    re.IGNORECASE,
+)
+_CYCLE_TOKEN = re.compile(
+    r"(?<!\d)(20\d{2})\s*(?:[-/]\s*|\s+)?(fall|autumn|spring|summer)(?![a-z])|"
+    r"(?<!\d)(20\d{2})\s*年\s*(春季?|秋季?|夏季?)(?![\u4e00-\u9fff])",
+    re.IGNORECASE,
+)
+_LANGUAGE_SCORE_TOKEN = re.compile(
+    r"\b(ielts|toefl|pte)\s*(?:score\s*)?[:>=-]?\s*(\d+(?:\.\d+)?)\b",
+    re.IGNORECASE,
+)
+
+_LIST_TERM_ALIASES: dict[str, tuple[str, ...]] = {
+    "computing": ("computing", "computer science", "computer engineering", "计算机", "计算"),
+    "transcript": ("transcript", "academic record", "成绩单"),
+    "recommendation": ("recommendation", "reference letter", "推荐信"),
+    "cv": ("cv", "resume", "curriculum vitae", "简历"),
+    "personal_statement": ("personal statement", "statement of purpose", "sop", "个人陈述"),
+    "portfolio": ("portfolio", "作品集"),
+    "writing_sample": ("writing sample", "writing example", "写作样本"),
+    "passport": ("passport", "护照"),
+}
+
+
+def _claim_value_matches(
+    field_name: str,
+    text: str,
+    expected: Any,
+    *,
+    cycle: str | None = None,
+) -> tuple[bool, str | None]:
+    """Compare concrete claim content with a canonical normalized fact.
+
+    The claim extractor intentionally remains lightweight; this comparator is
+    the fail-closed boundary that prevents a valid evidence ID from being
+    reused to support a different number, URL, currency, date or cycle.
+    """
+
+    claim_text = str(text or "").strip()
+    if not claim_text:
+        return False, "claim 文本为空。"
+    if cycle:
+        claim_cycles = _claim_cycle_hints(claim_text)
+        expected_cycle = _cycle_key(cycle)
+        if claim_cycles and any(item != expected_cycle for item in claim_cycles):
+            return False, "claim 中的申请季与当前 DecisionFact cycle 不一致。"
+
+    if field_name in {"official_program_url", "application_url"}:
+        expected_url = _canonical_url(expected)
+        claim_urls = [_canonical_url(item) for item in re.findall(r"https?://[^\s<>\]})]+", claim_text)]
+        if not expected_url or expected_url not in claim_urls:
+            return False, "claim 未包含与 DecisionFact 一致的完整 URL。"
+        return True, None
+
+    if field_name == "deadline":
+        expected_dates = _date_keys(str(expected))
+        claim_dates = _date_keys(claim_text)
+        if not expected_dates or not claim_dates or not expected_dates.intersection(claim_dates):
+            return False, "claim 中的截止日期与 DecisionFact 不一致或缺失。"
+        return True, None
+
+    if field_name in {"tuition_hkd", "application_fee_hkd"}:
+        if not _has_hkd_currency(claim_text):
+            return False, "claim 未明确使用 HKD/HK$（货币单位不可信）。"
+        return _numeric_claim_matches(claim_text, expected, cycle=cycle)
+
+    if field_name == "min_gpa":
+        return _numeric_claim_matches(claim_text, expected, cycle=cycle, allow_scale=True)
+
+    if field_name == "language_requirement":
+        return _language_claim_matches(claim_text, expected)
+
+    if field_name == "portfolio_required":
+        return _boolean_claim_matches(claim_text, expected)
+
+    if isinstance(expected, (list, tuple, set)):
+        return _list_claim_matches(claim_text, expected, field_name)
+    if isinstance(expected, Mapping):
+        expected_text = _stringify_fact_value(expected).lower()
+        if expected_text and expected_text in claim_text.lower():
+            return True, None
+        return False, "claim 内容未包含与 DecisionFact 一致的结构化值。"
+
+    expected_text = str(expected).strip().lower()
+    if not expected_text:
+        return False, "DecisionFact 的 normalized_value 为空。"
+    if expected_text in claim_text.lower():
+        return True, None
+    return False, "claim 内容未包含与 DecisionFact 一致的值。"
+
+
+def _numeric_claim_matches(
+    text: str,
+    expected: Any,
+    *,
+    cycle: str | None = None,
+    allow_scale: bool = False,
+) -> tuple[bool, str | None]:
+    expected_numbers = _number_tokens(_stringify_fact_value(expected))
+    claim_numbers = _number_tokens(text)
+    if not expected_numbers:
+        return False, "DecisionFact 的数值不可确定性比较。"
+    if not claim_numbers:
+        return False, "claim 未提供该字段的具体数值。"
+    if not all(
+        any(_numbers_equal(expected_number, candidate) for candidate in claim_numbers)
+        for expected_number in expected_numbers
+    ):
+        return False, "claim 中的数值与 DecisionFact 不一致。"
+
+    expected_decimal = _to_decimal(expected_numbers[0])
+    cycle_year = str(_cycle_key(cycle) or "")[:4]
+    for candidate in claim_numbers:
+        if any(_numbers_equal(candidate, expected_number) for expected_number in expected_numbers):
+            continue
+        # A sentence may identify the supported cycle (for example, “2027
+        # fall tuition ...”) without changing the tuition/GPA value.
+        if cycle_year and candidate == cycle_year:
+            continue
+        if allow_scale and expected_decimal is not None and expected_decimal <= 100:
+            if _numbers_equal(candidate, "100") and re.search(r"/\s*100\b|满分\s*100", text, re.IGNORECASE):
+                continue
+        return False, "claim 附带了与该 DecisionFact 不一致的额外数值。"
+    return True, None
+
+
+def _language_claim_matches(text: str, expected: Any) -> tuple[bool, str | None]:
+    expected_pairs = _language_pairs(expected)
+    claim_pairs = _language_pairs(text)
+    if not expected_pairs:
+        return False, "DecisionFact 的语言要求不是可比较的结构化值。"
+    if not claim_pairs:
+        return False, "claim 未提供 IELTS/TOEFL/PTE 的具体分数。"
+    for provider, score in claim_pairs.items():
+        expected_score = expected_pairs.get(provider)
+        if expected_score is None or not _numbers_equal(score, expected_score):
+            return False, "claim 中的语言考试分数与 DecisionFact 不一致。"
+    return True, None
+
+
+def _language_pairs(value: Any) -> dict[str, str]:
+    if isinstance(value, Mapping):
+        output: dict[str, str] = {}
+        for key, score in value.items():
+            provider = str(key).strip().lower()
+            if provider in {"ielts", "toefl", "pte"}:
+                output[provider] = str(score)
+        return output
+    return {
+        provider.lower(): score
+        for provider, score in _LANGUAGE_SCORE_TOKEN.findall(str(value or ""))
+    }
+
+
+def _boolean_claim_matches(text: str, expected: Any) -> tuple[bool, str | None]:
+    expected_bool = bool(expected)
+    lowered = text.lower()
+    negative = re.search(
+        r"\b(?:not|no|without)\s+(?:required|need|needed|mandatory)\b|"
+        r"\b(?:unnecessary|optional)\b|不需要|无需|不要求|否|免提交",
+        lowered,
+        re.IGNORECASE,
+    )
+    positive = re.search(
+        r"\b(?:required|need|needed|mandatory|yes)\b|需要|要求|必须|是",
+        lowered,
+        re.IGNORECASE,
+    )
+    if negative:
+        mentioned = False
+    elif positive:
+        mentioned = True
+    else:
+        return False, "claim 未明确说明该布尔要求是否需要。"
+    if mentioned != expected_bool:
+        return False, "claim 中的布尔要求与 DecisionFact 不一致。"
+    return True, None
+
+
+def _list_claim_matches(
+    text: str,
+    expected: Iterable[Any],
+    field_name: str,
+) -> tuple[bool, str | None]:
+    expected_values = [_canonical_list_term(item) for item in expected if str(item).strip()]
+    lowered = text.lower()
+    if not expected_values:
+        if re.search(r"无(?:需|特殊)?|none|not required|无需|不要求", lowered, re.IGNORECASE):
+            return True, None
+        return False, "claim 未明确说明该列表字段为空/无要求。"
+
+    matched = [
+        value
+        for value in expected_values
+        if any(_term_in_text(alias, lowered) for alias in _list_aliases(value))
+    ]
+    if not matched:
+        return False, f"claim 未包含 {field_name} 的可核验具体项。"
+
+    # If a claim names a well-known material/background that is absent from
+    # the canonical list, do not silently treat a different item as supported.
+    known_mentioned = {
+        key
+        for key, aliases in _LIST_TERM_ALIASES.items()
+        if any(_term_in_text(alias, lowered) for alias in aliases)
+    }
+    expected_known = set(expected_values).intersection(_LIST_TERM_ALIASES)
+    unexpected = known_mentioned - expected_known
+    if unexpected and field_name in {"materials", "required_backgrounds", "essay_prompts"}:
+        return False, "claim 包含不在 DecisionFact 列表中的具体项。"
+    return True, None
+
+
+def _list_aliases(value: str) -> tuple[str, ...]:
+    return _LIST_TERM_ALIASES.get(value, (value,))
+
+
+def _canonical_list_term(value: Any) -> str:
+    lowered = str(value).strip().lower().replace("-", "_")
+    for key, aliases in _LIST_TERM_ALIASES.items():
+        if lowered == key or lowered in {alias.lower() for alias in aliases}:
+            return key
+    return lowered
+
+
+def _canonical_url(value: Any) -> str:
+    return str(value or "").strip().lower().rstrip("/")
+
+
+def _has_hkd_currency(text: str) -> bool:
+    return re.search(r"(?:\bhkd\b|hk\s*\$|港币|港幣)", text, re.IGNORECASE) is not None
+
+
+def _number_tokens(value: Any) -> list[str]:
+    return [match.group(0).replace(",", "") for match in _NUMERIC_TOKEN.finditer(str(value or ""))]
+
+
+def _to_decimal(value: Any) -> Decimal | None:
+    try:
+        return Decimal(str(value).replace(",", "").strip())
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _numbers_equal(left: Any, right: Any) -> bool:
+    left_decimal = _to_decimal(left)
+    right_decimal = _to_decimal(right)
+    return left_decimal is not None and right_decimal is not None and left_decimal == right_decimal
+
+
+def _date_keys(value: str) -> set[str]:
+    keys = {
+        f"{year}-{int(month):02d}-{int(day):02d}"
+        for year, month, day in _ISO_DATE_TOKEN.findall(value)
+    }
+    keys.update(
+        f"{year}-{int(month):02d}-{int(day):02d}"
+        for year, month, day in _CHINESE_DATE_TOKEN.findall(value)
+    )
+    month_numbers = {
+        name.lower(): number
+        for number, names in enumerate(
+            (
+                ("jan", "january"), ("feb", "february"), ("mar", "march"),
+                ("apr", "april"), ("may",), ("jun", "june"), ("jul", "july"),
+                ("aug", "august"), ("sep", "september"), ("oct", "october"),
+                ("nov", "november"), ("dec", "december"),
+            ),
+            start=1,
+        )
+        for name in names
+    }
+    for month_text, day, year in _MONTH_DATE_TOKEN.findall(value):
+        month = month_numbers.get(month_text[:3].lower())
+        if month:
+            keys.add(f"{year}-{month:02d}-{int(day):02d}")
+    for day, month_text, year in _DAY_MONTH_DATE_TOKEN.findall(value):
+        month = month_numbers.get(month_text[:3].lower())
+        if month:
+            keys.add(f"{year}-{month:02d}-{int(day):02d}")
+    return keys
+
+
+def _cycle_key(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    text = re.sub(r"[\s_/]+", "-", text)
+    text = text.replace("autumn", "fall").replace("秋季", "fall").replace("秋", "fall")
+    text = text.replace("春季", "spring").replace("春", "spring").replace("夏季", "summer").replace("夏", "summer")
+    return text.strip("-")
+
+
+def _claim_cycle_hints(text: str) -> set[str]:
+    hints: set[str] = set()
+    for year, season, chinese_year, chinese_season in _CYCLE_TOKEN.findall(text):
+        if year and season:
+            hints.add(_cycle_key(f"{year}-{season}"))
+        elif chinese_year and chinese_season:
+            hints.add(_cycle_key(f"{chinese_year}-{chinese_season}"))
+    return hints
 
 
 def _sentences(value: str | None) -> list[str]:

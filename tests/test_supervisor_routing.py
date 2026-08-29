@@ -131,3 +131,92 @@ def test_supervisor_cannot_complete_writing_when_separate_claim_validation_is_mi
 
     assert route.next_agent == "CriticAgent"
     assert route.state_patch["working_memory"].get("critic_outcome") is None
+
+
+def test_supervisor_rechecks_decision_facts_before_accepting_cached_formal_pass() -> None:
+    program = load_programs()[0]
+    match = ProgramMatch(
+        program=program,
+        tier="target",
+        fit_score=70,
+        hard_rule_passed=True,
+        reasons=[],
+        risks=[],
+        actions=[],
+        rule_checks=[],
+    )
+    state = AgentState(
+        workflow_id="supervisor-stale-formal-pass",
+        goal=WorkflowGoal.PROGRAM_RECOMMENDATION,
+        raw_profile={},
+        normalized_profile={},
+        assessment={},
+        candidate_program_ids=[program.id],
+        program_matches={program.id: match.model_dump(mode="json")},
+        selected_matches=[match.model_dump(mode="json")],
+        selected_program_ids=[program.id],
+        working_memory={
+            "verification_complete": True,
+            "critic_outcome": "PASS",
+            "critic_readiness": "FORMAL_PASS",
+            "tool_results": {"formal_gate_check": {"passed": True}},
+        },
+    )
+
+    route = SupervisorAgent().route(state)
+
+    assert route.next_agent == "CriticAgent"
+    memory = route.state_patch["working_memory"]
+    assert memory.get("critic_outcome") is None
+    assert memory.get("critic_readiness") is None
+    assert "formal_gate_check" not in memory["tool_results"]
+
+
+def test_supervisor_uses_retryable_block_for_non_actionable_critic_block() -> None:
+    state = AgentState(
+        workflow_id="supervisor-blocked-delivery",
+        goal=WorkflowGoal.FULL_APPLICATION_PLAN,
+        working_memory={
+            "critic_outcome": "BLOCKED",
+            "critic_readiness": "BLOCKED",
+            "critic_blockers": ["deadline has no current official DecisionFact"],
+        },
+    )
+
+    route = SupervisorAgent().route(state)
+    decision = SupervisorAgent().step(state)
+
+    assert route.next_agent == "BLOCKED"
+    assert decision.decision == DecisionType.BLOCKED
+    assert "deadline" in route.reason
+
+
+def test_model_supervisor_can_select_policy_offered_retryable_block() -> None:
+    state = AgentState(
+        workflow_id="supervisor-model-blocked-delivery",
+        goal=WorkflowGoal.FULL_APPLICATION_PLAN,
+        working_memory={
+            "critic_outcome": "BLOCKED",
+            "critic_readiness": "BLOCKED",
+            "critic_blockers": ["deadline has no current official DecisionFact"],
+        },
+    )
+    response = LLMResponse(
+        json_content={
+            "decision": "BLOCKED",
+            "reasoning_summary": "The formal delivery is blocked pending current official facts.",
+        },
+        usage=LLMUsage(prompt_tokens=5, completion_tokens=3),
+        model="mock",
+        provider="mock",
+    )
+    agent = SupervisorAgent(
+        llm=DeterministicMockToolCallingProvider(responses=[response]),
+        model_driven=True,
+    )
+
+    decision = agent.model_decision(state, [])
+
+    assert decision is not None
+    assert decision.decision == DecisionType.BLOCKED
+    assert decision.state_patch == {}

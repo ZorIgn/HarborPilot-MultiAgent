@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from harbor_agent.evals.assertions import evaluate_expectations
 from harbor_agent.evals.metrics import aggregate_eval_metrics
+from harbor_agent.llm.provider import RuntimeLLMProvider
 from harbor_agent.runtime.limits import RuntimeLimits
 from harbor_agent.runtime.state import WorkflowGoal
 from harbor_agent.runtime.workflow import (
@@ -30,6 +31,9 @@ class AgentEvalExpectation(BaseModel):
     expect_user_question: bool | None = None
     admissions_status: str | None = None
     formal_use_ready: bool | None = None
+    critic_readiness: str | None = None
+    financial_status: str | None = None
+    expect_blockers: bool | None = None
 
 
 class AgentEvalCase(BaseModel):
@@ -51,23 +55,59 @@ class AgentEvalCase(BaseModel):
 class AgentEvalRunner:
     """Runs documented deterministic cases without treating a mock as real LLM quality."""
 
-    def __init__(self, cases_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        cases_path: Path | None = None,
+        *,
+        llm: RuntimeLLMProvider | None = None,
+        model_driven: bool = False,
+        mode_name: str | None = None,
+    ) -> None:
         self.cases_path = cases_path or Path("data/agent_eval_cases.json")
+        self.llm = llm
+        self.model_driven = bool(llm is not None and model_driven)
+        self.mode_name = (
+            mode_name
+            or (
+                "model_replay"
+                if self.model_driven
+                and getattr(llm, "provider", None) in {"eval", "mock"}
+                else "live_model"
+                if self.model_driven
+                else "deterministic"
+            )
+        )
 
     def load_cases(self) -> list[AgentEvalCase]:
         raw = json.loads(self.cases_path.read_text(encoding="utf-8"))
         return [AgentEvalCase.model_validate(item) for item in raw.get("cases", [])]
 
-    def run(self) -> dict[str, Any]:
-        results = [self.run_case(case) for case in self.load_cases()]
-        return {"results": results, "metrics": aggregate_eval_metrics(results), "deterministic": True}
+    def run(self, case_ids: set[str] | None = None) -> dict[str, Any]:
+        cases = self.load_cases()
+        if case_ids:
+            known = {case.case_id for case in cases}
+            unknown = sorted(case_ids - known)
+            if unknown:
+                raise ValueError(f"unknown Agent eval case IDs: {unknown}")
+            cases = [case for case in cases if case.case_id in case_ids]
+        results = [self.run_case(case) for case in cases]
+        return {
+            "results": results,
+            "metrics": aggregate_eval_metrics(results),
+            "mode": self.mode_name,
+            "deterministic": not self.model_driven,
+        }
 
     def run_case(self, case: AgentEvalCase) -> dict[str, Any]:
         profile = _profile_with_patch(case.profile_patch)
         if case.operation != "workflow":
             return self._run_injected_case(case, profile)
         limits = RuntimeLimits.model_validate({**RuntimeLimits().model_dump(), **case.limit_overrides})
-        runtime = MultiAgentRuntime(limits=limits)
+        runtime = MultiAgentRuntime(
+            llm=self.llm,
+            model_driven=self.model_driven,
+            limits=limits,
+        )
         state = runtime.start(
             WorkflowStartRequest(
                 goal=case.goal,
@@ -87,6 +127,8 @@ class AgentEvalRunner:
         trace = list_runtime_trace_events(state.workflow_id)
         failures = evaluate_expectations(state, case.expectations.model_dump(exclude_none=True))
         observed_tools = {event.get("tool_name") for event in trace if event.get("event_type") == "TOOL_CALL"}
+        llm_requests = sum(event.get("event_type") == "LLM_REQUEST" for event in trace)
+        llm_responses = sum(event.get("event_type") == "LLM_RESPONSE" for event in trace)
         for tool in case.expectations.expected_tools:
             if tool not in observed_tools:
                 failures.append(f"expected tool not called: {tool}")
@@ -106,6 +148,9 @@ class AgentEvalRunner:
             "agent_turns": sum(state.agent_turn_counts.values()),
             "tool_calls": state.tool_call_count,
             "formal_use_ready": (state.final_result or {}).get("formal_use_ready"),
+            "model_driven": self.model_driven,
+            "llm_requests": llm_requests,
+            "llm_responses": llm_responses,
             "trace_events": trace,
         }
 
@@ -172,12 +217,16 @@ class AgentEvalRunner:
                         "program_id": "cityu-ma-communication-and-new-media-2027",
                         "source_url": "https://reddit.com/r/gradadmissions/example",
                         "field_names": ["deadline"],
+                        "snapshot_id": "snapshots/eval-community.html",
+                        "page_hash": "sha256:eval-community",
                     }
                 else:
                     arguments = {
                         "program_id": "program-a",
                         "source_url": "https://example.edu/program",
                         "field_names": ["deadline"],
+                        "snapshot_id": "snapshots/eval-gate.html",
+                        "page_hash": "sha256:eval-gate",
                     }
                 return AgentDecision(
                     decision=DecisionType.CALL_TOOL,
@@ -242,7 +291,7 @@ class AgentEvalRunner:
             operation_data["attempts"] = attempts["count"]
         elif case.operation == "human_escalation":
             registry = build_default_tool_registry()
-            responses = [LLMResponse(tool_calls=[LLMToolCall(call_id="eval_gate_1", name="bind_source_to_program", arguments={"program_id": "program-a", "source_url": "https://example.edu/program", "field_names": ["deadline"]})], usage=LLMUsage(prompt_tokens=2, completion_tokens=1), model="mock", provider="mock")]
+            responses = [LLMResponse(tool_calls=[LLMToolCall(call_id="eval_gate_1", name="bind_source_to_program", arguments={"program_id": "program-a", "source_url": "https://example.edu/program", "field_names": ["deadline"], "snapshot_id": "snapshots/eval-gate.html", "page_hash": "sha256:eval-gate"})], usage=LLMUsage(prompt_tokens=2, completion_tokens=1), model="mock", provider="mock")]
             state = run_probe(DeterministicMockToolCallingProvider(responses=responses), registry, {"bind_source_to_program"})
         elif case.operation == "prompt_injection_source":
             registry = build_default_tool_registry()
@@ -381,6 +430,8 @@ class AgentEvalRunner:
                                 "program_id": "cityu-ma-communication-and-new-media-2027",
                                 "source_url": "https://reddit.com/r/gradadmissions/example",
                                 "field_names": ["deadline"],
+                                "snapshot_id": "snapshots/eval-community.html",
+                                "page_hash": "sha256:eval-community",
                             },
                         )
                     ],
@@ -451,11 +502,25 @@ class AgentEvalRunner:
             conflict = {
                 "program_id": "cityu-ma-communication-and-new-media-2027",
                 "field_name": "deadline",
+                "cycle": "2027-fall",
                 "record_id": "record-a",
+                "value": "2027-02-28",
                 "source_type": "official_program_page",
                 "status": "CONFLICTED",
             }
-            state = AgentState(workflow_id=workflow_id, goal=WorkflowGoal.BACKGROUND_ASSESSMENT, status=WorkflowStatus.WAITING_HUMAN, raw_profile=profile, normalized_profile=profile, assessment={}, verification_conflicts=[conflict], human_review_reason="review conflict", working_memory={"critic_outcome": "PASS"})
+            sibling = {
+                **conflict,
+                "record_id": "record-b",
+                "value": "2027-03-15",
+            }
+            state = AgentState(workflow_id=workflow_id, goal=WorkflowGoal.BACKGROUND_ASSESSMENT, status=WorkflowStatus.WAITING_HUMAN, raw_profile=profile, normalized_profile=profile, assessment={}, verification_conflicts=[conflict, sibling], human_review_reason="review conflict", working_memory={"critic_outcome": "PASS"})
+            from harbor_agent.runtime.workflow import _ensure_human_review_item
+
+            state = _ensure_human_review_item(state)
+            review_item = state.human_review_item
+            if review_item is None or not review_item.conflict_groups:
+                raise ValueError("human resume fixture did not produce an actionable conflict group")
+            group_id = review_item.conflict_groups[0].conflict_id
             create_multi_agent_workflow(workflow_id, state.goal.value, state.model_dump(mode="json"))
             save_checkpoint(state)
             runtime = MultiAgentRuntime()
@@ -465,7 +530,7 @@ class AgentEvalRunner:
                     human_resolution={
                         "action": "resolve_conflicts",
                         "conflict_resolutions": [
-                            {"conflict_id": "record-a", "action": "reject"}
+                            {"conflict_id": group_id, "action": "reject"}
                         ],
                     }
                 ),
@@ -510,6 +575,12 @@ class AgentEvalRunner:
             failures.append("malformed model output did not recover through structured retry")
         if case.operation == "human_resume" and state.status != WorkflowStatus.COMPLETED:
             failures.append("human resolution did not resume the workflow")
+        llm_request_count = sum(
+            event.get("event_type") == "LLM_REQUEST" for event in trace
+        )
+        llm_response_count = sum(
+            event.get("event_type") == "LLM_RESPONSE" for event in trace
+        )
         return {
             "case_id": case.case_id, "category": case.category, "passed": not failures, "failures": failures,
             "operation": case.operation,
@@ -518,6 +589,9 @@ class AgentEvalRunner:
             "status": state.status.value, "visited_agents": state.visited_agents,
             "agent_turns": sum(state.agent_turn_counts.values()), "tool_calls": state.tool_call_count,
             "formal_use_ready": (state.final_result or {}).get("formal_use_ready"),
+            "model_driven": llm_request_count > 0,
+            "llm_requests": llm_request_count,
+            "llm_responses": llm_response_count,
             "trace_events": trace, "operation_data": operation_data,
         }
 

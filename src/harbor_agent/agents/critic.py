@@ -84,16 +84,37 @@ class CriticAgent(BaseAgent):
                 human_review_reason="Official programme evidence remains conflicted; a reviewer must select or reject the record.",
             )
         if recommendation.get("passed") is not True:
-            _set_readiness(
-                memory,
-                CriticReadiness.BLOCKED,
-                _gate_blockers(
-                    "validate_recommendation_consistency",
-                    recommendation,
-                    "Recommendation consistency gate did not pass.",
-                ),
+            blockers = _gate_blockers(
+                "validate_recommendation_consistency",
+                recommendation,
+                "Recommendation consistency gate did not pass.",
             )
-            memory["critic_outcome"] = CriticOutcome.REPLAN_MATCHING.value
+            details = recommendation.get("details", {})
+            changed_programs = details.get(
+                "recomputed_match_changed_program_ids", []
+            )
+            explicitly_ineligible = details.get(
+                "explicitly_selected_ineligible_program_ids", []
+            )
+            if isinstance(changed_programs, list) and changed_programs:
+                # Refresh the portfolio once so every user-visible match carries
+                # the same current eligibility result that triggered this gate.
+                _set_readiness(memory, CriticReadiness.BLOCKED, blockers)
+                memory["critic_outcome"] = CriticOutcome.REPLAN_MATCHING.value
+            elif isinstance(explicitly_ineligible, list) and explicitly_ineligible:
+                # An explicitly requested but currently ineligible programme
+                # remains visible as an exploratory result.  It can never be
+                # promoted to a formal recommendation, and formal-plan or
+                # writing goals must stop rather than silently rematch it.
+                if state.goal.value in {"program_recommendation", "application_planning"}:
+                    _set_readiness(memory, CriticReadiness.PRELIMINARY_COMPLETE, blockers)
+                    memory["critic_outcome"] = CriticOutcome.PRELIMINARY_COMPLETE.value
+                else:
+                    _set_readiness(memory, CriticReadiness.BLOCKED, blockers)
+                    memory["critic_outcome"] = CriticOutcome.BLOCKED.value
+            else:
+                _set_readiness(memory, CriticReadiness.BLOCKED, blockers)
+                memory["critic_outcome"] = CriticOutcome.REPLAN_MATCHING.value
         elif source.get("passed") is not True:
             # A first failed grounding check must produce a real, bounded
             # Critic -> Verification reverify edge. After one retry, retain a

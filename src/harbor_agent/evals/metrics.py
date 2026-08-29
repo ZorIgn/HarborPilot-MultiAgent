@@ -17,10 +17,10 @@ def _percentile(values: list[int], percentile: float) -> float | None:
 
 
 def aggregate_eval_metrics(results: Iterable[dict[str, Any]]) -> dict[str, float | int | None]:
-    """Derive runtime-quality metrics from real deterministic traces.
+    """Derive runtime-quality metrics from recorded evaluation traces.
 
-    These values describe deterministic fixtures, not general model quality:
-    no missing token/cost value is estimated or inferred.
+    Deterministic and model-driven modes remain explicitly labelled; no
+    missing token, cost, or model-quality value is estimated or inferred.
     """
 
     items = list(results)
@@ -48,6 +48,7 @@ def aggregate_eval_metrics(results: Iterable[dict[str, Any]]) -> dict[str, float
     resume_successes = 0
     unsupported = 0
     community_leaks = 0
+    model_path_cases = 0
 
     for item in items:
         trace = item.get("trace_events", [])
@@ -79,6 +80,8 @@ def aggregate_eval_metrics(results: Iterable[dict[str, Any]]) -> dict[str, float
             unsupported += 1
         if operation_data.get("community_leakage") is True:
             community_leaks += 1
+        if item.get("model_driven") is True:
+            model_path_cases += 1
 
     tool_events = [event for event in events if event.get("event_type") == "TOOL_CALL"]
     validation_errors = [event for event in events if str(event.get("error_type") or "") == "ToolArgumentValidationError"]
@@ -87,6 +90,8 @@ def aggregate_eval_metrics(results: Iterable[dict[str, Any]]) -> dict[str, float
     prompt_tokens = sum(int(event.get("prompt_tokens") or 0) for event in events)
     completion_tokens = sum(int(event.get("completion_tokens") or 0) for event in events)
     known_costs = [float(event["cost_usd"]) for event in events if event.get("cost_usd") is not None]
+    llm_requests = sum(event.get("event_type") == "LLM_REQUEST" for event in events)
+    llm_responses = sum(event.get("event_type") == "LLM_RESPONSE" for event in events)
 
     return {
         "case_count": total,
@@ -112,4 +117,7 @@ def aggregate_eval_metrics(results: Iterable[dict[str, Any]]) -> dict[str, float
         "completion_tokens": completion_tokens,
         "trace_event_count": len(events),
         "actual_cost_usd": sum(known_costs) if known_costs else None,
+        "model_path_case_rate": _rate(model_path_cases, total),
+        "llm_request_count": llm_requests,
+        "llm_response_rate": _rate(llm_responses, llm_requests),
     }

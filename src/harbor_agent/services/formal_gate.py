@@ -15,30 +15,45 @@ CRITICAL_TIMELINE_FIELDS = list(CRITICAL_TIMELINE_FIELDS)
 def program_field_gate(
     program: Program | ResolvedProgramView,
 ) -> dict[str, object]:
-    """Evaluate the timeline gate from canonical decision facts only."""
+    """Evaluate canonical timeline and recommendation gates.
+
+    The timeline result is exposed independently, but a programme is only
+    formally recommendable when *every* field in
+    ``FORMAL_RECOMMENDATION_FIELDS`` has a current, reviewed ``DecisionFact``
+    with a non-empty normalized value.  In particular, ``UNKNOWN`` and
+    ``CONFLICTED`` facts never become ready merely because a catalogue seed
+    contains a value.
+    """
 
     view = _resolved_view(program)
     current_fields: list[str] = []
     previous_cycle_fields: list[str] = []
     missing_or_blocked: list[str] = []
+    formal_current_fields: list[str] = []
+    formal_missing_or_blocked: list[str] = []
     field_status: dict[str, str] = {}
 
-    for field in CRITICAL_TIMELINE_FIELDS:
+    for field in _stable_unique((*CRITICAL_TIMELINE_FIELDS, *FORMAL_RECOMMENDATION_FIELDS)):
         fact = view.fact(field)
         field_status[field] = fact.provenance_status.value
-        if fact.provenance_status.value == "REVIEWED_PREVIOUS":
+        timeline_field = field in CRITICAL_TIMELINE_FIELDS
+        if timeline_field and fact.provenance_status.value == "REVIEWED_PREVIOUS":
             previous_cycle_fields.append(field)
+            # Previous-cycle values remain reference-only timeline signals and
+            # can never satisfy the current-cycle recommendation contract.
+            if field in FORMAL_RECOMMENDATION_FIELDS:
+                formal_missing_or_blocked.append(field)
             continue
-        if fact.decision_status != DecisionStatus.PASS:
+        if _fact_formally_ready(fact, field):
+            if timeline_field:
+                current_fields.append(field)
+            if field in FORMAL_RECOMMENDATION_FIELDS:
+                formal_current_fields.append(field)
+            continue
+        if timeline_field:
             missing_or_blocked.append(field)
-            continue
-        if field == "deadline" and _parse_date_value(str(fact.normalized_value)) is None:
-            missing_or_blocked.append(field)
-            continue
-        if fact.formal_use_ready:
-            current_fields.append(field)
-            continue
-        missing_or_blocked.append(field)
+        if field in FORMAL_RECOMMENDATION_FIELDS:
+            formal_missing_or_blocked.append(field)
 
     missing_unique = sorted(set(missing_or_blocked))
     production_ready = not missing_unique and sorted(current_fields) == sorted(CRITICAL_TIMELINE_FIELDS)
@@ -47,6 +62,16 @@ def program_field_gate(
         and not missing_unique
         and sorted(current_fields + previous_cycle_fields) == sorted(CRITICAL_TIMELINE_FIELDS)
     )
+    formal_missing_unique = sorted(set(formal_missing_or_blocked))
+    # ``ResolvedProgramView.formal_readiness`` is itself derived from the
+    # canonical resolver.  Requiring it here prevents a hand-built/stale view
+    # whose individual flags happen to look ready from bypassing the aggregate
+    # recommendation gate.
+    canonical_formal_readiness = (
+        view.formal_readiness == DecisionStatus.PASS
+        and not formal_missing_unique
+        and sorted(formal_current_fields) == sorted(FORMAL_RECOMMENDATION_FIELDS)
+    )
     return {
         "production_ready": production_ready,
         "reference_ready": reference_ready,
@@ -54,7 +79,24 @@ def program_field_gate(
         "previous_cycle_fields": previous_cycle_fields,
         "missing_or_blocked_fields": missing_unique,
         "field_status": field_status,
+        "formal_recommendation_ready": canonical_formal_readiness,
+        "formal_use_ready": canonical_formal_readiness,
+        "canonical_formal_readiness": canonical_formal_readiness,
+        "formal_current_fields": formal_current_fields,
+        "formal_missing_or_blocked_fields": formal_missing_unique,
+        "formal_blockers": [
+            f"{field}: {view.fact(field).blockers[0] if view.fact(field).blockers else '字段没有当前周期的正式 DecisionFact。'}"
+            for field in formal_missing_unique
+        ],
     }
+
+
+def formal_recommendation_ready(
+    program: Program | ResolvedProgramView,
+) -> bool:
+    """Return the strict all-fields formal recommendation result."""
+
+    return bool(program_field_gate(program)["formal_recommendation_ready"])
 
 
 def formal_timeline_ready(match: ProgramMatch) -> bool:
@@ -141,6 +183,55 @@ def _view_from_match(match: ProgramMatch) -> ResolvedProgramView:
     # Rebuild from the persisted canonical store so a stale checkpoint cannot
     # keep an old seed-derived readiness decision alive after a revocation.
     return resolve_program_view(match.program)
+
+
+def _fact_formally_ready(fact: object, field_name: str) -> bool:
+    """Apply the non-negotiable per-field formal-readiness contract."""
+
+    decision_status = getattr(fact, "decision_status", DecisionStatus.UNKNOWN)
+    normalized_value = getattr(fact, "normalized_value", None)
+    if decision_status != DecisionStatus.PASS:
+        return False
+    if not bool(getattr(fact, "formal_use_ready", False)):
+        return False
+    if not _has_formal_normalized_value(field_name, normalized_value):
+        return False
+    if field_name == "deadline" and _parse_date_value(str(normalized_value)) is None:
+        return False
+    return True
+
+
+def _has_formal_normalized_value(field_name: str, value: object) -> bool:
+    """Reject empty containers while preserving explicit reviewed negative facts.
+
+    ``required_backgrounds=[]`` is a meaningful reviewed statement that no hard
+    background restriction applies, and ``portfolio_required=False`` is an
+    equally meaningful Boolean decision.  Other list/dict fields must carry at
+    least one normalized value before they can satisfy the formal gate.
+    """
+
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if field_name == "required_backgrounds":
+        return isinstance(value, list)
+    if field_name == "portfolio_required":
+        return isinstance(value, bool)
+    if isinstance(value, (list, tuple, set, dict)):
+        return bool(value)
+    return True
+
+
+def _stable_unique(values: object) -> list[str]:
+    seen: set[str] = set()
+    output: list[str] = []
+    for value in values if isinstance(values, (list, tuple, set)) else []:
+        item = str(value)
+        if item not in seen:
+            seen.add(item)
+            output.append(item)
+    return output
 
 
 def _parse_date_value(value: str | None) -> date | None:

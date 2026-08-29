@@ -820,13 +820,18 @@ def admin_review_queue(
 
 
 @app.post("/api/admin/review-queue/publish", response_model=ReviewPublishResponse)
-def admin_publish_review_item(payload: ReviewPublishRequest) -> ReviewPublishResponse:
-    return publish_review_item(payload)
+def admin_publish_review_item(request: Request, payload: ReviewPublishRequest) -> ReviewPublishResponse:
+    # Publication audit identity comes only from the authenticated admin context.
+    return publish_review_item(
+        payload.model_copy(update={"reviewer_id": _admin_reviewer_id(request)})
+    )
 
 
 @app.post("/api/admin/review-queue/bulk-publish", response_model=ReviewBulkPublishResponse)
-def admin_bulk_publish_review_items(payload: ReviewBulkPublishRequest) -> ReviewBulkPublishResponse:
-    return publish_review_batch(payload)
+def admin_bulk_publish_review_items(request: Request, payload: ReviewBulkPublishRequest) -> ReviewBulkPublishResponse:
+    return publish_review_batch(
+        payload.model_copy(update={"reviewer_id": _admin_reviewer_id(request)})
+    )
 
 
 def _program_catalog_item(program) -> dict:
@@ -1185,12 +1190,14 @@ def get_agent_workflow(workflow_id: str, request: Request) -> dict[str, Any]:
 def resume_agent_workflow(workflow_id: str, payload: AgentWorkflowResumePayload, request: Request) -> dict[str, Any]:
     from harbor_agent.runtime.errors import AgentRuntimeError
 
-    _runtime_workflow_owner(workflow_id, request)
+    workflow_record = _runtime_workflow_owner(workflow_id, request)
     reviewer_id: str | None = None
     if payload.human_resolution is not None:
         if not _admin_request_allowed(request):
             raise HTTPException(status_code=403, detail="人工审核只允许独立管理员提交。")
         reviewer_id = _admin_reviewer_id(request)
+        if workflow_record.get("owner_id") and str(workflow_record.get("owner_id")) == reviewer_id:
+            raise HTTPException(status_code=403, detail="工作流 owner 不能兼任独立 reviewer。")
     try:
         state = _configured_runtime().resume(
             workflow_id,

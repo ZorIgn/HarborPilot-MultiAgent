@@ -23,7 +23,7 @@ sequenceDiagram
   S->>A: Next bounded specialist turn
   A->>H: Only for an explicit human-gated operation
   H-->>S: Typed approval or resolution
-  S-->>U: Complete, WAITING_USER, WAITING_HUMAN, or FAILED
+  S-->>U: Complete, WAITING_USER, WAITING_HUMAN, FAILED_RETRYABLE, or FAILED
 ```
 
 The execution graph contains only these two transition classes:
@@ -69,9 +69,11 @@ The default runtime is deterministic/mock and offline:
 HARBOR_AGENT_LLM_MODE=mock
 ```
 
-The default HTTP construction path does not inject a live LLM provider. The
-default source acquisition mode is also `mock`; it does not contact the public
-web. Setting `dry_run=false` alone is not permission to make network requests.
+The HTTP runtime injects a live tool-calling provider only when the server has
+an active administrator-owned OpenAI-compatible configuration. Otherwise it
+uses the deterministic runtime. The default source acquisition mode is also
+`mock`; it does not contact the public web. Setting `dry_run=false` alone is
+not permission to make network requests.
 
 The `refresh_official_sources` flag on a runtime workflow is an explicit
 source-tool request, not a verification or publication result. It is enabled
@@ -122,8 +124,8 @@ When model-driven mode is enabled, the model is proposal-only. It does not gain
 authority to mutate runtime state or control the execution graph:
 
 - Specialist models see only the exact policy-approved tool calls for the
-  current state. They may select a non-empty subset, but cannot change tool
-  names or arguments.
+  current state. They may select a non-empty ordered prefix, but cannot change
+  tool names, arguments, or order.
 - Specialist models cannot set `next_agent` to a peer, replace a user/human
   question, or write a shared `state_patch`. Their deterministic policy owns
   the return to `SupervisorAgent`.
@@ -162,8 +164,9 @@ snapshot URL, page hash, evidence snippet, reviewer identity, review decision,
 and a matched program binding. Missing any required provenance leaves the field
 `UNKNOWN` for formal decisions.
 
-For the rationale and the single-fact-layer migration details, see the
-[trustworthy data remediation plan](trustworthy-agent-data-remediation-plan.md).
+The same canonical fact model is consumed by matching, planning, writing and
+the final Critic gate; no downstream component may promote catalogue seed
+values into formal facts.
 
 ## Decision and writing gates
 
@@ -201,6 +204,13 @@ explicit source blockers; this produces a non-formal exploration/preparation
 artifact. Writing and full-application delivery remain `BLOCKED`. For writing
 workflows, ClaimGraph validation must explicitly pass before the runtime can
 set `writing_ready=true`.
+
+`WAITING_HUMAN` is reserved for a typed, executable tool approval or evidence
+conflict resolution. A `BLOCKED` delivery without either action becomes
+`FAILED_RETRYABLE`, preserving the Critic blockers without presenting an
+unactionable human-review checkpoint. After controlled acquisition and
+independent publication add the missing DecisionFacts, the workflow may be
+resumed with the same ID.
 
 ## LLM mode
 

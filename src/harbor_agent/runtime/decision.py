@@ -12,6 +12,7 @@ class DecisionType(str, Enum):
     ASK_USER = "ASK_USER"
     HUMAN_REVIEW = "HUMAN_REVIEW"
     COMPLETE = "COMPLETE"
+    BLOCKED = "BLOCKED"
     FAIL = "FAIL"
 
 

@@ -133,6 +133,30 @@ export type RuntimeWorkflowTask = {
   blocker: string | null;
 };
 
+export type RuntimeHumanReviewConflictGroup = {
+  conflict_id: string;
+  member_record_ids: string[];
+  records: Array<Record<string, unknown>>;
+  allowed_actions: Array<"accept" | "reject">;
+};
+
+export type RuntimeHumanReviewItem = {
+  kind: "tool_approval" | "evidence_conflict";
+  action: "approve_tool" | "reject_tool" | "resolve_conflicts";
+  workflow_id: string;
+  reason: string;
+  actionable: true;
+  allowed_actions: string[];
+  approval_id: string | null;
+  agent_name: string | null;
+  tool_name: string | null;
+  tool_call_id: string | null;
+  arguments: Record<string, unknown> | null;
+  arguments_sha256: string | null;
+  expires_at: string | null;
+  conflict_groups: RuntimeHumanReviewConflictGroup[];
+};
+
 /** A persisted, resumable snapshot returned by /api/agent/workflows/:id. */
 export type RuntimeWorkflowState = {
   schema_version: string;
@@ -175,6 +199,7 @@ export type RuntimeWorkflowState = {
   working_memory: Record<string, unknown>;
   user_question: string | null;
   human_review_reason: string | null;
+  human_review_item: RuntimeHumanReviewItem | null;
   pending_tool_approval: {
     approval_id: string;
     workflow_id: string;

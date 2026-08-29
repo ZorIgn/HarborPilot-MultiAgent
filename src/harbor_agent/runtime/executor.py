@@ -45,6 +45,7 @@ _RUNTIME_OWNED_STATE_FIELDS = {
     "tool_call_count",
     "human_review_reason",
     "human_resolution",
+    "human_review_item",
     "pending_tool_approval",
     "active_tool_approval",
     "resolved_conflicts",
@@ -129,6 +130,7 @@ class AgentExecutor:
                                     "active_tool_approval": None,
                                     "human_resolution": None,
                                     "human_review_reason": None,
+                                    "human_review_item": None,
                                 },
                             )
                         if conversation is not None:
@@ -168,6 +170,8 @@ class AgentExecutor:
                 return finish(self._wait_human(state, decision.human_review_reason or "需要人工审核。"), decision)
             if decision.decision == DecisionType.COMPLETE:
                 return finish(self._complete(state), decision)
+            if decision.decision == DecisionType.BLOCKED:
+                return finish(self._block(state, decision.reasoning_summary), decision)
             if decision.decision == DecisionType.FAIL:
                 return finish(self._fail(state, decision.reasoning_summary), decision)
             if decision.decision == DecisionType.HANDOFF:
@@ -313,12 +317,14 @@ class AgentExecutor:
         policy: AgentDecision,
         decision: AgentDecision,
     ) -> None:
-        """Keep model-driven Specialist calls an ordered policy subsequence.
+        """Keep model-driven Specialist calls an ordered policy prefix.
 
         BaseAgent reduces a model proposal to exact policy tool names and
-        arguments. This second executor-side assertion makes the invariant
-        visible at the final execution boundary and preserves the deterministic
-        tool order required by multi-step Specialists such as VerificationAgent.
+        arguments. Requiring a prefix, rather than an arbitrary subsequence,
+        prevents the model from skipping an earlier prerequisite while still
+        allowing it to choose how much of the bounded policy sequence to run.
+        This second assertion keeps the invariant visible at the final execution
+        boundary for multi-step Specialists such as VerificationAgent.
         Supervisor routing is handled by its own route-options gate and may
         intentionally choose a non-primary safe route.
         """
@@ -338,14 +344,10 @@ class AgentExecutor:
             return
         policy_keys = [agent._call_key(call) for call in policy.tool_calls]
         proposal_keys = [agent._call_key(call) for call in decision.tool_calls]
-        cursor = 0
-        for key in proposal_keys:
-            try:
-                cursor = policy_keys.index(key, cursor) + 1
-            except ValueError as exc:
-                raise LLMStructuredOutputError(
-                    f"{agent.name} model tool calls are not an ordered policy subsequence"
-                ) from exc
+        if proposal_keys != policy_keys[: len(proposal_keys)]:
+            raise LLMStructuredOutputError(
+                f"{agent.name} model tool calls are not an ordered policy prefix"
+            )
 
     @staticmethod
     def _validate_handoff(agent: BaseAgent, target: str | None) -> None:
@@ -379,6 +381,10 @@ class AgentExecutor:
         if decision.decision == DecisionType.COMPLETE and not can_terminate(agent.name):
             raise AgentDecisionValidationError(
                 "only SupervisorAgent may complete the workflow"
+            )
+        if decision.decision == DecisionType.BLOCKED and agent.name != SUPERVISOR_AGENT:
+            raise AgentDecisionValidationError(
+                "only SupervisorAgent may create a retryable workflow block"
             )
         if decision.decision == DecisionType.ASK_USER and not agent.can_ask_user:
             raise AgentDecisionValidationError(
@@ -414,7 +420,15 @@ class AgentExecutor:
 
     @staticmethod
     def _wait_user(state: AgentState, question: str) -> AgentState:
-        return apply_state_patch(state, {"status": WorkflowStatus.WAITING_USER.value, "user_question": question, "human_review_reason": None})
+        return apply_state_patch(
+            state,
+            {
+                "status": WorkflowStatus.WAITING_USER.value,
+                "user_question": question,
+                "human_review_reason": None,
+                "human_review_item": None,
+            },
+        )
 
     @staticmethod
     def _wait_human(
@@ -437,8 +451,35 @@ class AgentExecutor:
 
     @staticmethod
     def _complete(state: AgentState) -> AgentState:
-        return apply_state_patch(state, {"status": WorkflowStatus.COMPLETED.value})
+        return apply_state_patch(
+            state,
+            {
+                "status": WorkflowStatus.COMPLETED.value,
+                "human_review_reason": None,
+                "human_review_item": None,
+            },
+        )
+
+    @staticmethod
+    def _block(state: AgentState, message: str) -> AgentState:
+        return apply_state_patch(
+            state,
+            {
+                "status": WorkflowStatus.FAILED_RETRYABLE.value,
+                "human_review_reason": None,
+                "human_review_item": None,
+                "errors": [*state.errors, message[:1200]],
+            },
+        )
 
     @staticmethod
     def _fail(state: AgentState, message: str) -> AgentState:
-        return apply_state_patch(state, {"status": WorkflowStatus.FAILED.value, "errors": [*state.errors, message[:1200]]})
+        return apply_state_patch(
+            state,
+            {
+                "status": WorkflowStatus.FAILED.value,
+                "human_review_reason": None,
+                "human_review_item": None,
+                "errors": [*state.errors, message[:1200]],
+            },
+        )

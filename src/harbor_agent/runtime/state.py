@@ -110,6 +110,8 @@ class ConflictResolution(BaseModel):
     def _require_selector(self) -> "ConflictResolution":
         if self.action == "accept" and not self.selected_record_id:
             raise ValueError("accept requires selected_record_id")
+        if self.action == "reject" and self.selected_record_id:
+            raise ValueError("reject applies to the whole conflict group and cannot select a record")
         return self
 
 
@@ -178,6 +180,75 @@ class HumanResolution(BaseModel):
         return self
 
 
+class HumanReviewConflictGroup(BaseModel):
+    """Actionable view of one conflict and its durable evidence members."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    conflict_id: str = Field(min_length=1, max_length=256)
+    member_record_ids: list[str] = Field(min_length=2, max_length=200)
+    records: list[dict[str, Any]] = Field(min_length=2, max_length=200)
+    allowed_actions: list[Literal["accept", "reject"]] = Field(
+        default_factory=lambda: ["accept", "reject"]
+    )
+
+    @model_validator(mode="after")
+    def _require_member_records(self) -> "HumanReviewConflictGroup":
+        known = {str(item) for item in self.member_record_ids}
+        if len(known) < 2 or len(known) != len(self.member_record_ids):
+            raise ValueError("a human conflict group requires at least two unique durable member record IDs")
+        record_ids: set[str] = set()
+        for record in self.records:
+            record_id = record.get("record_id") or record.get("evidence_id")
+            if record_id is None:
+                raise ValueError("every conflict member record requires a durable record ID")
+            if str(record_id) not in known:
+                raise ValueError("conflict member record is outside member_record_ids")
+            record_ids.add(str(record_id))
+        if record_ids != known:
+            raise ValueError("conflict records must cover every member_record_id exactly")
+        return self
+
+
+class HumanReviewItem(BaseModel):
+    """Typed, resumable contract for every ``WAITING_HUMAN`` checkpoint."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["tool_approval", "evidence_conflict"]
+    action: Literal["approve_tool", "reject_tool", "resolve_conflicts"]
+    workflow_id: str = Field(min_length=1, max_length=128)
+    reason: str = Field(min_length=1, max_length=1200)
+    actionable: bool = True
+    allowed_actions: list[str] = Field(min_length=1, max_length=4)
+    approval_id: str | None = None
+    agent_name: str | None = None
+    tool_name: str | None = None
+    tool_call_id: str | None = None
+    arguments: dict[str, Any] | None = None
+    arguments_sha256: str | None = None
+    expires_at: str | None = None
+    conflict_groups: list[HumanReviewConflictGroup] = Field(default_factory=list, max_length=200)
+
+    @model_validator(mode="after")
+    def _validate_kind(self) -> "HumanReviewItem":
+        if self.kind == "tool_approval":
+            if self.action not in {"approve_tool", "reject_tool"}:
+                raise ValueError("tool approval review item must expose approve/reject actions")
+            if not self.approval_id or not self.tool_name or not self.tool_call_id:
+                raise ValueError("tool approval review item is missing its exact call identity")
+            if self.conflict_groups:
+                raise ValueError("tool approval review item cannot contain conflict groups")
+        else:
+            if self.action != "resolve_conflicts" or not self.conflict_groups:
+                raise ValueError("evidence conflict review item requires actionable conflict groups")
+            if self.approval_id:
+                raise ValueError("evidence conflict review item cannot contain tool approval")
+        if not self.actionable:
+            raise ValueError("a waiting human review item must be actionable")
+        return self
+
+
 class AgentState(BaseModel):
     """Typed shared state exchanged by every real agent through the runtime."""
 
@@ -233,6 +304,7 @@ class AgentState(BaseModel):
     user_question: str | None = None
     human_review_reason: str | None = None
     human_resolution: HumanResolution | None = None
+    human_review_item: HumanReviewItem | None = None
     pending_tool_approval: ToolApprovalRecord | None = None
     active_tool_approval: ToolApprovalRecord | None = None
     resolved_conflicts: list[ConflictResolution] = Field(default_factory=list)

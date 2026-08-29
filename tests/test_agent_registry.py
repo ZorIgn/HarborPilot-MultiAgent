@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import importlib
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,9 @@ from fastapi.testclient import TestClient
 from harbor_agent.app import app
 from harbor_agent.agents.orchestrator import WorkflowDeliveryBlockedError, WorkflowOrchestrator
 from harbor_agent.core.llm import MockLLMProvider
+from harbor_agent.core.llm import OpenAICompatibleLLMProvider
+from harbor_agent.llm.provider import OpenAICompatibleToolCallingProvider
+from harbor_agent.llm.response import LLMResponse, LLMUsage
 from harbor_agent.models import ApplicantProfileInput
 from harbor_agent.runtime.state import WorkflowGoal
 from harbor_agent.services.agent_registry import build_agent_system_report
@@ -64,6 +68,62 @@ def test_workflow_orchestrator_is_runtime_only_compatibility_facade() -> None:
         "ReviewAgent",
     ):
         assert legacy_symbol not in source
+
+
+def test_workflow_orchestrator_forwards_a_tool_calling_provider_to_runtime() -> None:
+    class RuntimeProvider:
+        name = "runtime-provider"
+        provider = "test"
+
+        def complete(self, *, messages, tools=None, response_model=None):
+            return LLMResponse(
+                json_content={
+                    "decision": "HANDOFF",
+                    "reasoning_summary": "Return to Supervisor.",
+                    "next_agent": "SupervisorAgent",
+                },
+                usage=LLMUsage(prompt_tokens=1, completion_tokens=1),
+                model=self.name,
+                provider=self.provider,
+            )
+
+    provider = RuntimeProvider()
+    orchestrator = WorkflowOrchestrator(provider)
+
+    specialist = orchestrator.runtime.agents["AssessmentAgent"]
+    supervisor = orchestrator.runtime.agents["SupervisorAgent"]
+    assert specialist.llm is provider
+    assert specialist.model_driven is True
+    assert supervisor.llm is provider
+    assert supervisor.model_driven is True
+
+
+def test_agent_api_runtime_uses_the_server_configured_real_provider(
+    monkeypatch,
+) -> None:
+    app_module = importlib.import_module("harbor_agent.app")
+    monkeypatch.setattr(
+        "harbor_agent.core.llm._unsafe_url_reason",
+        lambda value: None,
+    )
+    monkeypatch.setattr(
+        "harbor_agent.llm.provider._unsafe_url_reason",
+        lambda value: None,
+    )
+    configured = OpenAICompatibleLLMProvider(
+        api_key="test-only-key",
+        model="test-model",
+        provider="compatible",
+        base_url="https://models.example.edu/v1",
+    )
+    monkeypatch.setattr(app_module, "llm_provider", configured)
+
+    runtime = app_module._configured_runtime()
+
+    for agent in runtime.agents.values():
+        assert isinstance(agent.llm, OpenAICompatibleToolCallingProvider)
+        assert agent.llm.name == "test-model"
+        assert agent.model_driven is True
 def test_agent_system_registry_contracts_are_runtime_backed() -> None:
     report = build_agent_system_report()
     agent_names = {agent.agent_name for agent in report.agents}
@@ -124,7 +184,9 @@ def test_runtime_traces_expose_dynamic_runtime_contracts() -> None:
         "application_plan": {"AssessmentAgent", "ResearchAgent", "MatchingAgent", "VerificationAgent", "PlanningAgent", "CriticAgent"},
     }
     runtime_agents = {"AssessmentAgent", "ResearchAgent", "MatchingAgent", "VerificationAgent", "PlanningAgent", "WritingAgent", "CriticAgent"}
-    assert blocked_assessment.status.value == "WAITING_HUMAN"
+    assert blocked_assessment.status.value == "FAILED_RETRYABLE"
+    assert blocked_assessment.human_review_item is None
+    assert blocked_assessment.human_review_reason is None
     assert expected_by_workflow["blocked_assessment"] <= set(blocked_assessment.visited_agents)
     for workflow_name, trace in [
         ("program_plan", program_plan.trace),

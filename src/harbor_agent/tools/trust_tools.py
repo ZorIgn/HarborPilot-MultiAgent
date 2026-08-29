@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import UTC, datetime
 
 from pydantic import BaseModel, Field
@@ -16,6 +18,7 @@ from harbor_agent.services.data_loader import load_programs
 from harbor_agent.services.evidence_graph import build_program_trust_detail
 from harbor_agent.services.formal_gate import program_field_gate
 from harbor_agent.services.review_gate import review_id_for_record
+from harbor_agent.services.resolved_program import normalize_field_value
 from harbor_agent.services.source_binding_store import load_program_source_binding
 from harbor_agent.services.source_identity import (
     is_allowed_official_url,
@@ -52,6 +55,8 @@ class ReviewCandidate(BaseModel):
     field_name: str
     proposed_value: str | None = None
     reason: str
+    snapshot_id: str = Field(min_length=1, max_length=512)
+    page_hash: str = Field(min_length=1, max_length=256)
 
 
 class SavedReviewCandidate(BaseModel):
@@ -81,9 +86,33 @@ def _missing(_: AgentState, args: ProgramTrustInput) -> MissingOfficialFields:
 
 def _compare(state: AgentState, args: ProgramTrustInput) -> EvidenceComparison:
     trust = build_program_trust_detail(_program(args.program_id))
-    conflicts = [record.model_dump(mode="json") for record in trust.field_records if str(record.status.value) == "CONFLICTED"]
+    # The resolver can detect a conflict even when the ingestion layer has not
+    # stamped every member row as CONFLICTED yet.  Build the review payload from
+    # durable SQLite record IDs so a reviewer can select an actual row.
+    persisted = program_store.load_field_evidence_records([args.program_id])
+    conflicts = _current_conflict_members(persisted, args.program_id)
+    conflicts.extend(
+        _conflict_payload(record, conflict_id=str(record.get("conflict_id") or ""))
+        for record in (
+            item.model_dump(mode="json")
+            for item in trust.field_records
+            if str(item.status.value) == "CONFLICTED"
+        )
+        if not any(
+            str(existing.get("record_id") or existing.get("evidence_id") or "")
+            == str(record.get("record_id") or record.get("evidence_id") or "")
+            and str(existing.get("field_name")) == str(record.get("field_name"))
+            for existing in conflicts
+        )
+    )
     state_conflicts = [item for item in state.verification_conflicts if item.get("program_id") == args.program_id]
-    conflicts.extend(state_conflicts)
+    conflicts.extend(_conflict_payload(item, conflict_id=str(item.get("conflict_id") or "")) for item in state_conflicts)
+    deduped: dict[tuple[str, str], dict] = {}
+    for item in conflicts:
+        conflict_id = str(item.get("conflict_id") or "")
+        record_id = str(item.get("record_id") or item.get("evidence_id") or "")
+        deduped[(conflict_id, record_id)] = item
+    conflicts = list(deduped.values())
     return EvidenceComparison(
         program_id=args.program_id,
         consistent=not conflicts,
@@ -96,6 +125,8 @@ def _review_candidate(state: AgentState, args: ReviewCandidate) -> SavedReviewCa
     approval = state.active_tool_approval
     if approval is None or approval.tool_name != "save_review_candidate" or not approval.reviewer_id:
         raise ValueError("review candidate persistence requires an active exact approval")
+    if approval.arguments != args.model_dump(mode="json"):
+        raise PermissionError("review candidate approval does not match the exact snapshot-bound arguments")
     program = _program(args.program_id)
     sessions = state.working_memory.get("verification_sources", {})
     session = sessions.get(args.program_id, {}) if isinstance(sessions, dict) else {}
@@ -138,8 +169,17 @@ def _review_candidate(state: AgentState, args: ReviewCandidate) -> SavedReviewCa
         not isinstance(snapshot, dict)
         or snapshot.get("program_id") != args.program_id
         or snapshot.get("url") != source_url
+        or not snapshot.get("ok")
     ):
         raise ValueError("review candidate requires the current source snapshot")
+    current_snapshot_id = snapshot.get("snapshot_id")
+    current_page_hash = snapshot.get("page_hash")
+    if not current_snapshot_id or not current_page_hash:
+        raise ValueError("review candidate requires a successful snapshot id and page hash")
+    if str(binding.get("snapshot_id") or "") != str(current_snapshot_id) or str(binding.get("page_hash") or "") != str(current_page_hash):
+        raise ValueError("review candidate binding is stale for the current source snapshot")
+    if str(args.snapshot_id) != str(current_snapshot_id) or str(args.page_hash) != str(current_page_hash):
+        raise ValueError("review candidate snapshot_id/page_hash do not match the current source snapshot")
     final_url = str(snapshot.get("final_url") or source_url)
     application_url = str(program.application_url or "")
     programme_url = str(program.official_program_url or "")
@@ -180,13 +220,13 @@ def _review_candidate(state: AgentState, args: ReviewCandidate) -> SavedReviewCa
         source_url=source_url,
         source_type=source_type,
         extracted_at=datetime.now(UTC),
-        page_hash=str(snapshot.get("page_hash")) if snapshot.get("page_hash") else None,
+        page_hash=str(current_page_hash),
         confidence=confidence,
         source_priority=1,
         status=status,
         review_required=True,
         evidence_snippet=str(candidate.get("evidence_snippet") or "") or None,
-        snapshot_url=str(snapshot.get("snapshot_id") or "") or None,
+        snapshot_url=str(current_snapshot_id),
         source_scope=source_scope,
         final_url=final_url,
         binding_status="matched" if source_scope != SourceScope.institution_index else "index_only",
@@ -199,19 +239,78 @@ def _review_candidate(state: AgentState, args: ReviewCandidate) -> SavedReviewCa
             tool_call_id=approval.tool_call_id,
         ),
     )
+    record = record.model_copy(update={"evidence_id": program_store.field_evidence_id(record)})
     program_store.upsert_field_evidence_records(
         [record],
         db_path=program_store.DB_PATH,
     )
     review_id = review_id_for_record(record)
     return SavedReviewCandidate(
-        record_id=review_id,
+        record_id=str(record.evidence_id),
         review_id=review_id,
         program_id=args.program_id,
         field_name=args.field_name,
         persisted=True,
         record=record,
     )
+
+
+def _record_id(record: FieldEvidenceRecord | dict) -> str:
+    if isinstance(record, FieldEvidenceRecord):
+        if record.evidence_id:
+            return str(record.evidence_id)
+        return program_store.field_evidence_id(record)
+    for key in ("evidence_id", "record_id"):
+        if record.get(key):
+            return str(record[key])
+    payload = "|".join(
+        str(record.get(key) or "")
+        for key in ("program_id", "field_name", "cycle", "source_url", "page_hash", "value")
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
+
+
+def _conflict_group_id(program_id: str, field_name: str, cycle: str | None, records: list[FieldEvidenceRecord]) -> str:
+    members = sorted(
+        f"{_record_id(record)}:{normalize_field_value(field_name, record.value)!r}"
+        for record in records
+    )
+    raw = "|".join([program_id, field_name, cycle or "", *members])
+    return "conflict_group_" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+
+def _conflict_payload(record: FieldEvidenceRecord | dict, *, conflict_id: str) -> dict:
+    payload = record.model_dump(mode="json") if isinstance(record, FieldEvidenceRecord) else dict(record)
+    record_id = _record_id(record)
+    payload["evidence_id"] = payload.get("evidence_id") or record_id
+    payload["record_id"] = record_id
+    if conflict_id:
+        payload["conflict_id"] = conflict_id
+    return payload
+
+
+def _current_conflict_members(records: list[FieldEvidenceRecord], program_id: str) -> list[dict]:
+    by_field: dict[tuple[str, str | None], list[FieldEvidenceRecord]] = {}
+    for record in records:
+        if record.program_id != program_id:
+            continue
+        if record.status not in {FieldVerificationStatus.official_verified_current, FieldVerificationStatus.conflicted}:
+            continue
+        if record.review_required or normalize_field_value(record.field_name, record.value) is None:
+            continue
+        by_field.setdefault((record.field_name, record.cycle), []).append(record)
+    output: list[dict] = []
+    for (field_name, cycle), members in by_field.items():
+        values = {json.dumps(normalize_field_value(field_name, record.value), sort_keys=True, default=str) for record in members}
+        if len(values) <= 1:
+            continue
+        conflict_id = _conflict_group_id(program_id, field_name, cycle, members)
+        member_ids = [_record_id(record) for record in members]
+        for record in members:
+            payload = _conflict_payload(record, conflict_id=conflict_id)
+            payload["member_record_ids"] = member_ids
+            output.append(payload)
+    return output
 
 
 def definitions() -> list[ToolDefinition]:

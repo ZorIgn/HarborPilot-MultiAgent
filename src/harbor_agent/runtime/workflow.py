@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from copy import deepcopy
 from typing import Any
@@ -24,6 +25,8 @@ from harbor_agent.runtime.state import (
     AgentState,
     ConflictResolution,
     HumanResolution,
+    HumanReviewConflictGroup,
+    HumanReviewItem,
     WorkflowGoal,
     WorkflowStatus,
     apply_state_patch,
@@ -148,8 +151,21 @@ class MultiAgentRuntime:
         state = load_checkpoint(workflow_id)
         if state is None:
             raise KeyError(f"workflow not found: {workflow_id}")
+        workflow_record = get_multi_agent_workflow(workflow_id)
+        if (
+            reviewer_id
+            and workflow_record is not None
+            and workflow_record.get("owner_id")
+            and str(workflow_record.get("owner_id")) == str(reviewer_id)
+        ):
+            raise PermissionError("workflow owner cannot act as the independent human reviewer")
         if state.status not in {WorkflowStatus.WAITING_USER, WorkflowStatus.WAITING_HUMAN, WorkflowStatus.FAILED_RETRYABLE}:
             raise ValueError(f"workflow cannot resume from status {state.status.value}")
+        if state.status == WorkflowStatus.WAITING_HUMAN:
+            state = _ensure_human_review_item(state)
+            if state.status != WorkflowStatus.WAITING_HUMAN:
+                self._save_checkpoint(state, force=True)
+                return state
         if request.user_message and request.human_resolution is not None:
             raise ValueError("user input and human review must be submitted separately")
         if state.status == WorkflowStatus.WAITING_HUMAN:
@@ -209,6 +225,7 @@ class MultiAgentRuntime:
                             "pending_tool_approval": None,
                             "active_tool_approval": None,
                             "human_resolution": resolution,
+                            "human_review_item": None,
                             "human_review_reason": None,
                             "errors": [
                                 *state.errors,
@@ -267,6 +284,7 @@ class MultiAgentRuntime:
                     if unresolved_conflicts
                     else None
                 ),
+                "human_review_item": None if resolution is not None else state.human_review_item,
                 "user_messages": user_messages,
                 "raw_profile": raw_profile,
                 "working_memory": memory,
@@ -279,6 +297,8 @@ class MultiAgentRuntime:
         tracer.emit(TraceEventType.RETRY, output_summary="workflow resumed after user or human input")
         self._save_checkpoint(state, force=True)
         if state.status == WorkflowStatus.WAITING_HUMAN:
+            state = _ensure_human_review_item(state)
+            self._save_checkpoint(state, force=True)
             return state
         return self._run(state, tracer)
 
@@ -309,7 +329,10 @@ class MultiAgentRuntime:
         outcome = self.supervisor_executor.execute_agent(supervisor, state, tracer)
         state = outcome.state
         decision = outcome.decision
-        if decision.decision == DecisionType.FAIL or state.status == WorkflowStatus.FAILED:
+        if decision.decision in {DecisionType.FAIL, DecisionType.BLOCKED} or state.status in {
+            WorkflowStatus.FAILED,
+            WorkflowStatus.FAILED_RETRYABLE,
+        }:
             self._save_checkpoint(state, force=True)
             tracer.emit(
                 TraceEventType.ERROR,
@@ -369,6 +392,21 @@ class MultiAgentRuntime:
                     tracer.emit(TraceEventType.WORKFLOW_COMPLETED, agent_name=supervisor.name, output_summary=route.reason)
                     tracer.emit(TraceEventType.WORKFLOW_END, agent_name=supervisor.name, output_summary=route.reason)
                     return state
+                if route.next_agent == "BLOCKED":
+                    if state.status == WorkflowStatus.RUNNING:
+                        state = apply_state_patch(
+                            state,
+                            {
+                                "status": WorkflowStatus.FAILED_RETRYABLE.value,
+                                "human_review_reason": None,
+                                "human_review_item": None,
+                                "errors": [*state.errors, route.reason[:1200]],
+                            },
+                        )
+                    self._save_checkpoint(state, force=True)
+                    tracer.emit(TraceEventType.ERROR, agent_name=supervisor.name, output_summary=route.reason)
+                    tracer.emit(TraceEventType.WORKFLOW_END, agent_name=supervisor.name, output_summary=route.reason)
+                    return state
                 if route.next_agent == "ASK_USER":
                     if state.status == WorkflowStatus.RUNNING:
                         state = apply_state_patch(state, {"status": WorkflowStatus.WAITING_USER.value})
@@ -378,6 +416,7 @@ class MultiAgentRuntime:
                 if route.next_agent == "HUMAN_REVIEW":
                     if state.status == WorkflowStatus.RUNNING:
                         state = apply_state_patch(state, {"status": WorkflowStatus.WAITING_HUMAN.value})
+                    state = _ensure_human_review_item(state)
                     self._save_checkpoint(state, force=True)
                     tracer.emit(TraceEventType.HUMAN_WAIT, agent_name=supervisor.name, output_summary=route.reason)
                     return state
@@ -385,6 +424,8 @@ class MultiAgentRuntime:
                 assert isinstance(agent, BaseAgent)
                 outcome = self.executor.execute_agent(agent, state, tracer)
                 state = outcome.state
+                if state.status == WorkflowStatus.WAITING_HUMAN:
+                    state = _ensure_human_review_item(state)
                 if self._save_checkpoint(state, force=state.status != WorkflowStatus.RUNNING):
                     tracer.emit(
                         TraceEventType.CHECKPOINT,
@@ -397,7 +438,11 @@ class MultiAgentRuntime:
                 if state.status == WorkflowStatus.WAITING_HUMAN:
                     tracer.emit(TraceEventType.HUMAN_WAIT, agent_name=agent.name, output_summary=state.human_review_reason)
                     return state
-                if state.status in {WorkflowStatus.FAILED, WorkflowStatus.COMPLETED}:
+                if state.status in {
+                    WorkflowStatus.FAILED,
+                    WorkflowStatus.FAILED_RETRYABLE,
+                    WorkflowStatus.COMPLETED,
+                }:
                     tracer.emit(TraceEventType.WORKFLOW_COMPLETED if state.status == WorkflowStatus.COMPLETED else TraceEventType.ERROR, agent_name=agent.name, output_summary="agent returned terminal state")
                     tracer.emit(TraceEventType.WORKFLOW_END, agent_name=agent.name, output_summary="agent returned terminal state")
                     return state
@@ -418,11 +463,13 @@ def _supervisor_route_from_decision(decision: AgentDecision) -> SupervisorRoute 
         target = "ASK_USER"
     elif decision.decision == DecisionType.HUMAN_REVIEW:
         target = "HUMAN_REVIEW"
+    elif decision.decision == DecisionType.BLOCKED:
+        target = "BLOCKED"
     elif decision.decision == DecisionType.HANDOFF:
         target = decision.next_agent
     else:
         return None
-    if target not in {"AssessmentAgent", "ResearchAgent", "MatchingAgent", "VerificationAgent", "PlanningAgent", "WritingAgent", "CriticAgent", "ASK_USER", "HUMAN_REVIEW", "END"}:
+    if target not in {"AssessmentAgent", "ResearchAgent", "MatchingAgent", "VerificationAgent", "PlanningAgent", "WritingAgent", "CriticAgent", "ASK_USER", "HUMAN_REVIEW", "BLOCKED", "END"}:
         return None
     return SupervisorRoute(next_agent=target, reason=decision.reasoning_summary, state_patch=decision.state_patch)
 
@@ -432,6 +479,113 @@ def _coerce_human_resolution(value: HumanResolution | dict[str, Any]) -> HumanRe
     return value if isinstance(value, HumanResolution) else HumanResolution.model_validate(value)
 
 
+def _evidence_record_id(item: dict[str, Any]) -> str:
+    """Return a durable member ID, never a group-level conflict ID."""
+
+    for key in ("evidence_id", "record_id"):
+        value = item.get(key)
+        if value:
+            return str(value)
+    raw = "|".join(
+        str(item.get(key) or "")
+        for key in ("program_id", "field_name", "cycle", "source_url", "page_hash", "value")
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+
+def _conflict_groups(conflicts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Group state conflicts by one program field/cycle for reviewer choice."""
+
+    from harbor_agent.runtime.state import annotate_conflict
+
+    grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for raw in conflicts:
+        item = annotate_conflict(raw)
+        record_id = _evidence_record_id(item)
+        item["record_id"] = record_id
+        item["evidence_id"] = item.get("evidence_id") or record_id
+        key = (
+            str(item.get("program_id") or ""),
+            str(item.get("field_name") or ""),
+            str(item.get("cycle") or ""),
+        )
+        grouped.setdefault(key, []).append(item)
+    result: list[dict[str, Any]] = []
+    for (program_id, field_name, cycle), members in sorted(grouped.items()):
+        unique: dict[str, dict[str, Any]] = {}
+        for member in members:
+            unique.setdefault(str(member["record_id"]), member)
+        members = list(unique.values())
+        member_ids = sorted(unique)
+        if len(member_ids) < 2:
+            continue
+        raw_group = "|".join([program_id, field_name, cycle, *member_ids])
+        conflict_id = "conflict_group_" + hashlib.sha256(raw_group.encode("utf-8")).hexdigest()[:24]
+        for member in members:
+            member["conflict_id"] = conflict_id
+            member["member_record_ids"] = member_ids
+        result.append(
+            {
+                "conflict_id": conflict_id,
+                "member_record_ids": member_ids,
+                "records": members,
+                "allowed_actions": ["accept", "reject"],
+            }
+        )
+    return result
+
+
+def _build_human_review_item(state: AgentState) -> HumanReviewItem | None:
+    reason = state.human_review_reason or "需要独立管理员完成一项明确的审核动作。"
+    if state.pending_tool_approval is not None:
+        approval = state.pending_tool_approval
+        return HumanReviewItem(
+            kind="tool_approval",
+            action="approve_tool",
+            workflow_id=state.workflow_id,
+            reason=reason,
+            actionable=True,
+            allowed_actions=["approve_tool", "reject_tool"],
+            approval_id=approval.approval_id,
+            agent_name=approval.agent_name,
+            tool_name=approval.tool_name,
+            tool_call_id=approval.tool_call_id,
+            arguments=approval.arguments,
+            arguments_sha256=approval.arguments_sha256,
+            expires_at=approval.expires_at.isoformat(),
+        )
+    groups = _conflict_groups([dict(item) for item in state.verification_conflicts])
+    if not groups:
+        return None
+    return HumanReviewItem(
+        kind="evidence_conflict",
+        action="resolve_conflicts",
+        workflow_id=state.workflow_id,
+        reason=reason,
+        actionable=True,
+        allowed_actions=["resolve_conflicts"],
+        conflict_groups=[HumanReviewConflictGroup.model_validate(group) for group in groups],
+    )
+
+
+def _ensure_human_review_item(state: AgentState) -> AgentState:
+    """Persist an actionable typed item or fail closed instead of deadlocking."""
+
+    item = _build_human_review_item(state)
+    if item is None:
+        message = "HUMAN_REVIEW requested without a pending approval or evidence conflict; failed closed."
+        return apply_state_patch(
+            state,
+            {
+                "status": WorkflowStatus.FAILED_RETRYABLE.value,
+                "human_review_reason": None,
+                "human_review_item": None,
+                "errors": [*state.errors, message],
+            },
+        )
+    return apply_state_patch(state, {"human_review_item": item})
+
+
 def _apply_human_conflict_resolution(
     state: AgentState,
     memory: dict[str, Any],
@@ -439,40 +593,64 @@ def _apply_human_conflict_resolution(
     *,
     reviewer_id: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Persist exact decisions, then remove only those conflicts from state."""
+    """Persist group decisions, then remove only the resolved members.
 
-    from harbor_agent.runtime.state import annotate_conflict
+    ``conflict_id`` values identify a conflict group.  A selected record is
+    always checked against the group's durable ``member_record_ids``; accepting
+    the group ID itself is deliberately rejected.
+    """
+
     from harbor_agent.services.review_gate import persist_conflict_decision
 
-    active = [annotate_conflict(item) for item in state.verification_conflicts]
+    active = [dict(item) for item in state.verification_conflicts]
+    groups = _conflict_groups(active)
+    groups_by_id = {str(group["conflict_id"]): group for group in groups}
     decisions = list(resolution.conflict_resolutions)
-    by_id = {str(item["conflict_id"]): item for item in active}
-    decision_ids = [item.conflict_id for item in decisions]
-    if len(decision_ids) != len(set(decision_ids)):
-        raise ValueError("duplicate conflict decisions are not allowed")
-    unknown = set(decision_ids) - set(by_id)
-    if unknown:
-        raise ValueError(f"unknown conflict_id values: {sorted(unknown)}")
+    canonical_decisions: dict[str, ConflictResolution] = {}
+    for decision in decisions:
+        group = groups_by_id.get(str(decision.conflict_id))
+        if group is None:
+            raise ValueError(f"unknown conflict_id values: {[decision.conflict_id]}")
+        group_id = str(group["conflict_id"])
+        if group_id in canonical_decisions:
+            raise ValueError("duplicate conflict decisions are not allowed")
+        canonical_decisions[group_id] = decision
+
     remaining: list[dict[str, Any]] = []
     resolved: list[ConflictResolution] = []
-    for conflict in active:
-        conflict_id = str(conflict["conflict_id"])
-        decision = next((item for item in decisions if item.conflict_id == conflict_id), None)
+    resolved_aliases: set[str] = set()
+    for group in groups:
+        group_id = str(group["conflict_id"])
+        decision = canonical_decisions.get(group_id)
         if decision is None:
-            remaining.append(conflict)
+            remaining.extend(group["records"])
             continue
-        if decision.action == "accept" and decision.selected_record_id != conflict_id:
-            raise ValueError(
-                "selected_record_id must identify the exact record represented by conflict_id"
-            )
+        member_ids = {str(item["record_id"]) for item in group["records"]}
+        if decision.action == "accept":
+            if not decision.selected_record_id:
+                raise ValueError("accept requires selected_record_id")
+            if str(decision.selected_record_id) == group_id:
+                raise ValueError("selected_record_id must identify a member record, not the conflict ID")
+            if str(decision.selected_record_id) not in member_ids:
+                raise ValueError("selected_record_id must identify a member evidence record")
         persist_conflict_decision(
-            conflict,
+            group["records"][0],
             action=decision.action,
-            conflict_id=conflict_id,
+            conflict_id=group_id,
+            selected_record_id=decision.selected_record_id,
+            conflict_records=group["records"],
             reviewer_id=reviewer_id,
             reviewer_note=decision.reviewer_note or resolution.note,
         )
         resolved.append(decision)
+        resolved_aliases.add(group_id)
+        resolved_aliases.update(member_ids)
+        resolved_aliases.update(
+            str(member[key])
+            for member in group["records"]
+            for key in ("conflict_id", "evidence_id")
+            if member.get(key)
+        )
 
     # A cached comparison is a snapshot from before the reviewer decision.  Do
     # not feed its old conflict list back to VerificationAgent on resume.
@@ -482,8 +660,13 @@ def _apply_human_conflict_resolution(
     if isinstance(comparison, dict) and decisions:
         filtered = []
         for item in comparison.get("conflicts", []) or []:
-            conflict = annotate_conflict(item)
-            if str(conflict["conflict_id"]) not in set(decision_ids):
+            conflict = dict(item)
+            keys = {
+                str(conflict.get(key))
+                for key in ("conflict_id", "record_id", "evidence_id")
+                if conflict.get(key)
+            }
+            if not keys & resolved_aliases:
                 filtered.append(conflict)
         comparison = {
             **comparison,

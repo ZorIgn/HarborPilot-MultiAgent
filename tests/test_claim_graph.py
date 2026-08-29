@@ -14,6 +14,7 @@ from harbor_agent.services.claim_graph import build_claim_graph, claim_graph_pas
 from harbor_agent.services.data_loader import load_programs
 from harbor_agent.tools.base import EmptyToolInput
 from harbor_agent.tools.review_tools import _writing
+from harbor_agent.tools.writing_tools import _claims
 
 
 def _program_and_match() -> tuple[object, ProgramMatch]:
@@ -74,6 +75,27 @@ def _view(program, *, tuition: int | None) -> ResolvedProgramView:
     )
 
 
+def _identity_view(program) -> ResolvedProgramView:
+    return ResolvedProgramView(
+        program_id=program.id,
+        cycle=program.cycle,
+        catalog=program,
+        facts={
+            "official_program_url": DecisionFact(
+                fact_id="decision:official-url:current",
+                program_id=program.id,
+                field_name="official_program_url",
+                cycle=program.cycle,
+                raw_value=str(program.official_program_url),
+                normalized_value=str(program.official_program_url),
+                decision_status=DecisionStatus.PASS,
+                formal_use_ready=True,
+                evidence_id="published:official-url:current",
+            )
+        },
+    )
+
+
 def test_program_claim_stays_blocked_when_review_flags_are_removed() -> None:
     program, _ = _program_and_match()
     draft = _draft(program.id, "The programme tuition is HK$88,000.")
@@ -99,6 +121,39 @@ def test_current_reviewed_decision_fact_supports_program_claim() -> None:
     assert node.status.value == "SUPPORTED"
     assert node.decision_fact_ids == ["decision:tuition:current"]
     assert node.evidence_ids == ["published:tuition:current"]
+
+
+def test_exact_target_identity_uses_current_official_program_binding() -> None:
+    program, _ = _program_and_match()
+    draft = _draft(
+        program.id,
+        f"I am applying to {program.name} at {program.institution}.",
+    )
+
+    graph = build_claim_graph(
+        draft,
+        [program],
+        resolved_views={program.id: _identity_view(program)},
+    )
+
+    assert claim_graph_passed(graph)
+    node = next(node for node in graph.nodes if node.claim_type == "program_fact")
+    assert node.decision_fact_ids == ["decision:official-url:current"]
+
+
+def test_generic_or_wrong_target_identity_cannot_reuse_official_binding() -> None:
+    program, _ = _program_and_match()
+    draft = _draft(program.id, "I am applying to an unrelated programme at Another University.")
+
+    graph = build_claim_graph(
+        draft,
+        [program],
+        resolved_views={program.id: _identity_view(program)},
+    )
+
+    assert not claim_graph_passed(graph)
+    node = next(node for node in graph.nodes if node.claim_type == "program_fact")
+    assert node.status.value == "BLOCKED"
 
 
 def test_writing_agent_cannot_mark_ready_on_validation_call_same_turn() -> None:
@@ -182,3 +237,206 @@ def test_critic_writing_gate_uses_claim_graph_not_empty_review_flags() -> None:
     assert result.passed is False
     assert result.details["claim_grounding_ready"] is False
     assert result.blockers
+
+
+def test_program_claim_with_different_numeric_value_is_blocked() -> None:
+    program, _ = _program_and_match()
+    draft = _draft(program.id, "The programme tuition is HK$99,000.")
+
+    graph = build_claim_graph(
+        draft,
+        [program],
+        resolved_views={program.id: _view(program, tuition=88000)},
+    )
+
+    assert not claim_graph_passed(graph)
+    node = next(node for node in graph.nodes if node.claim_type == "program_fact")
+    assert node.status.value == "BLOCKED"
+    assert any("数值" in blocker for blocker in node.blockers)
+
+
+def test_program_claim_with_wrong_currency_is_blocked() -> None:
+    program, _ = _program_and_match()
+    draft = _draft(program.id, "The programme tuition is USD 88,000.")
+
+    graph = build_claim_graph(
+        draft,
+        [program],
+        resolved_views={program.id: _view(program, tuition=88000)},
+    )
+
+    assert not claim_graph_passed(graph)
+    node = next(node for node in graph.nodes if node.claim_type == "program_fact")
+    assert any("HKD" in blocker or "货币" in blocker for blocker in node.blockers)
+
+
+def test_program_claim_with_mismatched_fact_cycle_is_blocked() -> None:
+    program, _ = _program_and_match()
+    view = _view(program, tuition=88000)
+    view.facts["tuition_hkd"] = view.facts["tuition_hkd"].model_copy(update={"cycle": "2026-fall"})
+    draft = _draft(program.id, "The programme tuition is HK$88,000.")
+
+    graph = build_claim_graph(draft, [program], resolved_views={program.id: view})
+
+    assert not claim_graph_passed(graph)
+    node = next(node for node in graph.nodes if node.claim_type == "program_fact")
+    assert any("cycle" in blocker for blocker in node.blockers)
+
+
+def test_student_binding_unknown_id_fails_closed() -> None:
+    program, _ = _program_and_match()
+    draft = _draft(program.id, "A grounded student story.").model_copy(
+        update={
+            "fact_bindings": [
+                {"claim": "A grounded student story.", "fact_id": "forged-student-fact"}
+            ]
+        }
+    )
+
+    graph = build_claim_graph(draft, [program], student_facts={})
+
+    assert not claim_graph_passed(graph)
+    node = next(node for node in graph.nodes if node.claim_type == "student_fact")
+    assert node.status.value == "BLOCKED"
+    assert any("可信 registry" in blocker for blocker in node.blockers)
+
+
+def test_student_binding_requires_registered_content_for_numeric_claim() -> None:
+    program, _ = _program_and_match()
+    draft = _draft(program.id, "A grounded student story.").model_copy(
+        update={
+            "fact_bindings": [
+                {"claim": "Reduced latency by 20%.", "fact_id": "story-1"}
+            ]
+        }
+    )
+
+    graph = build_claim_graph(
+        draft,
+        [program],
+        student_facts={"story-1": {"id": "story-1", "title": "Reduced latency by 30%."}},
+    )
+
+    assert not claim_graph_passed(graph)
+    node = next(node for node in graph.nodes if node.claim_type == "student_fact")
+    assert any("内容与可信记录不一致" in blocker for blocker in node.blockers)
+
+
+def test_student_binding_requires_registered_content_for_text_claim() -> None:
+    program, _ = _program_and_match()
+    draft = _draft(program.id, "A grounded student story.").model_copy(
+        update={
+            "fact_bindings": [
+                {"claim": "Led a robotics competition team.", "fact_id": "story-1"}
+            ]
+        }
+    )
+
+    graph = build_claim_graph(
+        draft,
+        [program],
+        student_facts={"story-1": {"id": "story-1", "title": "Built a data dashboard."}},
+    )
+
+    assert not claim_graph_passed(graph)
+    node = next(node for node in graph.nodes if node.claim_type == "student_fact")
+    assert any("内容与可信记录不一致" in blocker for blocker in node.blockers)
+
+
+def test_student_binding_rejects_added_unregistered_detail() -> None:
+    program, _ = _program_and_match()
+    draft = _draft(program.id, "Built a data dashboard for trading predictions.").model_copy(
+        update={
+            "fact_bindings": [
+                {
+                    "claim": "Built a data dashboard for trading predictions.",
+                    "fact_id": "story-1",
+                }
+            ]
+        }
+    )
+
+    graph = build_claim_graph(
+        draft,
+        [program],
+        student_facts={"story-1": {"id": "story-1", "title": "Built a data dashboard."}},
+    )
+
+    assert not claim_graph_passed(graph)
+    node = next(node for node in graph.nodes if node.claim_type == "student_fact")
+    assert any("内容与可信记录不一致" in blocker for blocker in node.blockers)
+
+
+def test_student_binding_with_registered_story_card_is_supported() -> None:
+    program, _ = _program_and_match()
+    draft = _draft(program.id, "A grounded student story.").model_copy(
+        update={
+            "fact_bindings": [
+                {"claim": "A grounded student story.", "fact_id": "story-1"}
+            ]
+        }
+    )
+
+    graph = build_claim_graph(
+        draft,
+        [program],
+        student_facts=[{"id": "story-1", "title": "A grounded student story."}],
+    )
+
+    assert claim_graph_passed(graph)
+
+
+def test_runtime_writing_and_review_use_server_story_card_registry() -> None:
+    program, match = _program_and_match()
+    draft = _draft(program.id, "Reduced latency by 30%.").model_copy(
+        update={
+            "fact_bindings": [
+                {"claim": "Reduced latency by 30%.", "fact_id": "story-1"}
+            ]
+        }
+    )
+    state = AgentState(
+        workflow_id="claim-graph-runtime-story-registry",
+        goal=WorkflowGoal.WRITING,
+        selected_matches=[match.model_dump(mode="json")],
+        writing_draft=draft.model_dump(mode="json"),
+        writing_ready=True,
+        story_cards=[{"id": "story-1", "title": "Reduced latency by 30%."}],
+    )
+
+    validation = _claims(state, EmptyToolInput())
+    review = _writing(state, EmptyToolInput())
+
+    assert validation.grounded is True
+    assert validation.passed is True
+    assert review.passed is True
+
+
+def test_student_binding_claim_cycle_requires_matching_trusted_cycle() -> None:
+    program, _ = _program_and_match()
+    draft = _draft(program.id, "In 2026 fall, built a data dashboard.").model_copy(
+        update={
+            "fact_bindings": [
+                {
+                    "claim": "In 2026 fall, built a data dashboard.",
+                    "fact_id": "story-1",
+                }
+            ]
+        }
+    )
+
+    graph = build_claim_graph(
+        draft,
+        [program],
+        student_facts={
+            "story-1": {
+                "id": "story-1",
+                "title": "In 2027 fall, built a data dashboard.",
+                "cycle": "2027-fall",
+            }
+        },
+    )
+
+    assert not claim_graph_passed(graph)
+    node = next(node for node in graph.nodes if node.claim_type == "student_fact")
+    assert any("cycle" in blocker for blocker in node.blockers)

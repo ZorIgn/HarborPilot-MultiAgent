@@ -128,10 +128,11 @@ def build_fact_bound_writing_draft(
 ) -> WritingDraft:
     """Create the local deterministic writing draft used by the mock runtime path."""
 
-    # These are deterministic formatting primitives, not an Agent API.  Keeping them
-    # in the legacy module temporarily preserves its public compatibility contract.
+    # These are deterministic formatting primitives, not an Agent API. The
+    # public service keeps this narrow composition boundary stable.
     from harbor_agent.services.writing_composer import (
         _cv_bullets,
+        _card_text,
         _ensure_minimum_application_draft,
         _guard_writing_outputs,
         _local_draft,
@@ -158,7 +159,10 @@ def build_fact_bound_writing_draft(
     school_name = _school_name(target)
     outline = _outline_for(doc_type)
     fact_bindings = [
-        {"claim": card.title, "fact_id": ",".join(card.evidence_ids) or card.id}
+        {
+            "claim": _card_text(card, card.title),
+            "fact_id": ",".join(card.evidence_ids) or card.id,
+        }
         for card in story_cards
     ]
     draft_zh, draft_en = _local_draft(profile, target, story_cards, doc_type)

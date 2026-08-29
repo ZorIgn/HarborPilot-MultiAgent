@@ -18,7 +18,7 @@ from harbor_agent.services import program_store
 from harbor_agent.services.data_loader import load_programs
 from harbor_agent.services.evidence_graph import build_field_evidence_records
 from harbor_agent.services.field_contract import FORMAL_RECOMMENDATION_FIELDS
-from harbor_agent.services.resolved_program import normalize_field_value
+from harbor_agent.services.resolved_program import FORMAL_SCOPE_BY_FIELD, normalize_field_value
 from harbor_agent.services.review_store import (
     load_review_decisions,
     save_published_field_record,
@@ -274,16 +274,9 @@ def _is_publishable_official_candidate(record: FieldEvidenceRecord) -> bool:
         return False
     if record.source_scope is None:
         return False
-    scope = record.source_scope.value
-    if scope == "programme_detail":
-        if record.binding_status != "matched" or record.binding_score < 60:
-            return False
-    elif scope == "application_portal":
-        if record.field_name != "application_url":
-            return False
-        if record.binding_status != "matched" or record.binding_score < 60:
-            return False
-    else:
+    if record.source_scope not in FORMAL_SCOPE_BY_FIELD.get(record.field_name, set()):
+        return False
+    if record.binding_status != "matched" or record.binding_score < 60:
         return False
     if not record.source_url:
         return False
@@ -292,6 +285,8 @@ def _is_publishable_official_candidate(record: FieldEvidenceRecord) -> bool:
     if not record.evidence_snippet:
         return False
     if not record.page_hash:
+        return False
+    if not record.snapshot_url:
         return False
     if record.status in {FieldVerificationStatus.not_published, FieldVerificationStatus.conflicted}:
         return False
@@ -385,83 +380,78 @@ def persist_conflict_decision(
     conflict_id: str,
     reviewer_id: str,
     reviewer_note: str | None = None,
+    selected_record_id: str | None = None,
+    conflict_records: list[dict] | None = None,
 ) -> FieldEvidenceRecord:
-    """Persist an exact conflict decision before checkpoint state is cleared."""
+    """Persist an exact conflict decision before checkpoint state is cleared.
 
-    payload = {
-        key: value
-        for key, value in conflict.items()
-        if key in FieldEvidenceRecord.model_fields
-    }
-    try:
-        record = FieldEvidenceRecord.model_validate(payload)
-    except Exception as exc:
-        raise ValueError(
-            "conflict is not a complete evidence record and cannot be resolved"
-        ) from exc
-    if action == "reject":
-        decision_id = save_review_decision(
-            review_id=conflict_id,
-            program_id=record.program_id,
-            field_name=record.field_name,
-            decision="reject",
-            reviewer_id=reviewer_id,
-            reviewer_note=reviewer_note,
-        )
-        rejected = record.model_copy(
+    ``conflict_id`` is a group-level identity.  Publication must name a
+    separate durable evidence record ID and is committed with all sibling
+    changes and the review decision in one SQLite transaction.
+    """
+
+    raw_members = list(conflict_records or [conflict])
+    if not any(item is conflict for item in raw_members):
+        raw_members.append(conflict)
+    members: list[FieldEvidenceRecord] = []
+    seen_ids: set[str] = set()
+    for raw in raw_members:
+        payload = {key: value for key, value in raw.items() if key in FieldEvidenceRecord.model_fields}
+        try:
+            parsed = FieldEvidenceRecord.model_validate(payload)
+        except Exception as exc:
+            raise ValueError("conflict is not a complete evidence record and cannot be resolved") from exc
+        record_id = str(parsed.evidence_id or raw.get("record_id") or program_store.field_evidence_id(parsed))
+        if record_id in seen_ids:
+            continue
+        seen_ids.add(record_id)
+        members.append(parsed.model_copy(update={"evidence_id": record_id}))
+    if not members:
+        raise ValueError("conflict resolution requires at least one evidence record")
+
+    selected: FieldEvidenceRecord | None = None
+    if action == "accept":
+        if not selected_record_id:
+            raise ValueError("accept requires selected_record_id")
+        if str(selected_record_id) == str(conflict_id):
+            raise ValueError("selected_record_id must identify a member record, not the conflict ID")
+        selected = next((record for record in members if record.evidence_id == str(selected_record_id)), None)
+        if selected is None:
+            raise ValueError("selected_record_id must identify a member evidence record")
+        candidate = selected.model_copy(
             update={
-                "status": FieldVerificationStatus.not_published,
-                "review_required": False,
-                "reviewer_id": reviewer_id,
-                "reviewer_note": reviewer_note,
-                "review_decision_id": decision_id,
-                "verified_at": datetime.now(UTC),
+                "status": FieldVerificationStatus.model_inferred,
+                "review_required": True,
+                "reviewer_id": None,
+                "review_decision_id": None,
             }
         )
-        program_store.upsert_field_evidence_records(
-            [rejected],
-            db_path=program_store.DB_PATH,
-        )
-        return rejected
-    if action != "accept":
+        if not _is_publishable_official_candidate(candidate):
+            raise ValueError("selected conflict record is not publishable official current evidence")
+        item = _queue_item_from_record(candidate)
+        if item is None:
+            raise ValueError("selected conflict field is outside the reviewer gate")
+        validation_error = _validate_confirmed_value(item, candidate.value)
+        if validation_error:
+            raise ValueError(validation_error)
+    elif action == "reject":
+        if selected_record_id:
+            raise ValueError("reject applies to the whole conflict group and cannot select a record")
+    else:
         raise ValueError(f"unsupported conflict decision: {action}")
 
-    candidate = record.model_copy(
-        update={
-            "status": FieldVerificationStatus.model_inferred,
-            "review_required": True,
-            "reviewer_id": None,
-            "review_decision_id": None,
-        }
-    )
-    if not _is_publishable_official_candidate(candidate):
-        raise ValueError(
-            "selected conflict record is not publishable official current evidence"
-        )
-    item = _queue_item_from_record(candidate)
-    if item is None:
-        raise ValueError("selected conflict field is outside the reviewer gate")
-    validation_error = _validate_confirmed_value(item, candidate.value)
-    if validation_error:
-        raise ValueError(validation_error)
-    decision_id = save_review_decision(
-        review_id=conflict_id,
-        program_id=record.program_id,
-        field_name=record.field_name,
-        decision="approve",
+    persisted, _decision_id = program_store.persist_conflict_resolution(
+        members,
+        action=action,
+        conflict_id=conflict_id,
         reviewer_id=reviewer_id,
+        selected_record_id=selected_record_id,
         reviewer_note=reviewer_note,
+        db_path=program_store.DB_PATH,
     )
-    approved = candidate.model_copy(
-        update={
-            "status": FieldVerificationStatus.official_verified_current,
-            "review_required": False,
-            "reviewer_id": reviewer_id,
-            "reviewer_note": reviewer_note,
-            "review_decision_id": decision_id,
-            "verified_at": datetime.now(UTC),
-            "confidence": "high",
-        }
-    )
-    save_published_field_record(approved)
-    return approved
+    if persisted is None:
+        raise ValueError("conflict decision did not produce a persisted evidence record")
+    # The authoritative evidence row and review ledger are committed together
+    # by ``persist_conflict_resolution``. A second out-of-transaction write
+    # could leave runtime resume inconsistent with the canonical decision.
+    return persisted

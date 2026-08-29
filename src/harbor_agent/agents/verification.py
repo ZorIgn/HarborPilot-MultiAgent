@@ -80,6 +80,14 @@ def _source_refresh_step(
         session["source_attempted"] = True
         patch()
         return None
+    if not snapshot.get("snapshot_id") or not snapshot.get("page_hash"):
+        # A successful HTTP response is not an auditable source observation
+        # until it has an immutable snapshot identity and content hash. Stop
+        # this refresh attempt before extraction or human approval rather than
+        # constructing an approval request that cannot be bound exactly.
+        session["source_attempted"] = True
+        patch()
+        return None
     extraction = results.get("extract_program_fields")
     if not session.get("extraction_requested"):
         session["extraction_requested"] = True
@@ -116,12 +124,14 @@ def _source_refresh_step(
         patch()
         return None
     binding = results.get("bind_source_to_program")
-    if not isinstance(binding, dict) or binding.get("program_id") != program_id or binding.get("source_url") != source_url:
+    snapshot_id = str(snapshot.get("snapshot_id") or "")
+    page_hash = str(snapshot.get("page_hash") or "")
+    if not isinstance(binding, dict) or binding.get("program_id") != program_id or binding.get("source_url") != source_url or binding.get("snapshot_id") != snapshot_id or binding.get("page_hash") != page_hash:
         return AgentDecision(
             decision=DecisionType.CALL_TOOL,
             reasoning_summary="Submit the exact source binding to the one-shot human approval gate.",
             state_patch=patch(),
-            tool_calls=[ToolCallRequest(tool_name="bind_source_to_program", arguments={"program_id": program_id, "source_url": source_url, "field_names": candidate_field_names})],
+            tool_calls=[ToolCallRequest(tool_name="bind_source_to_program", arguments={"program_id": program_id, "source_url": source_url, "field_names": candidate_field_names, "snapshot_id": snapshot_id, "page_hash": page_hash})],
         )
     review = results.get("save_review_candidate")
     saved_fields = set(session.get("saved_candidate_fields", []))
@@ -155,6 +165,8 @@ def _source_refresh_step(
                         "field_name": str(next_candidate.get("field_name")),
                         "proposed_value": str(next_candidate.get("value")) if next_candidate.get("value") is not None else None,
                         "reason": "Runtime source extraction candidate; human publication remains required.",
+                        "snapshot_id": snapshot_id,
+                        "page_hash": page_hash,
                     },
                 )
             ],

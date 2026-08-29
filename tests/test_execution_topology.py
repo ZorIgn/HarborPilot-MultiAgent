@@ -10,6 +10,7 @@ from harbor_agent.runtime.graph import (
     SPECIALIST_AGENTS,
     SUPERVISOR_AGENT,
     can_handoff,
+    can_terminate,
 )
 
 
@@ -35,6 +36,8 @@ def test_execution_graph_has_only_supervisor_routes_or_specialist_returns() -> N
     for specialist in SPECIALIST_AGENTS:
         assert can_handoff(SUPERVISOR_AGENT, specialist)
     assert not can_handoff(SUPERVISOR_AGENT, SUPERVISOR_AGENT)
+    assert can_terminate(SUPERVISOR_AGENT)
+    assert all(not can_terminate(name) for name in SPECIALIST_AGENTS)
 
 
 def test_executor_rejects_specialist_peer_handoff_even_if_called_directly() -> None:

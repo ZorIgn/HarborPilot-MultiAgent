@@ -50,7 +50,18 @@ def test_verification_source_refresh_is_a_real_multi_round_human_gated_loop() ->
     assert snapshot.tool_calls[0].tool_name == "snapshot_official_source"
     assert snapshot.tool_calls[0].arguments["dry_run"] is False
     state = _apply(state, snapshot)
-    state = append_tool_result(state, "snapshot_official_source", {"program_id": "program-a", "url": "https://example.edu/program", "ok": True, "excerpt": "Deadline: 1 December 2027"})
+    state = append_tool_result(
+        state,
+        "snapshot_official_source",
+        {
+            "program_id": "program-a",
+            "url": "https://example.edu/program",
+            "ok": True,
+            "excerpt": "Deadline: 1 December 2027",
+            "snapshot_id": "snapshots/program-a-deadline.html",
+            "page_hash": "sha256:program-a-deadline",
+        },
+    )
 
     extraction = agent.step(state)
     assert extraction.decision == DecisionType.CALL_TOOL
@@ -65,7 +76,48 @@ def test_verification_source_refresh_is_a_real_multi_round_human_gated_loop() ->
         "program_id": "program-a",
         "source_url": "https://example.edu/program",
         "field_names": ["deadline"],
+        "snapshot_id": "snapshots/program-a-deadline.html",
+        "page_hash": "sha256:program-a-deadline",
     }
     assert state.fields_needing_verification["program-a"] == ["deadline"]
     assert "official" not in state.verified_program_fields
     assert binding.state_patch["working_memory"]["verification_sources"]["program-a"]["candidate_fields"]
+
+
+def test_verification_source_refresh_stops_before_binding_without_snapshot_identity() -> None:
+    agent = VerificationAgent()
+    state = _state()
+
+    discovery = agent.step(state)
+    state = _apply(state, discovery)
+    state = append_tool_result(
+        state,
+        "discover_official_sources",
+        {
+            "program_id": "program-a",
+            "official_urls": ["https://example.edu/program"],
+        },
+    )
+    snapshot = agent.step(state)
+    state = _apply(state, snapshot)
+    state = append_tool_result(
+        state,
+        "snapshot_official_source",
+        {
+            "program_id": "program-a",
+            "url": "https://example.edu/program",
+            "ok": True,
+            "excerpt": "Deadline: 1 December 2027",
+            "snapshot_id": None,
+            "page_hash": None,
+        },
+    )
+
+    decision = agent.step(state)
+
+    assert decision.decision == DecisionType.HANDOFF
+    assert decision.next_agent == "SupervisorAgent"
+    assert not decision.tool_calls
+    source_session = decision.state_patch["working_memory"]["verification_sources"]["program-a"]
+    assert source_session["source_attempted"] is True
+    assert "extraction_requested" not in source_session

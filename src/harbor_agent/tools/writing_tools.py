@@ -142,7 +142,12 @@ def _claims(state: AgentState, _: EmptyToolInput) -> WritingClaimsResult:
             )
             for program_id, value in raw_views.items()
         }
-    graph = build_claim_graph(draft, matches, resolved_views=views)
+    graph = build_claim_graph(
+        draft,
+        matches,
+        resolved_views=views,
+        student_facts=state.story_cards,
+    )
     unsupported = [
         node.text
         for node in graph.nodes

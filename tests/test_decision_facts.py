@@ -17,6 +17,7 @@ from harbor_agent.services.data_loader import load_programs
 from harbor_agent.services.decision_coverage import build_decision_coverage_summary
 from harbor_agent.services.deterministic_profile import normalize_profile
 from harbor_agent.services import data_loader, program_store
+from harbor_agent.services.formal_gate import formal_recommendation_ready, program_field_gate
 from harbor_agent.services.program_store import upsert_field_evidence_records
 from harbor_agent.services.resolved_program import (
     decision_fact_value,
@@ -320,3 +321,97 @@ def test_decision_coverage_reports_catalog_without_formal_coverage(stored_progra
     assert summary.decision_fact_status_breakdown.get(FactProvenanceStatus.UNVERIFIED.value, 0) > 0
     assert any("catalog" in blocker for blocker in summary.blockers)
     assert any("尚未收集" in blocker for blocker in summary.blockers)
+
+
+def test_formal_recommendation_gate_requires_every_canonical_field(stored_program) -> None:
+    program = stored_program
+    _upsert(_full_current_records(program))
+
+    view = resolve_program_view(program)
+    gate = program_field_gate(view)
+
+    assert gate["formal_recommendation_ready"] is True
+    assert gate["formal_use_ready"] is True
+    assert gate["formal_missing_or_blocked_fields"] == []
+    assert formal_recommendation_ready(view) is True
+
+
+def test_formal_recommendation_gate_fails_closed_for_missing_field(stored_program) -> None:
+    program = stored_program
+    _upsert(
+        [
+            record
+            for record in _full_current_records(program)
+            if record.field_name != "materials"
+        ]
+    )
+
+    view = resolve_program_view(program)
+    gate = program_field_gate(view)
+
+    assert gate["formal_recommendation_ready"] is False
+    assert formal_recommendation_ready(view) is False
+    assert "materials" in gate["formal_missing_or_blocked_fields"]
+    assert any("materials:" in blocker for blocker in gate["formal_blockers"])
+
+
+def test_formal_recommendation_gate_fails_closed_for_conflicted_field(stored_program) -> None:
+    program = stored_program
+    records = _full_current_records(program)
+    records.extend(
+        [
+            _valid_record(
+                program.id,
+                "tuition_hkd",
+                "HKD 200000",
+                evidence_id="evidence-tuition-conflict",
+                page_hash="sha256:conflict-page",
+                source_priority=2,
+                review_decision_id="review-decision-tuition-conflict",
+            )
+        ]
+    )
+    _upsert(records)
+
+    view = resolve_program_view(program)
+    gate = program_field_gate(view)
+
+    assert view.fact("tuition_hkd").decision_status == DecisionStatus.UNKNOWN
+    assert gate["formal_recommendation_ready"] is False
+    assert "tuition_hkd" in gate["formal_missing_or_blocked_fields"]
+
+
+def test_formal_recommendation_gate_rejects_empty_materials_in_hand_built_view(stored_program) -> None:
+    program = stored_program
+    _upsert(_full_current_records(program))
+    view = resolve_program_view(program)
+    facts = dict(view.facts)
+    facts["materials"] = facts["materials"].model_copy(update={"normalized_value": []})
+    stale_view = view.model_copy(
+        update={
+            "facts": facts,
+            "formal_readiness": DecisionStatus.PASS,
+            "formal_blockers": [],
+        }
+    )
+
+    gate = program_field_gate(stale_view)
+
+    assert gate["formal_recommendation_ready"] is False
+    assert "materials" in gate["formal_missing_or_blocked_fields"]
+
+
+def test_formal_recommendation_gate_accepts_reviewed_empty_backgrounds(stored_program) -> None:
+    program = stored_program
+    records = _full_current_records(program)
+    records = [
+        _valid_record(program.id, "required_backgrounds", "[]")
+        if record.field_name == "required_backgrounds"
+        else record
+        for record in records
+    ]
+    _upsert(records)
+
+    gate = program_field_gate(resolve_program_view(program))
+
+    assert gate["formal_recommendation_ready"] is True

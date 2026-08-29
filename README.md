@@ -2,16 +2,17 @@
 
 # ⚓ HarborPilot Multi-Agent
 
-**面向港新授课型硕士申请的、可追溯的 Supervisor-based Multi-Agent System**
+**面向港新授课型硕士申请的可信、多角色 Agent 工作流**
 
-把学生背景、项目目录、证据状态、确定性申请规则和人工审核组织为一个可暂停、可恢复、可审计的申请准备运行时。
+从学生背景评估到项目匹配、官方证据核验、申请规划与事实约束写作。<br>
+用一个可暂停、可恢复、可追溯的 Supervisor-based Multi-Agent Runtime 串联完整流程。
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.116%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Next.js](https://img.shields.io/badge/Next.js-15-000000?logo=nextdotjs&logoColor=white)](https://nextjs.org/)
-[![Runtime](https://img.shields.io/badge/runtime-Supervisor--based-6C5CE7)](#️-系统架构)
+[![Runtime](https://img.shields.io/badge/Runtime-Supervisor--based-6C5CE7)](#-系统架构)
 
-[项目简介](#-项目简介) · [核心能力](#-核心能力) · [系统架构](#️-系统架构) · [快速开始](#-快速开始) · [数据与使用边界](#️-数据与正式使用边界)
+[项目简介](#-项目简介) · [业务流程](#-业务流程) · [系统架构](#-系统架构) · [可信证据与人审](#-可信证据与人审) · [快速开始](#-快速开始) · [验证](#-验证)
 
 </div>
 
@@ -19,222 +20,226 @@
 
 ## 📖 项目简介
 
-HarborPilot 协助学生完成背景评估、项目研究、择校、证据核验、申请规划和文书准备。它的主路径是一个 **Supervisor-based Multi-Agent Runtime**：Supervisor 根据共享状态选择下一位专职 Agent，而不是按固定 Python 函数链依次调用多个类。每次专职 Agent turn 完成后都把结果交还 Supervisor；运行时没有 Specialist→Specialist 的 peer handoff。
+HarborPilot 是一个留学申请辅助系统，围绕四类核心任务组织业务：
 
-它不是多个聊天机器人自由对话，也不把每个确定性函数都包装成 Agent。模型（在模型驱动模式启用时）只能在运行时提供的策略信封内提出下一步：Supervisor 可以从当前合法路线中选择，Specialist 只能选择当前允许的 Tool 调用子集。多数状态只有一条合法路线，因为资料、来源或正式门禁仍未满足；系统不会为了制造“多 Agent 自主感”开放不安全路线。只有确实互不依赖的工作（例如来源计划与学生故事卡准备、已核验后的时间线与文书）才会同时暴露多个可选顺序。工具名称与参数、下一 Agent 和共享 state patch 都由运行时策略固定并校验；可重复的计算、检索、规则检查和证据操作由强类型 Tool 执行。
+- **学生画像与背景评估**：归一化教育背景、GPA、语言、课程、经历、预算和职业目标，并发现关键信息缺口。
+- **项目召回与匹配**：从项目目录中召回候选，分别计算招生资格、财务可行性、个人偏好和 applicant fit，再形成选校组合。
+- **官方证据核验**：对当前申请季的截止日期、学费、语言、GPA、背景、作品集和材料要求建立字段级证据链。
+- **规划与写作**：基于已核验事实生成申请时间线、故事卡和文书草稿，并由 ClaimGraph 与 Critic 检查事实绑定。
 
-系统不会给出录取保证或“保录”结论。匹配结果中的策略分数是 <code>heuristic strategy score</code>，不是录取概率；预算、个人偏好、招生资格、申请人匹配度和数据可信度也被刻意分开表示。
+系统采用中央 Supervisor 管理模式。每个 Specialist 只负责一个边界明确的任务，完成后将控制权交回 Supervisor；不存在 Specialist 之间直接接管流程的 peer handoff。
+
+## 🔄 业务流程
+
+~~~mermaid
+flowchart LR
+    P["学生档案"] --> A["背景评估"]
+    A -->|"缺少关键资料"| U["WAITING_USER"]
+    U --> A
+    A --> R["项目召回"]
+    R --> M["资格 / 预算 / 偏好 / Fit"]
+    M --> V["官方证据核验"]
+    V -->|"高风险工具或证据冲突"| H["WAITING_HUMAN"]
+    H --> V
+    V --> D["DecisionFact / ResolvedProgramView"]
+    D --> L["申请规划"]
+    D --> W["事实约束写作"]
+    L --> C["Critic"]
+    W --> C
+    C -->|"探索结果可交付，保留 blocker"| P0["PRELIMINARY_COMPLETE"]
+    C -->|"正式门禁通过"| F["FORMAL_PASS"]
+    C -->|"正式目标仍缺事实"| B["BLOCKED → FAILED_RETRYABLE"]
+~~~
+
+<code>WAITING_USER</code> 用于补充学生资料；<code>WAITING_HUMAN</code> 只用于存在明确操作对象的工具批准或证据冲突处理。选校建议和准备计划可以用 <code>PRELIMINARY_COMPLETE</code> 返回带 blocker 的探索结果；写作、完整申请计划或其他正式目标缺少必要事实时，Critic 返回 <code>BLOCKED</code>，工作流持久化为 <code>FAILED_RETRYABLE</code>，等待新的官方证据后重试。
 
 ## 🏗️ 系统架构
 
 ~~~mermaid
 flowchart TB
-    U["学生资料 / 目标 / 补充消息"] --> R["Workflow Runtime"]
-    R --> S["SupervisorAgent<br/>动态路由与任务拆解"]
-    S --> A["专职 Agent<br/>Assessment · Research · Matching"]
-    S --> V["专职 Agent<br/>Verification · Planning · Writing · Critic"]
-    A -->|"bounded result / HANDOFF"| S
-    V -->|"bounded result / HANDOFF"| S
-    A --> X["Agent Executor"]
-    V --> X
-    X --> T["Tool Registry<br/>Pydantic 参数 / 结果校验"]
-    T --> D["确定性服务与项目目录<br/>证据图 / SQLite"]
-    T --> O["经安全网关访问的外部官方来源"]
-    X <--> ST[("Typed Shared AgentState")]
+    UI["Next.js Web / Runtime API"] --> RT["MultiAgentRuntime"]
+    RT --> S["SupervisorAgent<br/>任务拆分与动态路由"]
+
+    S --> A["AssessmentAgent"]
+    S --> R["ResearchAgent"]
+    S --> M["MatchingAgent"]
+    S --> V["VerificationAgent"]
+    S --> P["PlanningAgent"]
+    S --> W["WritingAgent"]
+    S --> C["CriticAgent"]
+
+    A --> E["AgentExecutor"]
+    R --> E
+    M --> E
+    V --> E
+    P --> E
+    W --> E
+    C --> E
+
+    E --> T["ToolRegistry<br/>参数校验 · 权限校验 · 一次性批准"]
+    T --> SV["Deterministic Services<br/>规则 · 证据 · ClaimGraph"]
+    SV --> DB[("SQLite / Snapshot Store")]
+
+    E <--> ST[("Typed AgentState")]
     S <--> ST
-    V -->|"FORMAL_PASS / PRELIMINARY_COMPLETE / BLOCKED / route signal"| S
-    R --> C["Checkpoint / Resume"]
-    X --> TR["真实 Runtime Trace"]
-    V --> H{"Human Gate"}
-    H -->|"批准或人工结论"| C
+    RT --> CP["Checkpoint / Resume"]
+    E --> TR["Runtime Trace"]
+    T --> HG{"Human Gate"}
+    HG --> CP
+    E -->|"HANDOFF"| S
 ~~~
 
-运行时以 Pydantic <code>AgentState</code> 作为唯一共享状态，并在每个 Agent turn 后保存 checkpoint。默认上限为：40 个 workflow step、每个 Agent 8 turn、每个 turn 6 轮 Tool、总计 80 次 Tool Call、8 次 Supervisor replan。超过限制会明确失败，而不会无限循环。
+### Agent、Tool 与 Runtime 的分工
 
-<code>MultiAgentRuntime</code> 支持注入 OpenAI-compatible provider 并开启 <code>model_driven=True</code>：真实 provider 的 proposal 会先经过当前 Agent 的确定性策略，再送入同一个执行器。当前 HTTP Runtime API 的默认构造路径不注入 provider，使用可复现的确定性决策策略；LLM 与来源连接默认都是 mock/离线，不会因为 <code>dry_run=False</code> 就隐式联网。这让本地运行、测试和 deterministic eval 不会把 mock 结果宣称为真实模型质量。
+| 层 | 负责什么 | 关键约束 |
+| --- | --- | --- |
+| **Supervisor** | 根据目标和实时状态选择下一位 Specialist，处理询问、阻断与结束 | 不直接调用工具；只能选择当前策略暴露的合法路线 |
+| **Specialist Agent** | 在自己的领域内提出一个强类型 <code>AgentDecision</code> | 只能使用声明的工具和状态字段；不能直接终止工作流 |
+| **AgentExecutor** | 校验决策、执行工具、写入状态、记录 trace | 二次检查工具序列、handoff 图、状态 ACL 和终止权限 |
+| **ToolRegistry** | 校验 Pydantic 输入/输出并调用确定性服务 | 高风险工具必须携带与具体调用完全一致的一次性批准 |
+| **AgentState** | 保存工作流共享状态、证据缺口、任务、暂停信息和最终结果 | 顶层字段强类型校验；运行时字段不允许 Specialist 修改 |
+| **Checkpoint / Trace** | 支持暂停恢复并记录 Agent、Tool、错误和模型用量 | 恢复后仍需重新经过同一套策略与门禁 |
+
+### 八个运行时 Agent
+
+| Agent | 主要职责 |
+| --- | --- |
+| <code>SupervisorAgent</code> | 任务拆分、动态路由、暂停恢复、正式结束 |
+| <code>AssessmentAgent</code> | 档案归一化、资料缺口检查、背景评估 |
+| <code>ResearchAgent</code> | 项目目录召回、候选收窄、受限官方来源计划 |
+| <code>MatchingAgent</code> | 招生资格、预算、偏好、Fit 与项目组合 |
+| <code>VerificationAgent</code> | 官方字段缺口、来源快照、证据比较和冲突识别 |
+| <code>PlanningAgent</code> | 准备时间线与证据门控的正式时间线 |
+| <code>WritingAgent</code> | 故事卡、事实绑定、草稿生成和 grounding 校验 |
+| <code>CriticAgent</code> | 推荐、来源、写作与 formal gate 的最终检查 |
+
+ResearchAgent 负责目录检索和来源计划，不执行开放式网页研究；真实来源抓取、抽取、项目绑定和审核候选保存只会在 VerificationAgent 的受控路径中发生。
+
+## 🧠 模型如何参与
+
+默认的 Agent proposal 模式为 <code>mock</code>，使用可复现的确定性策略，不调用外部模型。配置 OpenAI-compatible provider 后，HTTP Runtime 会启用受约束的模型 proposal 模式，但模型只拥有“提议权”：
+
+- Specialist 模型只能从当前策略给出的精确工具调用中选择一个**非空有序前缀**，不能改工具名、参数或顺序。
+- Specialist 模型不能返回共享 <code>state_patch</code>，也不能把流程直接交给其他 Specialist。
+- Supervisor 模型只能从当前状态暴露的合法路线中选择，不能调用工具、虚构 Agent 或自行结束未满足门禁的流程。
+- Executor 会在执行前重新校验决策、工具 ACL、handoff 图、状态字段和终止权限。
+
+因此，模型可以参与路由选择与工具批次选择，但工具参数、共享状态和正式门禁仍由运行时控制。Runtime API 中的写作正文由事实约束的确定性工具生成；外部 provider 不会直接写共享状态、正式事实或最终文书。
+
+模型连接和来源连接是两个独立开关：<code>HARBOR_AGENT_LLM_MODE</code> 控制是否调用外部模型；每个工作流的 <code>source_connection_mode</code> 与 <code>refresh_official_sources</code> 控制是否请求真实官方来源。两者都保持默认 <code>mock</code> 时，工作流完全离线；也可以在确定性 Agent proposal 下单独启用受控来源刷新。
+
+## 🔍 可信证据与人审
+
+### 字段级事实链
+
+~~~text
+项目目录 / 历史参考
+        ↓
+官方来源快照（URL + snapshot_id + page_hash）
+        ↓
+字段抽取候选
+        ↓
+来源与具体项目绑定（人工批准）
+        ↓
+Review Candidate（人工批准）
+        ↓
+Reviewer 发布或解决冲突
+        ↓
+DecisionFact → ResolvedProgramView
+        ↓
+匹配 / 时间线 / 写作 / Critic
+~~~
+
+目录值、网页抓取结果和模型抽取结果都不能直接成为正式事实。一个字段只有满足当前申请季、正式来源范围、项目绑定、快照与页面哈希、原文片段、reviewer、review decision 和验证时间等条件，才可进入正式使用。
+
+Critic 不复用核验前缓存的招生资格结论，而是根据当前 <code>DecisionFact</code> 重新计算所选项目的硬性资格。新事实使普通候选不再满足要求时，流程回到 MatchingAgent；创建请求中的 <code>selected_program_ids</code> 会被记录为用户显式选择，这类项目即使保留，也只能作为带 blocker 的准备对象，不能进入正式推荐。
+
+字段级结果分为：
+
+| 状态 | 含义 |
+| --- | --- |
+| <code>PASS</code> | 当前、已审核、可正式使用的事实支持该结论 |
+| <code>FAIL</code> | 当前、已审核、可正式使用的事实明确不满足要求 |
+| <code>UNKNOWN</code> | 缺失、过期、往届、冲突或来源信息不完整，不能形成硬结论 |
+
+Formal recommendation 会检查 <code>official_program_url</code>、<code>application_url</code>、<code>deadline</code>、<code>tuition_hkd</code>、<code>min_gpa</code>、<code>language_requirement</code>、<code>required_backgrounds</code>、<code>portfolio_required</code> 和 <code>materials</code> 等字段。缺少任一必要事实时，系统保留初步结果或 blocker，不把目录数据包装成当前季正式结论。
+
+### 精确、一次性 Human Review
+
+高风险 Tool 批准绑定以下信息：
+
+~~~text
+workflow_id + agent_name + tool_name + tool_call_id
++ canonical arguments + arguments_sha256 + expires_at
+~~~
+
+批准具有有效期且只能消费一次，不能用工具名级别的旧批准重放其他参数。来源绑定与审核候选还必须匹配当前 <code>snapshot_id</code> 和 <code>page_hash</code>。
+
+证据冲突按“项目 + 字段 + 申请季 + 成员记录”生成稳定 conflict-group ID。一个可操作冲突组至少包含两条唯一的持久化证据记录：
+
+- <code>accept</code> 必须选择组内具体 <code>selected_record_id</code>；
+- <code>reject</code> 拒绝整个冲突组，不能同时选择成员；
+- reviewer 身份来自服务端管理员上下文；
+- 当 workflow owner 与 reviewer 使用同一审计身份时，运行时拒绝该决策；
+- review decision、选中记录升级和其他成员降级在同一个 SQLite 事务中完成。
+
+## ✍️ ClaimGraph 与交付状态
+
+WritingAgent 生成的学生事实必须引用服务端 story-card registry 中的真实 ID；项目事实必须引用当前 <code>DecisionFact</code>。ClaimGraph 会检查项目、申请季、URL、日期、金额、GPA、语言成绩、布尔值、列表值和正文中的数字是否与证据一致。
+
+Critic 的 <code>critic_readiness</code> 使用三类交付结果：
+
+| <code>critic_readiness</code> | 含义 |
+| --- | --- |
+| <code>PRELIMINARY_COMPLETE</code> | 可以展示探索性建议或准备计划，但仍携带来源 blocker，<code>formal_use_ready=false</code> |
+| <code>FORMAL_PASS</code> | 必要字段、招生资格、来源门禁和 ClaimGraph 均通过，<code>formal_use_ready=true</code>，可以进入系统的正式结果链路 |
+| <code>BLOCKED</code> | 写作或完整申请计划仍缺正式事实；工作流的 <code>status</code> 以 <code>FAILED_RETRYABLE</code> 保存 |
+
+字段证据另有 <code>decision_status=PASS / FAIL / UNKNOWN</code>：<code>FAIL</code> 表示当前正式证据明确不满足某项要求，不是工作流失败；<code>UNKNOWN</code> 表示证据不足，不能生成硬结论。这里的“正式”表示通过系统内证据门禁，不替代学校官网或招生办公室的最终权威判断。
+
+<code>PRELIMINARY_COMPLETE</code> 与 <code>FORMAL_PASS</code> 都会让工作流的生命周期 <code>status</code> 进入 <code>COMPLETED</code>，区别由 <code>critic_readiness</code>、<code>formal_use_ready</code> 和 blocker 明确表达；<code>BLOCKED</code> 则对应 <code>FAILED_RETRYABLE</code>。
 
 ## 🛠️ 技术栈
 
-| 领域 | 选型 |
+| 领域 | 技术 |
 | --- | --- |
 | 后端 | Python 3.11+、FastAPI、Pydantic、Uvicorn |
-| 前端 | Next.js 15、React 19、TypeScript、Lucide |
-| 数据 | SQLite、项目快照、字段级证据记录 |
-| 模型 | OpenAI-compatible API；可使用确定性本地策略或受控 provider |
-| 来源处理 | HTTPS 安全网关、robots 检查、页面哈希、字段抽取与冲突比较 |
+| 前端 | Next.js 15、React 19、TypeScript |
+| 数据 | SQLite、字段级证据记录、来源快照 |
+| Agent Runtime | Supervisor 路由、Typed State、Tool Registry、Checkpoint、Trace |
+| 模型 | OpenAI-compatible Tool Calling Provider |
 | 部署 | Docker Compose |
-
-## ✨ 核心能力
-
-- 👤 **背景评估** —— 整理学校、GPA、语言、课程、经历、预算与职业目标，提示资料缺口和需要优先核对的条件。
-- 🧭 **项目研究与择校** —— 结合项目目录、招生资格、偏好、费用和数据可信度，形成有依据的申请组合。
-- 🔍 **官方来源核验** —— 把官网页面、申请轮次、字段候选、冲突与人工审核状态放在同一条证据链中。
-- 📅 **申请规划** —— 区分准备时间线与正式时间线，避免把未核验的日期当作递交依据。
-- ✍️ **文书工作台** —— 通过经历问卷、故事卡、事实绑定和写作审查组织 PS、CV、Essay 等材料。
-- 🧩 **可恢复的协作过程** —— 资料不足时询问学生，来源冲突或高风险操作时交由人工判断，再从 checkpoint 继续。
-
-### 运行时中的八个 Agent
-
-运行时中的专职角色由 <code>build_agent_registry()</code> 组装，并在实际执行 trace 中体现：
-
-| Agent | 负责什么 | 明确不负责什么 |
-| --- | --- | --- |
-| <code>SupervisorAgent</code> | 根据目标和共享状态拆分任务、动态选择下一站、处理暂停与结束 | 不直接执行 Tool；不跳过招生资格检查 |
-| <code>AssessmentAgent</code> | 归一化背景、发现资料缺口、调用确定性背景评估 | 不编造 GPA、语言成绩或竞争力数据 |
-| <code>ResearchAgent</code> | 通过项目目录召回和收窄候选项目，并生成有上限、仅允许官方域名的 source-research plan | 不直接联网、抽取、绑定、审核或发布字段；不把目录结果说成已核验的官方事实 |
-| <code>MatchingAgent</code> | 分别评估招生资格、财务可行性、用户偏好与 applicant fit，并构建项目组合 | 不修改官方门槛；不把预算当招生资格 |
-| <code>VerificationAgent</code> | 核查官方字段缺口、证据可信度和冲突，必要时请求人工结论 | 不把社区信息发布为官方要求；不自行覆盖冲突 |
-| <code>PlanningAgent</code> | 生成证据门控的申请准备与官方时间线 | 不把未核验字段写成正式截止日期 |
-| <code>WritingAgent</code> | 组织学生事实、项目证据、故事卡和文书草稿 | 不编造申请人经历或无来源的项目事实 |
-| <code>CriticAgent</code> | 对推荐、来源与写作执行确定性审查，并要求 replan / reverify / rewrite | 不自动解决冲突证据 |
-
-确定性的归一化、审计、时间线与数据维护能力位于 Tool、Policy、Service 和 Eval 层；兼容入口只把既有 API 转发到同一运行时，不把这些能力另行包装成 Agent 角色。
-
-### Agent、Tool、Policy 与人工审核
-
-| 层 | 运行方式 | 边界 |
-| --- | --- | --- |
-| **Agent** | 返回强类型 <code>AgentDecision</code>：调用 Tool、把 bounded result 交回 Supervisor、询问用户、人工审核、完成或失败 | 不能直接访问任意服务；模型驱动的 Specialist 不能改工具参数、next agent 或共享 state patch，其确定性策略输出仍由 Executor 按 ACL 应用；Supervisor 也只能使用已验证的 route patch |
-| **Tool** | 由 <code>ToolRegistry</code> 执行；输入与输出均为 Pydantic 模型 | 负责确定性操作，如背景归一化、目录检索、资格检查、证据比较、时间线和故事卡 |
-| **Policy** | 权限、来源安全、正式使用门禁和运行限制 | 限制每个 Agent 可用的 Tool；拒绝不安全 URL；防止无穷循环与无依据正式结论 |
-| **Human Gate** | Tool 或 Agent 返回 <code>WAITING_HUMAN</code>，保存 checkpoint | 高风险证据绑定 / 审核候选需要批准；官方来源冲突不能自动解决 |
-| **Eval** | 独立 deterministic suite，从 trace 断言运行行为 | 评估路由、Tool 使用、暂停恢复、预算与资格分离、证据门禁等；不把 mock 当作真实 LLM 质量 |
-
-每次 Tool Call 都先检查 Agent allowlist、再校验参数、执行、校验输出，并自动写入 <code>TOOL_CALL</code> 与 <code>TOOL_RESULT</code> trace。外部网页内容始终视为不可信数据；来源网关仅允许安全 HTTPS URL，并防范 localhost、私网、保留地址、非标准端口与不安全跳转。API key 不应进入 trace、state、checkpoint 或前端存储。
-
-## 🔄 运行示例
-
-图中的边是能力边，不是固定 DAG。执行图只包含 <code>SupervisorAgent → Specialist</code> 与 <code>Specialist → SupervisorAgent</code> 两类边。系统会依据资料完整度、项目匹配、来源可信度和用户目标选择下一步；以下结果都是交给 Supervisor 的 route signal，而不是 peer handoff：
-
-- <code>AssessmentAgent → ASK_USER</code>：正式建议缺少语言等关键资料；
-- <code>MatchingAgent</code> 返回“需要扩大或修正项目召回”，Supervisor 下一 turn 才可能路由到 <code>ResearchAgent</code>；
-- <code>VerificationAgent</code> 返回“继续核验”，Supervisor 下一 turn 才可能再次路由到 <code>VerificationAgent</code>；
-- <code>CriticAgent</code> 返回 <code>REPLAN_MATCHING / REVERIFY / REWRITE</code>，Supervisor 下一 turn 才可能分别路由到 Matching、Verification 或 Writing；
-- 任意需要人类判断的来源冲突：<code>WAITING_HUMAN → resume</code>。
-
-下面以“语言成绩缺失、补充后继续形成项目建议”为例说明运行形态。具体候选项目、Tool 数量和路径由状态决定，系统只呈现实际发生的执行步骤与关联关系。
-
-~~~text
-WORKFLOW_STARTED
-SUPERVISOR_ROUTE       selected=AssessmentAgent
-DISPATCH                SupervisorAgent -> AssessmentAgent
-AGENT_STARTED          AssessmentAgent
-TOOL_CALL / RESULT     normalize_profile
-TOOL_CALL / RESULT     find_profile_gaps
-TOOL_CALL / RESULT     inspect_evidence_readiness
-TOOL_CALL / RESULT     calculate_profile_assessment
-AGENT_DECISION         ASK_USER（缺少语言成绩）
-PAUSE                  AssessmentAgent -> WAITING_USER
-CHECKPOINT
-USER_WAIT              status=WAITING_USER
-
-POST /api/agent/workflows/{id}/resume
-RETRY                  workflow resumed
-SUPERVISOR_ROUTE       selected=AssessmentAgent
-DISPATCH                SupervisorAgent -> AssessmentAgent
-...                    reassess with the supplemented profile
-SUPERVISOR_ROUTE       selected=ResearchAgent
-DISPATCH                SupervisorAgent -> ResearchAgent
-TOOL_CALL / RESULT     search_program_catalog
-TOOL_CALL / RESULT     build_source_research_plan（仅规划，不联网）
-HANDOFF                ResearchAgent -> SupervisorAgent
-SUPERVISOR_ROUTE       selected=MatchingAgent
-DISPATCH                SupervisorAgent -> MatchingAgent
-TOOL_CALL / RESULT     evaluate_admissions_eligibility
-TOOL_CALL / RESULT     evaluate_financial_feasibility
-TOOL_CALL / RESULT     evaluate_user_preference
-TOOL_CALL / RESULT     calculate_applicant_fit
-TOOL_CALL / RESULT     build_program_portfolio
-HANDOFF                MatchingAgent -> SupervisorAgent
-SUPERVISOR_ROUTE       selected=VerificationAgent
-DISPATCH                SupervisorAgent -> VerificationAgent
-TOOL_CALL / RESULT     get_program_trust_detail
-TOOL_CALL / RESULT     list_missing_official_fields
-TOOL_CALL / RESULT     compare_evidence_records
-HANDOFF                VerificationAgent -> SupervisorAgent
-SUPERVISOR_ROUTE       selected=CriticAgent
-DISPATCH                SupervisorAgent -> CriticAgent
-AGENT_DECISION         FORMAL_PASS
-HANDOFF                CriticAgent -> SupervisorAgent
-SUPERVISOR_ROUTE       selected=END
-WORKFLOW_COMPLETED
-~~~
-
-<code>GET /api/agent/workflows/{id}/trace</code> 返回来源于这些真实操作的事件，包括 Agent、Tool、Tool Call ID、简要输入/输出、错误、时间和可用的 provider 元数据。成本仅按 provider 报告的 token 与 <code>data/model_pricing.json</code> 中的显式价格计算；未知价格或未知 token 保持 <code>null</code>，绝不根据耗时估算成本。
-
-## 🖥️ 页面与 API
-
-### 主要页面
-
-| 页面 | 用途 |
-| --- | --- |
-| <code>/assessment</code> | 背景竞争力评估与资料缺口 |
-| <code>/programs</code> | 项目目录、匹配维度与信息可信度 |
-| <code>/timeline</code> | 逐项目准备时间线与材料 |
-| <code>/writing</code> | 故事卡、事实绑定与文书草稿 |
-| <code>/agent-lab</code> | workflow 状态、来源证据与运行轨迹 |
-
-### Agent Runtime API
-
-工作流接口用于创建、查看、恢复和追溯一次申请准备过程；既有 <code>/api/workflows/*</code> 接口继续为已有客户端保留响应兼容性。
-
-| 方法 | 路径 | 用途 |
-| --- | --- | --- |
-| <code>POST</code> | <code>/api/agent/workflows</code> | 创建并立即运行一个 workflow |
-| <code>GET</code> | <code>/api/agent/workflows</code> | 列出 workflow（管理员） |
-| <code>GET</code> | <code>/api/agent/workflows/{workflow_id}</code> | 读取当前持有者可访问的工作流快照 |
-| <code>POST</code> | <code>/api/agent/workflows/{workflow_id}/resume</code> | 提供用户补充或人工结论并恢复 |
-| <code>GET</code> | <code>/api/agent/workflows/{workflow_id}/trace</code> | 读取真实 Runtime Trace |
-| <code>GET</code> | <code>/api/agent/workflows/{workflow_id}/state</code> | 读取最近 checkpoint 的 typed state |
-
-创建请求的 <code>goal</code> 支持 <code>BACKGROUND_ASSESSMENT</code>、<code>PROGRAM_RECOMMENDATION</code>、<code>APPLICATION_PLANNING</code>、<code>WRITING</code> 和 <code>FULL_APPLICATION_PLAN</code>，也接受对应的小写值。<code>profile</code> 可先提交部分资料；缺少专业、GPA、语言等关键字段时，AssessmentAgent 会保存 checkpoint 并返回 <code>WAITING_USER</code>，而不是在 HTTP 层丢弃请求。完整档案可从 [examples/sample_profile.json](examples/sample_profile.json) 开始。
-
-~~~json
-POST /api/agent/workflows
-{
-  "goal": "PROGRAM_RECOMMENDATION",
-  "profile": { "...": "可先提交部分学生档案，完整示例见 examples/sample_profile.json" },
-  "user_request": "希望寻找香港和新加坡的数据分析硕士项目",
-  "selected_program_ids": [],
-  "document_type": "PS"
-}
-~~~
-
-当返回状态为 <code>WAITING_USER</code> 或 <code>WAITING_HUMAN</code> 时，使用同一 workflow ID 恢复。用户消息可包含小型 JSON 背景补丁；人工结论可包含 <code>approved_tools</code> 或冲突处理信息。
-
-~~~json
-POST /api/agent/workflows/{workflow_id}/resume
-{
-  "user_message": "{\"language\": {\"test\": \"IELTS\", \"overall\": 7.0, \"writing\": 6.5}}",
-  "human_resolution": null
-}
-~~~
 
 ## 🚀 快速开始
 
 ### 1. 后端
 
-~~~bash
+~~~powershell
 git clone https://github.com/ZorIgn/HarborPilot-MultiAgent.git
 cd HarborPilot-MultiAgent
 
 python -m venv .venv
-# Windows PowerShell
 .\.venv\Scripts\Activate.ps1
-
 python -m pip install -e ".[dev,llm]"
+
+Copy-Item .env.example .env
+# 在 .env 中设置 HARBOR_AGENT_ADMIN_TOKEN 后，Human Review 写操作才能鉴权
 python -m uvicorn harbor_agent.app:app --reload --host 127.0.0.1 --port 8000
 ~~~
 
+默认后端地址：<http://127.0.0.1:8000>，OpenAPI：<http://127.0.0.1:8000/docs>。
+
 ### 2. 前端
 
-~~~bash
+另开一个 PowerShell 终端并保持后端运行：
+
+~~~powershell
 cd web
 npm install
 npm run dev
 ~~~
 
-默认前端地址为 <http://localhost:3001>，后端为 <http://127.0.0.1:8000>。运行生产构建前可先运行 <code>npm run typecheck</code>。Windows 的 <code>npm run build</code> 使用独立的 <code>next-build</code> 输出目录，避免开发服务与生产构建互相污染。
+默认前端地址：<http://localhost:3001>。开发服务使用独立的 <code>next-dev</code> 输出目录，生产构建与启动使用 <code>next-build</code>，避免两种运行模式相互覆盖。
 
 ### 3. Docker
 
@@ -242,55 +247,148 @@ npm run dev
 docker compose up --build
 ~~~
 
-## 🛡️ 数据与正式使用边界
+### 4. 可选模型配置
 
-- 招生资格只检查明确招生条件，例如最低 GPA、接受的语言考试与分数、先修背景、学位、作品集或明确工作经验要求。
-- 预算属于财务可行性，用户偏好属于策略选择；二者都不等于招生资格。
-- 官方字段缺失是 <code>UNKNOWN</code> / 需要核验，不等于申请人不合格。
-- 硬资格、硬预算和正式推荐读取的是当前季、已审核的 <code>DecisionFact</code>；目录/seed 数值不会自动升级为正式事实。字段覆盖不足时，formal gate 会阻断正式使用，而不是用目录规模补齐覆盖率。
-- 社区来源可用于准备建议和线索，不能自动覆盖或发布为官方要求。
-- 截止日期支持申请轮次；冲突证据必须留给人工审核。
-- 正式时间线或正式建议会经过证据与 formal gate；任何未核验字段都应保留待复核标记。
+<code>.env.example</code> 默认使用确定性 Agent proposal。启用 OpenAI-compatible provider 时设置：
 
-## 🔄 数据维护
-
-项目目录、证据快照和审核记录可以分开维护。创建 workflow 时，<code>refresh_official_sources</code> 默认为 <code>false</code>；即使显式开启，也必须同时声明 <code>source_connection_mode=real|hybrid</code>、指定已知项目 ID，并由服务器在 admin/operator 校验后注入一次性 fetch 授权，VerificationAgent 才会进入受策略约束的 source-tool 阶段，沿 snapshot → extraction → binding → review candidate 链路推进。<code>mock</code>、缺少项目范围或缺少服务器授权都不会联网。这个开关不会授予 Specialist 发布事实的权限：抓取或抽取成功不等于字段已验证，只有审核发布后才会形成可供 <code>ResolvedProgramView</code> 使用的 DecisionFact。需要 operator 触发批量真实采集时，应使用下方带 <code>connection_mode=real|hybrid</code> 的数据采集 API。
-
-独立的数据采集 API 的 <code>DataAcquisitionRequest.connection_mode</code> 默认为 <code>mock</code>：不联网；即使 <code>dry_run=false</code> 也不会取得联网权限。需要真实来源时，受控 operator 必须显式选择 <code>real</code> 或 <code>hybrid</code>，经过 admin/scope 校验后运行；失败不能静默回退为 mock 事实。真实覆盖率请查看 <code>GET /api/admin/decision-coverage</code>，不能用项目目录数量代替。
-
-数据层的对象边界、字段级 formal gate、ClaimGraph 和审核发布流程见[可信数据修复计划](docs/trustworthy-agent-data-remediation-plan.md)。
-
-## 📂 项目结构
-
-现有客户端可继续使用 <code>/api/workflows/background</code>、<code>/api/workflows/program-plan</code>、<code>/api/workflows/application-plan</code>、<code>/api/workflows/writing-plan</code> 与 <code>/api/workflows/assessment</code>。这些入口通过 <code>WorkflowOrchestrator</code> 与 <code>MultiAgentRuntime</code> 共享同一套工作流状态和证据边界。
-
-~~~text
-src/harbor_agent/agents/          八个 Runtime Agent 与兼容 façade
-src/harbor_agent/runtime/         State、Decision、Graph、Executor、Checkpoint、Limits
-src/harbor_agent/tools/           强类型 Tool 定义与 Registry
-src/harbor_agent/policies/        权限、来源安全、正式使用与执行策略
-src/harbor_agent/llm/             OpenAI-compatible provider、结构化输出、定价
-src/harbor_agent/observability/   Runtime trace、event、usage 与 metrics
-src/harbor_agent/evals/           Deterministic Agent Eval runner / assertions
-data/agent_eval_cases.json        可重复的评估用例
-web/                              Next.js 学生端与 Agent Lab
+~~~dotenv
+HARBOR_AGENT_LLM_MODE=openai
+HARBOR_AGENT_LLM_PROVIDER=openai
+HARBOR_AGENT_OPENAI_API_KEY=your_api_key
+HARBOR_AGENT_OPENAI_MODEL=gpt-4.1-mini
+HARBOR_AGENT_OPENAI_BASE_URL=https://api.openai.com/v1
 ~~~
+
+模型配置只改变 proposal 的生成方式，不改变工具权限、状态 ACL、证据门禁或 Human Review 规则。
+
+来源连接由工作流请求单独控制：<code>mock</code> 不联网；当前 Runtime 将 <code>real</code> 和 <code>hybrid</code> 都视为显式允许真实来源请求的模式，二者使用相同的绑定、审核和发布门禁。<code>refresh_official_sources=true</code> 配合 <code>mock</code> 会被请求校验拒绝；<code>real</code> 或 <code>hybrid</code> 配合 <code>refresh_official_sources=false</code> 只记录模式，不发起网络请求。真实刷新还必须限定具体项目并通过管理员授权。
+
+## 🔌 Runtime API
+
+### 创建工作流
+
+~~~json
+POST /api/agent/workflows
+{
+  "goal": "program_recommendation",
+  "profile": {
+    "education": {
+      "school": "Example University",
+      "major": "Computer Science",
+      "gpa": "3.6/4.0"
+    },
+    "discipline_interests": ["data science"]
+  },
+  "user_request": "寻找香港和新加坡的数据相关硕士项目",
+  "selected_program_ids": [],
+  "document_type": "PS",
+  "source_connection_mode": "mock",
+  "refresh_official_sources": false
+}
+~~~
+
+完整学生档案示例见 [examples/sample_profile.json](examples/sample_profile.json)。
+
+### 补充学生资料
+
+~~~json
+POST /api/agent/workflows/{workflow_id}/resume
+{
+  "user_message": "{\"language\": {\"test\": \"IELTS\", \"overall\": 7.0}}",
+  "human_resolution": null
+}
+~~~
+
+### 批准精确工具调用
+
+~~~json
+POST /api/agent/workflows/{workflow_id}/resume
+{
+  "human_resolution": {
+    "action": "approve_tool",
+    "approval_id": "approval_...",
+    "note": "已核对本次调用的项目、URL、字段、snapshot_id 与 page_hash"
+  }
+}
+~~~
+
+### 解决证据冲突
+
+~~~json
+POST /api/agent/workflows/{workflow_id}/resume
+{
+  "human_resolution": {
+    "action": "resolve_conflicts",
+    "conflict_resolutions": [
+      {
+        "conflict_id": "conflict_group_...",
+        "action": "accept",
+        "selected_record_id": "evidence_record_...",
+        "reviewer_note": "当前项目页与申请季信息一致"
+      }
+    ]
+  }
+}
+~~~
+
+管理员提交 Human Review 时需携带与 <code>HARBOR_AGENT_ADMIN_TOKEN</code> 对应的 <code>x-harbor-admin-token</code>。本地工作流 owner 来自创建请求的签名 profile cookie，reviewer 来自管理员令牌对应的服务端审计身份；两者相同时请求会被拒绝。<code>approval_id</code>、<code>conflict_id</code> 和 <code>selected_record_id</code> 均应从当前工作流的 <code>human_review_item</code> 读取，示例中的省略号不是固定值。
+
+常用接口：
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| <code>POST</code> | <code>/api/agent/workflows</code> | 创建并运行工作流 |
+| <code>GET</code> | <code>/api/agent/workflows/{workflow_id}</code> | 读取工作流状态 |
+| <code>POST</code> | <code>/api/agent/workflows/{workflow_id}/resume</code> | 补充资料或提交 Human Review |
+| <code>GET</code> | <code>/api/agent/workflows/{workflow_id}/trace</code> | 查看 Agent、Tool 与模型事件 |
+| <code>GET</code> | <code>/api/agent/workflows/{workflow_id}/state</code> | 查看最近 checkpoint |
+| <code>GET</code> | <code>/api/agent-system</code> | 查看 Agent、Tool、权限和执行图 |
+| <code>GET</code> | <code>/api/admin/decision-coverage</code> | 查看正式 DecisionFact 覆盖率 |
 
 ## 🧪 验证
 
-如需检查本地环境，可按需要运行：
-
-~~~bash
+~~~powershell
+# Python 回归测试
 python -m pytest -q
+
+# 确定性 Agent Eval
 python -B scripts/run_agent_evals.py
 
+# 完整模型驱动路径的可复现回放
+python -B scripts/run_agent_evals.py --model-replay
+
+# 可选：使用已配置的真实模型运行指定用例
+python -B scripts/run_agent_evals.py --live-model --case-id normal_background_assessment
+
+# 前端类型检查与生产构建
 cd web
 npm run typecheck
 npm run build
 ~~~
 
-其中 deterministic eval 用于检查路由、工具权限和来源门禁等可重复行为；真实 LLM 的质量、延迟和成本应在受控环境中单独评估，不能用 mock 结果替代。
+确定性 Eval 检查路由、工具权限、暂停恢复、预算与招生资格分离、来源安全和 formal gate。<code>--model-replay</code> 会经过完整的模型驱动 Supervisor/Specialist 代码路径，但不用于衡量外部模型质量；<code>--live-model</code> 才会调用已配置的外部 provider。
 
-## ⚠️ 当前边界
+## 📂 项目结构
 
-HarborPilot 是可信申请信息辅助系统，不替代学校官网、招生办公室、签约顾问或正式法律 / 财务建议。项目库可能包含上一申请季参考、抽取候选或待人工确认字段；在做正式申请决策前，请以当前申请季的官方来源和人工审核结论为准。
+~~~text
+src/harbor_agent/agents/          八个运行时 Agent
+src/harbor_agent/runtime/         State、Decision、Executor、Graph、Checkpoint
+src/harbor_agent/tools/           强类型 Tool 与 ToolRegistry
+src/harbor_agent/policies/        工具权限、来源安全与正式使用策略
+src/harbor_agent/services/        业务规则、证据、ClaimGraph 与持久化
+src/harbor_agent/llm/             OpenAI-compatible provider 与结构化响应
+src/harbor_agent/observability/   Runtime Trace、事件与用量
+src/harbor_agent/evals/           Agent Eval runner、断言与指标
+data/agent_eval_cases.json        可重复的评测用例
+web/                              Next.js 前端与 Agent Lab
+~~~
+
+更详细的执行拓扑与门禁说明见 [docs/agent-workflow.md](docs/agent-workflow.md)。
+
+## ⚠️ 使用边界
+
+- HarborPilot 不提供录取保证；匹配分数是策略评分，不是录取概率。
+- 招生资格、财务预算、个人偏好和申请人 Fit 分开计算，预算或偏好不会改写学校要求。
+- 默认 <code>mock</code> 模式不联网；真实来源刷新必须显式选择 <code>real</code> 或 <code>hybrid</code>、指定项目范围并通过管理员授权。
+- 网页内容始终视为不可信数据；抓取、抽取或保存 candidate 不等于审核发布。
+- 正式申请决策仍应以当前申请季学校官网、招生办公室和独立人工核验结果为准。

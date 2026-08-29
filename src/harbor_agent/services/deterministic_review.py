@@ -6,6 +6,7 @@ from typing import Any
 
 from harbor_agent.models import ProgramMatch, WritingDraft
 from harbor_agent.services.claim_graph import build_claim_graph, claim_graph_passed
+from harbor_agent.services.field_contract import FORMAL_RECOMMENDATION_FIELDS
 from harbor_agent.services.formal_gate import CRITICAL_TIMELINE_FIELDS, program_field_gate
 
 
@@ -15,13 +16,14 @@ def run_review_gate(
     *,
     writing_ready: bool = False,
     writing_required: bool = True,
+    student_facts: Any = None,
 ) -> dict[str, Any]:
     """Evaluate fixed admissions, source and writing gates without routing.
 
-    A legacy caller cannot obtain a formal pass merely by sending an empty
-    ``review_flags`` array.  When writing is in scope, a separate runtime
-    ClaimGraph validation turn must have set ``writing_ready`` and the graph
-    must still pass when rebuilt from current DecisionFacts.
+    An empty ``review_flags`` array is not evidence of a formal pass.  When
+    writing is in scope, a separate runtime ClaimGraph validation turn must
+    have set ``writing_ready`` and the graph must still pass when rebuilt from
+    current DecisionFacts.
     """
 
     active_matches = [item for item in matches if item.tier != "not_recommended"]
@@ -31,6 +33,11 @@ def run_review_gate(
         program_id
         for program_id, gate in field_gates.items()
         if gate["missing_or_blocked_fields"]
+    ]
+    programs_with_formal_blockers = [
+        program_id
+        for program_id, gate in field_gates.items()
+        if not gate["formal_recommendation_ready"]
     ]
     timeline_blockers = {
         program_id: gate["missing_or_blocked_fields"]
@@ -43,14 +50,39 @@ def run_review_gate(
         if gate["previous_cycle_fields"]
     }
     programs_requiring_current_cycle_review = sorted(
-        set(programs_with_missing_or_blocked_fields) | set(previous_cycle_reference_fields)
+        set(programs_with_formal_blockers)
+        | set(programs_with_missing_or_blocked_fields)
+        | set(previous_cycle_reference_fields)
     )
-    graph = build_claim_graph(writing, matches) if writing is not None else None
-    claim_grounding_ready = claim_graph_passed(graph)
-    writing_blockers = list(graph.blockers) if graph is not None else ["writing draft is missing"]
+    formal_blockers = [
+        f"{program_id}: {blocker}"
+        for program_id, gate in field_gates.items()
+        for blocker in gate["formal_blockers"]
+    ]
+    graph = (
+        build_claim_graph(writing, matches, student_facts=student_facts)
+        if writing is not None
+        else None
+    )
+    claim_grounding_ready = (
+        claim_graph_passed(graph) if writing_required else True
+    )
+    writing_blockers = (
+        list(graph.blockers)
+        if writing_required and graph is not None
+        else ["writing draft is missing"]
+        if writing_required
+        else []
+    )
     if writing_required and not writing_ready:
         writing_blockers.append("WritingAgent 尚未完成独立 ClaimGraph 验证。")
     writing_blockers = list(dict.fromkeys(writing_blockers))
+    gate_blockers = [
+        *[f"{program_id}: admissions eligibility did not pass" for program_id in hard_violations],
+        *formal_blockers,
+        *writing_blockers,
+    ]
+    gate_blockers = list(dict.fromkeys(gate_blockers))
     unbound_warning = (
         "文书尚未通过 ClaimGraph 与独立 runtime 验证，不能作为最终提交稿。"
         if writing_required and (not writing_ready or not claim_grounding_ready)
@@ -67,15 +99,22 @@ def run_review_gate(
         "hard_rule_violations": hard_violations,
         "programs_requiring_data_review": programs_requiring_current_cycle_review,
         "programs_with_missing_or_blocked_fields": programs_with_missing_or_blocked_fields,
+        "programs_with_formal_blockers": programs_with_formal_blockers,
         "programs_requiring_current_cycle_review": programs_requiring_current_cycle_review,
         "timeline_blockers": timeline_blockers,
+        "formal_blockers": {
+            program_id: gate["formal_blockers"]
+            for program_id, gate in field_gates.items()
+            if gate["formal_blockers"]
+        },
         "previous_cycle_reference_fields": previous_cycle_reference_fields,
         "required_timeline_fields": CRITICAL_TIMELINE_FIELDS,
+        "required_formal_fields": list(FORMAL_RECOMMENDATION_FIELDS),
         "writing_review": unbound_warning,
         "writing_ready": writing_ready,
         "claim_grounding_ready": claim_grounding_ready,
         "claim_graph": graph.model_dump(mode="json") if graph is not None else None,
-        "blockers": writing_blockers,
+        "blockers": gate_blockers,
         "human_gates": [
             "正式提交倒推必须同时具备项目详情页、截止日期、申请入口、语言要求、材料清单和学费的字段级当前季官网证据。",
             "只有上一申请季证据时，只能生成带年份标注的准备动作，不能生成正式 DDL 倒推。",

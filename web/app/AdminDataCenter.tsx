@@ -182,6 +182,7 @@ function AgentRuntimePanel({ runtimeWorkflows, modelProvider, modelName, runtime
   const [detailLoading, setDetailLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [resumeText, setResumeText] = useState("");
+  const [selectedRecordIds, setSelectedRecordIds] = useState<Record<string, string>>({});
   const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -242,7 +243,7 @@ function AgentRuntimePanel({ runtimeWorkflows, modelProvider, modelName, runtime
     }
   }
 
-  async function resumeWorkflow(review?: { action: "approve_tool" | "reject_tool" } | { action: "accept" | "reject"; conflictId: string }) {
+  async function resumeWorkflow(review?: { action: "approve_tool" | "reject_tool" } | { action: "accept" | "reject"; conflictId: string; selectedRecordId?: string }) {
     if (!workflowState) return;
     const waitingForUser = workflowState.status === "WAITING_USER";
     if (waitingForUser && !resumeText.trim()) {
@@ -255,6 +256,10 @@ function AgentRuntimePanel({ runtimeWorkflows, modelProvider, modelName, runtime
       if (waitingForUser || workflowState.status === "FAILED_RETRYABLE") {
         payload = { user_message: resumeText.trim() };
       } else if (review && "conflictId" in review) {
+        if (review.action === "accept" && !review.selectedRecordId) {
+          setMessage("接受冲突前必须选择具体的 evidence record。冲突 ID 不能作为 record ID。");
+          return;
+        }
         payload = {
           human_resolution: {
             action: "resolve_conflicts",
@@ -262,7 +267,7 @@ function AgentRuntimePanel({ runtimeWorkflows, modelProvider, modelName, runtime
             conflict_resolutions: [{
               conflict_id: review.conflictId,
               action: review.action,
-              selected_record_id: review.action === "accept" ? review.conflictId : undefined,
+              selected_record_id: review.action === "accept" ? review.selectedRecordId : undefined,
               reviewer_note: resumeText.trim() || undefined,
             }],
           },
@@ -306,6 +311,8 @@ function AgentRuntimePanel({ runtimeWorkflows, modelProvider, modelName, runtime
   const totalTokens = trace.reduce((total, event) => total + (event.total_tokens ?? 0), 0);
   const currentTask = workflowState?.tasks.find((task) => task.status === "RUNNING") ?? workflowState?.tasks.find((task) => task.status === "BLOCKED") ?? null;
   const canResume = workflowState?.status === "WAITING_USER" || workflowState?.status === "WAITING_HUMAN" || workflowState?.status === "FAILED_RETRYABLE";
+  const humanReviewItem = workflowState?.human_review_item ?? null;
+  const conflictGroups = humanReviewItem?.conflict_groups ?? [];
 
   return <IslandCard className="panel-card agent-runtime-panel runtime-workbench">
     <div className="runtime-workbench-head">
@@ -361,7 +368,26 @@ function AgentRuntimePanel({ runtimeWorkflows, modelProvider, modelName, runtime
             <label>{workflowState.status === "WAITING_USER" ? "补充给 Agent 的信息" : "审核备注（可选）"}<textarea value={resumeText} onChange={(event) => setResumeText(event.target.value)} placeholder={workflowState.status === "WAITING_USER" ? "例如：已取得 IELTS 7.0，单项均不低于 6.5。" : "记录你核对的原始来源与判断依据。"} /></label>
             {workflowState.status === "WAITING_USER" || workflowState.status === "FAILED_RETRYABLE" ? <button type="button" className="runtime-start primary" onClick={() => void resumeWorkflow()} disabled={detailLoading}><ArrowRight size={14} aria-hidden />继续工作流</button> : null}
             {workflowState.status === "WAITING_HUMAN" && workflowState.pending_tool_approval ? <article className="runtime-callout human"><strong>精确工具授权</strong><p>{workflowState.pending_tool_approval.agent_name} · {workflowState.pending_tool_approval.tool_name}</p><small>call {workflowState.pending_tool_approval.tool_call_id} · args {workflowState.pending_tool_approval.arguments_sha256.slice(0, 12)}</small><pre>{JSON.stringify(workflowState.pending_tool_approval.arguments, null, 2)}</pre><div className="runtime-goal-actions"><button type="button" className="runtime-start primary" onClick={() => void resumeWorkflow({ action: "approve_tool" })} disabled={detailLoading}>批准这一次调用</button><button type="button" className="runtime-start" onClick={() => void resumeWorkflow({ action: "reject_tool" })} disabled={detailLoading}>拒绝</button></div></article> : null}
-            {workflowState.status === "WAITING_HUMAN" && !workflowState.pending_tool_approval ? <div className="evidence-list">{workflowState.verification_conflicts.map((conflict) => { const conflictId = String(conflict.conflict_id ?? ""); return <article key={conflictId}><div className="program-title-row"><strong>{String(conflict.field_name ?? "evidence conflict")}</strong><span className="tier-pill">{String(conflict.program_id ?? "unknown programme")}</span></div><p>{String(conflict.evidence_snippet ?? conflict.value ?? "请打开原始来源核对该记录。")}</p>{conflict.source_url ? <a className="text-link" href={String(conflict.source_url)} target="_blank" rel="noreferrer">打开来源</a> : null}<small>{conflictId}</small><div className="runtime-goal-actions"><button type="button" className="runtime-start primary" onClick={() => void resumeWorkflow({ action: "accept", conflictId })} disabled={!conflictId || detailLoading}>接受该记录</button><button type="button" className="runtime-start" onClick={() => void resumeWorkflow({ action: "reject", conflictId })} disabled={!conflictId || detailLoading}>拒绝该记录</button></div></article>; })}</div> : null}
+            {workflowState.status === "WAITING_HUMAN" && !workflowState.pending_tool_approval ? <div className="evidence-list">
+              {conflictGroups.length ? conflictGroups.map((group) => {
+                const conflictId = String(group.conflict_id ?? "");
+                const selectedRecordId = selectedRecordIds[conflictId] ?? "";
+                return <article key={conflictId}>
+                  <div className="program-title-row"><strong>Evidence conflict</strong><span className="tier-pill">{conflictId}</span></div>
+                  <p>请选择一个具体的 evidence record 作为权威来源；不能把 conflict ID 当作 record ID。</p>
+                  <div className="coverage-list">
+                    {group.records.map((record) => {
+                      const recordId = String(record.record_id ?? record.evidence_id ?? "");
+                      return <label className="coverage-item" key={recordId}>
+                        <input type="radio" name={`conflict-${conflictId}`} value={recordId} checked={selectedRecordId === recordId} onChange={() => setSelectedRecordIds((current) => ({ ...current, [conflictId]: recordId }))} />
+                        <span><strong>{recordId || "missing durable record ID"}</strong><br />{String(record.field_name ?? "")} · {String(record.value ?? "")}{record.page_hash ? ` · ${String(record.page_hash).slice(0, 20)}` : ""}</span>
+                      </label>;
+                    })}
+                  </div>
+                  <div className="runtime-goal-actions"><button type="button" className="runtime-start primary" onClick={() => void resumeWorkflow({ action: "accept", conflictId, selectedRecordId })} disabled={!conflictId || !selectedRecordId || detailLoading}>接受选中的 record</button><button type="button" className="runtime-start" onClick={() => void resumeWorkflow({ action: "reject", conflictId })} disabled={!conflictId || detailLoading}>拒绝该冲突组</button></div>
+                </article>;
+              }) : <RuntimeCallout tone="error" title="审核项不可用" text="当前 checkpoint 没有可执行的证据冲突组。" />}
+            </div> : null}
           </div> : null}
         </>}
       </section>
