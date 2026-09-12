@@ -2,20 +2,20 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class TraceEventType(str, Enum):
-    WORKFLOW_START = "WORKFLOW_START"
     WORKFLOW_END = "WORKFLOW_END"
     WORKFLOW_STARTED = "WORKFLOW_STARTED"
     WORKFLOW_COMPLETED = "WORKFLOW_COMPLETED"
     SUPERVISOR_ROUTE = "SUPERVISOR_ROUTE"
     AGENT_STARTED = "AGENT_STARTED"
-    AGENT_START = "AGENT_START"
     AGENT_END = "AGENT_END"
-    AGENT_ENDED = "AGENT_ENDED"
+    POLICY_CHECK = "POLICY_CHECK"
+    HUMAN_RESOLUTION = "HUMAN_RESOLUTION"
     AGENT_DECISION = "AGENT_DECISION"
     LLM_REQUEST = "LLM_REQUEST"
     LLM_RESPONSE = "LLM_RESPONSE"
@@ -36,6 +36,12 @@ class RuntimeTraceEvent(BaseModel):
 
     event_id: str
     workflow_id: str
+    execution_id: str | None = None
+    trace_id: str | None = None
+    span_id: str | None = None
+    parent_span_id: str | None = None
+    sequence: int | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
     parent_event_id: str | None = None
     event_type: TraceEventType
     agent_name: str | None = None

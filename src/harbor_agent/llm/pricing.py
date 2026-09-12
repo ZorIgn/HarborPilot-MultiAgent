@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+from math import isfinite
 from pathlib import Path
+from typing import Any
 
 from harbor_agent.llm.response import LLMUsage
-
 
 _PRICING_PATH = Path(__file__).resolve().parents[3] / "data" / "model_pricing.json"
 
@@ -27,11 +28,33 @@ def calculate_cost_usd(provider: str | None, model: str | None, usage: LLMUsage)
     prices = load_model_pricing().get(f"{provider}/{model}") or load_model_pricing().get(model)
     if prices is None:
         return None
-    input_tokens = max(0, usage.prompt_tokens - (usage.cached_tokens or 0))
-    cached_tokens = max(0, usage.cached_tokens or 0)
+
+    input_price = _price(prices.get("input_per_1m"))
+    output_price = _price(prices.get("output_per_1m"))
+    if input_price is None or output_price is None:
+        return None
+
+    cached_tokens = usage.cached_tokens or 0
+    if cached_tokens < 0 or cached_tokens > usage.prompt_tokens:
+        return None
+    cached_price = 0.0
+    if cached_tokens:
+        cached_price = _price(prices.get("cached_input_per_1m"))
+        if cached_price is None:
+            return None
+    input_tokens = usage.prompt_tokens - cached_tokens
     return round(
-        input_tokens * float(prices.get("input_per_1m", 0)) / 1_000_000
-        + cached_tokens * float(prices.get("cached_input_per_1m", prices.get("input_per_1m", 0))) / 1_000_000
-        + usage.completion_tokens * float(prices.get("output_per_1m", 0)) / 1_000_000,
+        input_tokens * input_price / 1_000_000
+        + cached_tokens * cached_price / 1_000_000
+        + usage.completion_tokens * output_price / 1_000_000,
         8,
     )
+
+
+def _price(value: Any) -> float | None:
+    """Return a configured non-negative finite price, preserving missing data."""
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    price = float(value)
+    return price if isfinite(price) and price >= 0 else None

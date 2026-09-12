@@ -10,6 +10,9 @@ from pydantic import BaseModel, Field
 from harbor_agent.evals.assertions import evaluate_expectations
 from harbor_agent.evals.metrics import aggregate_eval_metrics
 from harbor_agent.llm.provider import RuntimeLLMProvider
+from harbor_agent.observability.events import TraceEventType
+from harbor_agent.observability.langfuse_sink import get_langfuse_sink
+from harbor_agent.observability.trace import RuntimeTracer, evaluation_context
 from harbor_agent.runtime.limits import RuntimeLimits
 from harbor_agent.runtime.state import WorkflowGoal
 from harbor_agent.runtime.workflow import (
@@ -62,8 +65,12 @@ class AgentEvalRunner:
         llm: RuntimeLLMProvider | None = None,
         model_driven: bool = False,
         mode_name: str | None = None,
+        capture_synthetic_content: bool = False,
     ) -> None:
         self.cases_path = cases_path or Path("data/agent_eval_cases.json")
+        if capture_synthetic_content and self.cases_path.resolve() != Path("data/agent_eval_cases.json").resolve():
+            raise ValueError("synthetic content capture requires the repository evaluation fixtures")
+        self.capture_synthetic_content = capture_synthetic_content
         self.llm = llm
         self.model_driven = bool(llm is not None and model_driven)
         self.mode_name = (
@@ -99,9 +106,32 @@ class AgentEvalRunner:
         }
 
     def run_case(self, case: AgentEvalCase) -> dict[str, Any]:
+        with evaluation_context(case.case_id, capture_synthetic=self.capture_synthetic_content):
+            result = self._run_case(case)
+        trace_ids = list(dict.fromkeys(event["trace_id"] for event in result["trace_events"] if event.get("trace_id")))
+        result["trace_ids"] = trace_ids
+        modes = {event.get("metadata", {}).get("mode") for event in result["trace_events"] if event.get("event_type") == "LLM_REQUEST"}
+        result["mode"] = "live_model" if "live_model" in modes else "model_replay" if "model_replay" in modes else "deterministic"
+        sink = get_langfuse_sink()
+        if sink is not None:
+            for trace_id in trace_ids:
+                sink.score(trace_id=trace_id, case_id=case.case_id, passed=result["passed"])
+        return result
+
+    def _run_case(self, case: AgentEvalCase) -> dict[str, Any]:
         profile = _profile_with_patch(case.profile_patch)
         if case.operation != "workflow":
-            return self._run_injected_case(case, profile)
+            if case.operation in {"resume_after_user", "workflow_max_step", "human_resume"}:
+                return self._run_injected_case(case, profile)
+            from uuid import uuid4
+
+            tracer = RuntimeTracer(f"eval_{case.case_id}_{uuid4().hex[:10]}")
+            with tracer.scope("evaluation.case", "span", TraceEventType.WORKFLOW_STARTED, TraceEventType.WORKFLOW_END) as observation:
+                result = self._run_injected_case(case, profile, tracer=tracer)
+                observation.metadata["status"] = result["status"]
+                observation.output = {"passed": result["passed"], "status": result["status"]}
+            result["trace_events"] = tracer.persisted()
+            return result
         limits = RuntimeLimits.model_validate({**RuntimeLimits().model_dump(), **case.limit_overrides})
         runtime = MultiAgentRuntime(
             llm=self.llm,
@@ -155,7 +185,7 @@ class AgentEvalRunner:
         }
 
 
-    def _run_injected_case(self, case: AgentEvalCase, profile: dict[str, Any]) -> dict[str, Any]:
+    def _run_injected_case(self, case: AgentEvalCase, profile: dict[str, Any], *, tracer: RuntimeTracer | None = None) -> dict[str, Any]:
         """Run a failure/recovery fixture against the same executor and registry."""
 
         from uuid import uuid4
@@ -167,7 +197,6 @@ class AgentEvalRunner:
         from harbor_agent.agents.verification import VerificationAgent
         from harbor_agent.llm.provider import DeterministicMockToolCallingProvider
         from harbor_agent.llm.response import LLMResponse, LLMToolCall, LLMUsage
-        from harbor_agent.observability.trace import RuntimeTracer
         from harbor_agent.runtime.checkpoint import save_checkpoint
         from harbor_agent.runtime.decision import AgentDecision, DecisionType, ToolCallRequest
         from harbor_agent.runtime.errors import LLMTimeoutError, ToolExecutionError
@@ -183,9 +212,9 @@ class AgentEvalRunner:
         from harbor_agent.tools.base import ToolDefinition
         from harbor_agent.tools.registry import ToolRegistry
 
-        workflow_id = f"eval_{case.case_id}_{uuid4().hex[:10]}"
+        workflow_id = tracer.workflow_id if tracer else f"eval_{case.case_id}_{uuid4().hex[:10]}"
         state = AgentState(workflow_id=workflow_id, goal=case.goal, raw_profile=profile)
-        tracer = RuntimeTracer(workflow_id)
+        tracer = tracer or RuntimeTracer(workflow_id)
         failures: list[str] = []
         operation_data: dict[str, Any] = {}
 

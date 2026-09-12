@@ -4,6 +4,13 @@ Keeping these errors separate lets the API distinguish a bad model response,
 an invalid tool request, and a workflow that needs a human decision.
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from harbor_agent.llm.response import LLMUsage
+
 
 class AgentRuntimeError(RuntimeError):
     """Base error for a runtime operation that cannot continue."""
@@ -33,8 +40,42 @@ class LLMTimeoutError(AgentRuntimeError):
     """The configured model provider timed out."""
 
 
+class LLMProviderError(AgentRuntimeError):
+    """The model provider failed before returning a usable model response."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        model: str | None = None,
+        provider: str | None = None,
+        received_response: bool = False,
+        http_status: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.model = model
+        self.provider = provider
+        self.received_response = received_response
+        self.http_status = http_status
+
+
 class LLMStructuredOutputError(AgentRuntimeError):
     """The configured model did not return the requested typed response."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        usage: LLMUsage | None = None,
+        model: str | None = None,
+        provider: str | None = None,
+        received_response: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.usage = usage
+        self.model = model
+        self.provider = provider
+        self.received_response = received_response
 
 
 class WorkflowLimitExceeded(AgentRuntimeError):

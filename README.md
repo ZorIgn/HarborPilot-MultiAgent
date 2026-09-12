@@ -83,7 +83,11 @@ flowchart TB
     E <--> ST[("Typed AgentState")]
     S <--> ST
     RT --> CP["Checkpoint / Resume"]
-    E --> TR["Runtime Trace"]
+    RT --> TR["Runtime Trace"]
+    E --> TR
+    T --> TR
+    TR --> DB
+    TR --> LF["Optional Langfuse Sink<br/>sanitized async export"]
     T --> HG{"Human Gate"}
     HG --> CP
     E -->|"HANDOFF"| S
@@ -99,6 +103,7 @@ flowchart TB
 | **ToolRegistry** | 校验 Pydantic 输入/输出并调用确定性服务 | 高风险工具必须携带与具体调用完全一致的一次性批准 |
 | **AgentState** | 保存工作流共享状态、证据缺口、任务、暂停信息和最终结果 | 顶层字段强类型校验；运行时字段不允许 Specialist 修改 |
 | **Checkpoint / Trace** | 支持暂停恢复并记录 Agent、Tool、错误和模型用量 | 恢复后仍需重新经过同一套策略与门禁 |
+| **Observability** | 本地 Runtime Trace、结构化 stderr JSON、可选 Langfuse 结构化观测 | 仅用于展示和评测，不参与批准、checkpoint 或路由 |
 
 ### 八个运行时 Agent
 
@@ -208,6 +213,7 @@ Critic 的 <code>critic_readiness</code> 使用三类交付结果：
 | 数据 | SQLite、字段级证据记录、来源快照 |
 | Agent Runtime | Supervisor 路由、Typed State、Tool Registry、Checkpoint、Trace |
 | 模型 | OpenAI-compatible Tool Calling Provider |
+| 可观测性 | 结构化 stderr JSON、可选 Langfuse Python SDK 4.15.2 |
 | 部署 | Docker Compose |
 
 ## 🚀 快速开始
@@ -262,6 +268,34 @@ HARBOR_AGENT_OPENAI_BASE_URL=https://api.openai.com/v1
 模型配置只改变 proposal 的生成方式，不改变工具权限、状态 ACL、证据门禁或 Human Review 规则。
 
 来源连接由工作流请求单独控制：<code>mock</code> 不联网；当前 Runtime 将 <code>real</code> 和 <code>hybrid</code> 都视为显式允许真实来源请求的模式，二者使用相同的绑定、审核和发布门禁。<code>refresh_official_sources=true</code> 配合 <code>mock</code> 会被请求校验拒绝；<code>real</code> 或 <code>hybrid</code> 配合 <code>refresh_official_sources=false</code> 只记录模式，不发起网络请求。真实刷新还必须限定具体项目并通过管理员授权。
+
+### 5. 可选 Langfuse 可观测性
+
+安装可选 SDK，并在后端进程所在环境配置 Langfuse：
+
+~~~powershell
+python -m pip install -e ".[observability]"
+~~~
+
+~~~dotenv
+HARBOR_AGENT_LANGFUSE_ENABLED=true
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
+LANGFUSE_TRACING_ENVIRONMENT=development
+LANGFUSE_RELEASE=harborpilot-local
+LANGFUSE_SAMPLE_RATE=1
+~~~
+
+本机部署将这些变量写入 <code>.env</code> 后重启后端；Docker Compose 将同样的变量写入 <code>.env</code>，把 <code>HARBOR_AGENT_LANGFUSE_ENABLED=true</code> 后运行 <code>docker compose up --build</code>。
+
+Langfuse Cloud 和自托管实例都支持；在对应 Langfuse 项目的设置中创建或复制 public/secret key。自托管时把 <code>LANGFUSE_BASE_URL</code> 设置为服务端的 HTTP(S) 地址，例如本机 <code>http://localhost:3000</code>，Docker Desktop 中 API 容器访问宿主机服务使用 <code>http://host.docker.internal:3000</code>。公网部署应使用 HTTPS。Langfuse 实例按官方 Cloud 或自托管文档独立配置。
+
+密钥只注入 API 服务运行环境，不进入镜像或前端。Runtime API 的每次工作流启动或恢复对应一个 execution/trace；eval CLI 的一个用例可能产生多个 execution/trace，例如包含 resume 的用例。它们共享 workflow ID 作为 Langfuse session；generation 会记录实际调用的 provider/model 标签。
+
+启用导出后默认只发送结构摘要，SQLite 继续保留本地审计事实；Langfuse 提供异步 best-effort 展示，审批与 checkpoint 仍由本地运行时处理，进程崩溃或远端故障可能丢失远端 span。FastAPI 与 eval CLI 会在退出时 flush；运行日志以带关联 ID 的 JSON 写入 stderr，日志轮转由部署环境负责。
+
+参考：[Langfuse SDK](https://langfuse.com/docs/observability/sdk/overview) · [Self-host Langfuse](https://langfuse.com/self-hosting)
 
 ## 🔌 Runtime API
 
@@ -360,6 +394,9 @@ python -B scripts/run_agent_evals.py --model-replay
 # 可选：使用已配置的真实模型运行指定用例
 python -B scripts/run_agent_evals.py --live-model --case-id normal_background_assessment
 
+# 可选：只将仓库合成评测用例的清洗后内容导出到 Langfuse
+python -B scripts/run_agent_evals.py --capture-synthetic-content
+
 # 前端类型检查与生产构建
 cd web
 npm run typecheck
@@ -367,6 +404,8 @@ npm run build
 ~~~
 
 确定性 Eval 检查路由、工具权限、暂停恢复、预算与招生资格分离、来源安全和 formal gate。<code>--model-replay</code> 会经过完整的模型驱动 Supervisor/Specialist 代码路径，但不用于衡量外部模型质量；<code>--live-model</code> 才会调用已配置的外部 provider。
+
+<code>--capture-synthetic-content</code> 只允许仓库内的合成评测用例，并会在导出前清洗模型和工具内容；它与 <code>--live-model</code> 独立，后者才会调用真实模型。启用 Langfuse 后，被采样的 eval execution trace 会关联 <code>case_passed</code> BOOLEAN score；一个 case 可能对应多个 trace，case 通过不等于 workflow 已完成。
 
 ## 📂 项目结构
 

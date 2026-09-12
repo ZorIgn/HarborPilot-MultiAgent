@@ -16,9 +16,9 @@ class LLMUsage(BaseModel):
 
     @property
     def total_tokens(self) -> int | None:
-        if self.prompt_tokens is None and self.completion_tokens is None:
+        if self.prompt_tokens is None or self.completion_tokens is None:
             return None
-        return (self.prompt_tokens or 0) + (self.completion_tokens or 0)
+        return self.prompt_tokens + self.completion_tokens
 
 
 class LLMToolCall(BaseModel):

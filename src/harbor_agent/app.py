@@ -4,11 +4,13 @@ import hashlib
 import hmac
 import re
 import secrets
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse
 
 from harbor_agent.agents.orchestrator import WorkflowDeliveryBlockedError, WorkflowOrchestrator
@@ -26,9 +28,9 @@ from harbor_agent.models import (
     CrawlQueueRequest,
     DataAcquisitionReport,
     DataAcquisitionRequest,
-    DecisionCoverageSummary,
     DataRefreshReport,
     DataRefreshRequest,
+    DecisionCoverageSummary,
     EvidenceGraphSummary,
     ProgramDataPackage,
     ProgramPlanResult,
@@ -40,8 +42,8 @@ from harbor_agent.models import (
     ReviewPublishRequest,
     ReviewPublishResponse,
     ReviewQueueSummary,
-    SourceHealthSummary,
     SourceConnectionMode,
+    SourceHealthSummary,
     StoryCard,
     WorkflowResult,
     WritingDraft,
@@ -49,6 +51,8 @@ from harbor_agent.models import (
     WritingPlanResult,
     WritingReviewRubric,
 )
+from harbor_agent.observability.langfuse_sink import get_langfuse_sink, shutdown_observability
+from harbor_agent.observability.logging import configure_logging
 from harbor_agent.services.agent_runtime import (
     claim_next_agent_job,
     enqueue_agent_job,
@@ -66,7 +70,6 @@ from harbor_agent.services.agent_runtime import (
 from harbor_agent.services.agent_worker import execute_agent_job
 from harbor_agent.services.catalog_auto_update import CatalogAutoUpdateService
 from harbor_agent.services.data_acquisition import ProgramDataAcquisitionService
-from harbor_agent.services.decision_coverage import build_decision_coverage_summary
 from harbor_agent.services.data_loader import (
     load_community_sources,
     load_cv_profile_schema,
@@ -77,6 +80,7 @@ from harbor_agent.services.data_loader import (
     load_taxonomy,
 )
 from harbor_agent.services.data_refresh import DataRefreshService
+from harbor_agent.services.decision_coverage import build_decision_coverage_summary
 from harbor_agent.services.evidence_graph import (
     build_evidence_graph_summary,
     build_program_trust_detail,
@@ -232,10 +236,21 @@ class AgentQueueRunResponse(BaseModel):
     message: str
     job: dict[str, Any] | None = None
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    configure_logging()
+    await run_in_threadpool(get_langfuse_sink)
+    try:
+        yield
+    finally:
+        await run_in_threadpool(shutdown_observability)
+
+
 app = FastAPI(
     title="HarborPilot AI API",
     version="0.1.0",
     description="Multi-agent admissions planning API for Hong Kong and Singapore applications.",
+    lifespan=lifespan,
 )
 
 app.add_middleware(

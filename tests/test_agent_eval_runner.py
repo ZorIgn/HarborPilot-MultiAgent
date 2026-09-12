@@ -151,13 +151,15 @@ def test_model_path_metrics_report_provider_response_coverage() -> None:
                 "expectations": {},
                 "trace_events": [
                     {"event_type": "LLM_REQUEST"},
-                    {"event_type": "LLM_RESPONSE"},
+                    {"event_type": "LLM_RESPONSE", "metadata": {"received_response": True}},
                 ],
             }
         ]
     )
 
     assert metrics["model_path_case_rate"] == 1.0
+    assert metrics["case_pass_rate"] == 1.0
+    assert metrics["workflow_completion_rate"] == 1.0
     assert metrics["llm_request_count"] == 1
     assert metrics["llm_response_rate"] == 1.0
 

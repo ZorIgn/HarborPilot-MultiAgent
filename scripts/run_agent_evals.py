@@ -13,9 +13,11 @@ SOURCE_ROOT = PROJECT_ROOT / "src"
 if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
-from harbor_agent.evals.runner import AgentEvalRunner
 from harbor_agent.evals.model_replay import PolicyEnvelopeReplayProvider
+from harbor_agent.evals.runner import AgentEvalRunner
 from harbor_agent.llm.provider import OpenAICompatibleToolCallingProvider
+from harbor_agent.observability.langfuse_sink import get_langfuse_sink, shutdown_observability
+from harbor_agent.observability.logging import configure_logging
 
 
 def _isolate_default_stores(target_dir: Path) -> None:
@@ -28,12 +30,13 @@ def _isolate_default_stores(target_dir: Path) -> None:
 
     from harbor_agent.services import (
         agent_runtime,
+        data_loader,
         information_store,
         profile_store,
         program_store,
         review_store,
+        source_snapshot,
     )
-    from harbor_agent.services import data_loader, source_snapshot
 
     target_dir.mkdir(parents=True, exist_ok=True)
     runtime_db = target_dir / "agent_runtime.sqlite"
@@ -90,12 +93,18 @@ def main() -> int:
         default=None,
         help="Keep the eval databases in this directory instead of a temporary directory.",
     )
+    parser.add_argument(
+        "--capture-synthetic-content", action="store_true",
+        help="Include sanitized model/tool content from repository evaluation fixtures in Langfuse.",
+    )
     args = parser.parse_args()
 
     keep_dir = args.db_dir is not None
     target_dir = args.db_dir or Path(tempfile.mkdtemp(prefix="harborpilot-evals-"))
     _isolate_default_stores(target_dir)
+    configure_logging()
     try:
+        get_langfuse_sink()
         provider = (
             _configured_live_provider()
             if args.live_model
@@ -117,6 +126,7 @@ def main() -> int:
             llm=provider,
             model_driven=provider is not None,
             mode_name=mode_name,
+            capture_synthetic_content=args.capture_synthetic_content,
         ).run(selected_ids or None)
         printable = report
         if not args.include_trace:
@@ -130,6 +140,7 @@ def main() -> int:
         print(json.dumps(printable, ensure_ascii=False, indent=2))
         return 0 if all(item["passed"] for item in report["results"]) else 1
     finally:
+        shutdown_observability()
         if not keep_dir:
             shutil.rmtree(target_dir, ignore_errors=True)
 

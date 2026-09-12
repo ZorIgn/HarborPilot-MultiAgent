@@ -17,6 +17,17 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def _offline_observability(monkeypatch: pytest.MonkeyPatch):
+    from harbor_agent.config import get_settings
+    from harbor_agent.observability.langfuse_sink import get_langfuse_sink, shutdown_observability
+
+    monkeypatch.setattr(get_settings(), "langfuse_enabled", False)
+    get_langfuse_sink.cache_clear()
+    yield
+    shutdown_observability()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_repo_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from harbor_agent.services import (
         agent_runtime,

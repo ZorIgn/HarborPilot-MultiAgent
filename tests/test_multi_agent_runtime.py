@@ -449,11 +449,12 @@ def test_model_decision_trace_uses_provider_tokens_and_retries_structured_output
     event_types = [item["event_type"] for item in events]
     assert event_types.count(TraceEventType.LLM_REQUEST.value) == 2
     assert TraceEventType.RETRY.value in event_types
-    response = next(item for item in events if item["event_type"] == TraceEventType.LLM_RESPONSE.value)
-    assert response["prompt_tokens"] == 11
-    assert response["completion_tokens"] == 7
-    assert response["total_tokens"] == 18
-    assert response["cost_usd"] is None
+    responses = [item for item in events if item["event_type"] == TraceEventType.LLM_RESPONSE.value]
+    assert len(responses) == 2
+    assert [item["prompt_tokens"] for item in responses] == [3, 11]
+    assert [item["completion_tokens"] for item in responses] == [1, 7]
+    assert sum(item["total_tokens"] for item in responses) == 22
+    assert all(item["cost_usd"] is None for item in responses)
 
 
 def test_model_driven_supervisor_executes_via_executor_and_records_llm_trace() -> None:

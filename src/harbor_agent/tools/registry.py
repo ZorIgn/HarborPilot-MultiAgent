@@ -7,7 +7,8 @@ from uuid import uuid4
 from pydantic import BaseModel, ValidationError
 
 from harbor_agent.observability.events import TraceEventType
-from harbor_agent.observability.trace import RuntimeTracer
+from harbor_agent.observability.trace import RuntimeTracer, arguments_digest
+from harbor_agent.observability.privacy import safe_content
 from harbor_agent.runtime.approval import canonical_tool_arguments
 from harbor_agent.runtime.errors import (
     HumanReviewRequired,
@@ -56,6 +57,37 @@ class ToolRegistry:
         ]
 
     def execute(
+        self, *, agent_name: str, allowed_tools: set[str], state: AgentState,
+        tool_name: str, arguments: dict[str, Any], tracer: RuntimeTracer,
+        tool_call_id: str | None = None, attempt: int = 1,
+    ) -> ToolExecution:
+        capture = tracer.context.get("synthetic_content") is True
+        definition = self._definitions.get(tool_name)
+        trace_tool_name = tool_name if definition else "unknown_tool"
+        with tracer.scope(
+            trace_tool_name, "tool", None, None,
+            agent_name=agent_name, tool_name=trace_tool_name,
+            metadata={"arguments_sha256": arguments_digest(arguments), "tool_executed": False, "attempt": attempt},
+            input=safe_content(arguments) if capture else {"input_fields": sorted(set(arguments) & set(definition.input_model.model_fields)) if definition else []},
+        ) as observation:
+            try:
+                result = self._execute(
+                    agent_name=agent_name, allowed_tools=allowed_tools, state=state,
+                    tool_name=tool_name, arguments=arguments, tracer=tracer, tool_call_id=tool_call_id,
+                )
+                observation.output = safe_content(result.output) if capture else {"output_fields": sorted(result.output)}
+                return result
+            except Exception as exc:
+                waiting = isinstance(exc, HumanReviewRequired)
+                observation.metadata.update(outcome="waiting_human" if waiting else "error")
+                tracer.emit(
+                    TraceEventType.TOOL_RESULT, error=None if waiting else exc,
+                    started_at=observation.started_at, started_perf=observation.started_perf,
+                    metadata={"outcome": observation.metadata["outcome"]}, export=False,
+                )
+                raise
+
+    def _execute(
         self,
         *,
         agent_name: str,
@@ -86,6 +118,7 @@ class ToolRegistry:
                 tool_name=tool_name,
                 tool_call_id=call_id,
                 input_summary=_summary(arguments),
+                starting=True, export=False,
             )
         try:
             parsed = definition.input_model.model_validate(arguments)
@@ -100,6 +133,8 @@ class ToolRegistry:
             raise ToolArgumentValidationError(f"invalid arguments for {tool_name}: {exc}") from exc
         canonical_arguments = parsed.model_dump(mode="json")
         arguments_json, arguments_sha256 = canonical_tool_arguments(canonical_arguments)
+        if tracer.current:
+            tracer.current.metadata["arguments_sha256"] = arguments_sha256
         approval_id: str | None = None
         pending = None
         active = state.active_tool_approval
@@ -133,10 +168,13 @@ class ToolRegistry:
                 tool_name=tool_name,
                 tool_call_id=call_id,
                 input_summary=_summary(canonical_arguments),
+                starting=True, export=False,
             )
         if definition.requires_human_review:
             if active is None:
                 assert pending is not None
+                if tracer.current:
+                    tracer.current.metadata["approval_id"] = pending.approval_id
                 raise HumanReviewRequired(
                     f"{tool_name} requires approval {pending.approval_id} for this exact call",
                     pending_approval=pending,
@@ -150,6 +188,8 @@ class ToolRegistry:
                 arguments_sha256=arguments_sha256,
             )
         try:
+            if tracer.current:
+                tracer.current.metadata.update(tool_executed=True, approval_id=approval_id)
             output = definition.handler(state, parsed)
             typed_output = definition.output_model.model_validate(output)
         except HumanReviewRequired:
@@ -164,6 +204,8 @@ class ToolRegistry:
             )
             raise ToolExecutionError(f"{tool_name} failed: {type(exc).__name__}") from exc
         serialized = typed_output.model_dump(mode="json")
+        if tracer.current:
+            tracer.current.metadata["outcome"] = "success"
         result_event = tracer.emit(
             TraceEventType.TOOL_RESULT,
             agent_name=agent_name,
@@ -171,6 +213,9 @@ class ToolRegistry:
             tool_call_id=call_id,
             parent_event_id=call_event.event_id,
             output_summary=_summary(serialized),
+            started_at=tracer.current.started_at if tracer.current else None,
+            started_perf=tracer.current.started_perf if tracer.current else None,
+            export=False,
         )
         _attach_execution_reference(
             serialized,

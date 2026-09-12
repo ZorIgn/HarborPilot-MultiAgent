@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from harbor_agent.llm.provider import RuntimeLLMProvider
 from harbor_agent.llm.response import LLMResponse
+from harbor_agent.observability.trace import observed_completion
 from harbor_agent.runtime.context import (
     append_assistant_tool_calls,
     build_agent_messages,
@@ -166,7 +167,8 @@ class BaseAgent(ABC):
 
         if not self.llm or not self.model_driven:
             return None
-        response = self.llm.complete(
+        response = observed_completion(
+            self.llm,
             messages=messages if messages is not None else self.build_model_messages(state),
             tools=tool_schemas,
             response_model=None,

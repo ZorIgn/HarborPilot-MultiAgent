@@ -782,6 +782,13 @@ def _ensure_multi_agent_schema() -> None:
             )
             """
         )
+        for column, ddl in (
+            ("execution_id", "TEXT"), ("trace_id", "TEXT"), ("span_id", "TEXT"),
+            ("parent_span_id", "TEXT"), ("sequence", "INTEGER"),
+            ("metadata_json", "TEXT NOT NULL DEFAULT '{}'"),
+        ):
+            _ensure_column(conn, "runtime_trace_events", column, ddl)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_runtime_trace_workflow ON runtime_trace_events(workflow_id)")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS llm_usage (
@@ -1001,24 +1008,31 @@ def record_runtime_trace_event(event: dict[str, Any]) -> None:
     # Trace rows are a persistence boundary too; sanitize before extracting
     # scalar columns so secrets cannot survive in summaries or diagnostics.
     event = sanitize_runtime_payload(event)
+    event["metadata_json"] = json.dumps(event.pop("metadata", {}) or {}, sort_keys=True, ensure_ascii=False)
     fields = [
         "event_id", "workflow_id", "parent_event_id", "event_type", "agent_name", "tool_name", "tool_call_id",
         "started_at", "finished_at", "duration_ms", "model", "provider", "prompt_tokens", "completion_tokens",
         "cached_tokens", "total_tokens", "cost_usd", "input_summary", "output_summary", "error_type", "error_message",
+        "execution_id", "trace_id", "span_id", "parent_span_id", "sequence", "metadata_json",
     ]
     values = [event.get(field) for field in fields]
     with closing(_connect()) as conn:
-        conn.execute(
-            f"INSERT OR REPLACE INTO runtime_trace_events ({', '.join(fields)}) VALUES ({', '.join('?' for _ in fields)})",
+        inserted = conn.execute(
+            f"INSERT INTO runtime_trace_events ({', '.join(fields)}) VALUES ({', '.join('?' for _ in fields)}) ON CONFLICT(event_id) DO NOTHING",
             values,
         )
-        if event.get("total_tokens") is not None:
+        if not inserted.rowcount:
+            existing = conn.execute("SELECT * FROM runtime_trace_events WHERE event_id = ?", (event["event_id"],)).fetchone()
+            if any(existing[key] != value for key, value in zip(fields, values)):
+                raise ValueError("trace event IDs cannot be reused for different payloads")
+            return
+        if any(event.get(field) is not None for field in ("prompt_tokens", "completion_tokens", "cached_tokens")):
             conn.execute(
                 """INSERT INTO llm_usage
                 (usage_id, workflow_id, trace_event_id, model, provider, prompt_tokens, completion_tokens, cached_tokens, total_tokens, cost_usd, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
-                    f"usage_{uuid4().hex[:16]}", event.get("workflow_id"), event.get("event_id"), event.get("model"),
+                    f"usage_{event['event_id']}", event.get("workflow_id"), event.get("event_id"), event.get("model"),
                     event.get("provider"), event.get("prompt_tokens"), event.get("completion_tokens"), event.get("cached_tokens"),
                     event.get("total_tokens"), event.get("cost_usd"), _now(),
                 ),
@@ -1030,10 +1044,13 @@ def list_runtime_trace_events(workflow_id: str) -> list[dict[str, Any]]:
     _ensure_multi_agent_schema()
     with closing(_connect()) as conn:
         rows = conn.execute(
-            "SELECT * FROM runtime_trace_events WHERE workflow_id = ? ORDER BY started_at ASC, event_id ASC",
+            "SELECT * FROM runtime_trace_events WHERE workflow_id = ? ORDER BY rowid ASC",
             (workflow_id,),
         ).fetchall()
-    return [dict(row) for row in rows]
+    events = [dict(row) for row in rows]
+    for event in events:
+        event["metadata"] = json.loads(event.pop("metadata_json", "{}") or "{}")
+    return events
 
 
 def _redact_runtime_payload(value: Any) -> Any:

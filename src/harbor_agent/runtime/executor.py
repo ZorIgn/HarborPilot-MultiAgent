@@ -2,17 +2,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from random import uniform
-from time import perf_counter, sleep
+from time import sleep
 from typing import Any
 
 from harbor_agent.agents.base import BaseAgent
 from harbor_agent.observability.events import TraceEventType
-from harbor_agent.observability.trace import RuntimeTracer
+from harbor_agent.observability.trace import RuntimeTracer, provider_mode
 from harbor_agent.runtime.context import append_tool_result as append_model_tool_result
 from harbor_agent.runtime.decision import AgentDecision, DecisionType, ToolCallRequest
 from harbor_agent.runtime.errors import (
     AgentDecisionValidationError,
     HumanReviewRequired,
+    LLMProviderError,
     LLMStructuredOutputError,
     LLMTimeoutError,
     ToolExecutionError,
@@ -73,18 +74,21 @@ class AgentExecutor:
         self.limits = limits
 
     def execute_agent(self, agent: BaseAgent, state: AgentState, tracer: RuntimeTracer) -> ExecutionOutcome:
-        turn_started = perf_counter()
         state = record_agent_turn(state, agent.name, self.limits)
-        tracer.emit(TraceEventType.AGENT_STARTED, agent_name=agent.name, input_summary=f"turn={state.agent_turn_counts[agent.name]}")
-        tracer.emit(TraceEventType.AGENT_START, agent_name=agent.name, input_summary=f"turn={state.agent_turn_counts[agent.name]}")
+        with tracer.scope(
+            agent.name, "agent", TraceEventType.AGENT_STARTED, TraceEventType.AGENT_END,
+            agent_name=agent.name,
+            metadata={"turn": state.agent_turn_counts[agent.name], "mode": provider_mode(agent.llm if agent.model_driven else None)},
+        ) as observation:
+            outcome = self._execute_agent(agent, state, tracer)
+            observation.output = {"decision": outcome.decision.decision.value, "status": outcome.state.status.value}
+            observation.metadata.update(observation.output)
+            if outcome.decision.decision == DecisionType.FAIL:
+                observation.metadata["outcome"] = "error"
+            return outcome
 
+    def _execute_agent(self, agent: BaseAgent, state: AgentState, tracer: RuntimeTracer) -> ExecutionOutcome:
         def finish(final_state: AgentState, final_decision: AgentDecision) -> ExecutionOutcome:
-            tracer.emit(
-                TraceEventType.AGENT_END,
-                agent_name=agent.name,
-                output_summary=f"decision={final_decision.decision.value}; status={final_state.status.value}",
-                started_perf=turn_started,
-            )
             return ExecutionOutcome(final_state, final_decision)
 
         conversation = agent.build_model_messages(state) if agent.llm and agent.model_driven else None
@@ -103,7 +107,7 @@ class AgentExecutor:
                     failed,
                     AgentDecision(decision=DecisionType.FAIL, reasoning_summary="Agent decision violated its runtime contract."),
                 )
-            tracer.emit(TraceEventType.AGENT_DECISION, agent_name=agent.name, output_summary=f"{decision.decision.value}: {decision.reasoning_summary}")
+            tracer.emit(TraceEventType.AGENT_DECISION, agent_name=agent.name, output_summary=f"{decision.decision.value}: {decision.reasoning_summary}", metadata={"decision": decision.decision.value, "next_agent": decision.next_agent, "selected_tools": [call.tool_name for call in decision.tool_calls]})
             if decision.state_patch:
                 state = apply_state_patch(
                     state,
@@ -207,6 +211,7 @@ class AgentExecutor:
                     arguments=call.arguments,
                     tracer=tracer,
                     tool_call_id=call.call_id,
+                    attempt=attempt + 1,
                 )
             except ToolExecutionError:
                 if attempt >= retries:
@@ -237,28 +242,21 @@ class AgentExecutor:
         max_attempts = 3
         last_error: Exception | None = None
         for attempt in range(1, max_attempts + 1):
-            started = perf_counter()
             policy = agent.step(state)
             model_tools = (
                 {call.tool_name for call in policy.tool_calls}
                 if policy.decision == DecisionType.CALL_TOOL
                 else set()
             )
-            tracer.emit(
-                TraceEventType.LLM_REQUEST,
-                agent_name=agent.name,
-                model=getattr(agent.llm, "name", None),
-                provider=getattr(agent.llm, "provider", None),
-                input_summary=f"structured_decision; policy_tools={len(model_tools)}; attempt={attempt}",
-                started_perf=started,
-            )
+            if tracer.current:
+                tracer.current.metadata["attempt"] = attempt
             try:
                 decision = agent.model_decision(
                     state,
                     self.registry.tool_schemas(model_tools),
                     messages=conversation,
                 )
-            except (LLMTimeoutError, LLMStructuredOutputError) as exc:
+            except (LLMTimeoutError, LLMProviderError, LLMStructuredOutputError) as exc:
                 last_error = exc
                 tracer.emit(
                     TraceEventType.ERROR,
@@ -266,8 +264,13 @@ class AgentExecutor:
                     model=getattr(agent.llm, "name", None),
                     provider=getattr(agent.llm, "provider", None),
                     error=exc,
-                    started_perf=started,
                 )
+                if isinstance(exc, LLMStructuredOutputError):
+                    tracer.emit(TraceEventType.POLICY_CHECK, agent_name=agent.name, metadata={
+                        "policy_result": "rejected", "reason_code": type(exc).__name__,
+                        "allowed_decision": policy.decision.value, "allowed_tools": sorted(model_tools),
+                        "attempt": attempt,
+                    })
                 if attempt < max_attempts:
                     if conversation is not None:
                         conversation.append(
@@ -290,23 +293,21 @@ class AgentExecutor:
                     sleep((0.1 * (2 ** (attempt - 1))) + uniform(0, 0.05))
                     continue
                 raise
-            response = agent.last_llm_response
-            tracer.emit(
-                TraceEventType.LLM_RESPONSE,
-                agent_name=agent.name,
-                model=getattr(agent.llm, "name", None),
-                provider=getattr(agent.llm, "provider", None),
-                usage=response.usage if response else None,
-                output_summary=(
-                    f"tool_calls={len(response.tool_calls)}"
-                    if response is not None
-                    else "structured AgentDecision"
-                ),
-                started_perf=started,
-            )
             if decision is None:
                 raise LLMStructuredOutputError("model decision unexpectedly empty")
-            self._validate_model_policy(agent, policy, decision)
+            try:
+                self._validate_model_policy(agent, policy, decision)
+            except LLMStructuredOutputError as exc:
+                tracer.emit(TraceEventType.POLICY_CHECK, agent_name=agent.name,
+                            metadata={"policy_result": "rejected", "reason_code": type(exc).__name__})
+                raise
+            tracer.emit(
+                TraceEventType.POLICY_CHECK,
+                agent_name=agent.name,
+                metadata={"policy_result": "accepted", "allowed_decision": policy.decision.value,
+                          "decision": decision.decision.value, "allowed_tools": sorted(model_tools),
+                          "selected_tools": [call.tool_name for call in decision.tool_calls], "attempt": attempt},
+            )
             return decision
         assert last_error is not None
         raise last_error

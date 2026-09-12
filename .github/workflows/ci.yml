@@ -25,6 +25,26 @@ jobs:
       - name: Run deterministic agent evaluations
         run: python -B scripts/run_agent_evals.py
 
+  observability:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: src:.
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install backend and Langfuse dependencies
+        run: python -m pip install -r requirements-dev.txt -r requirements-observability.txt
+      - name: Verify tracing with an offline Langfuse exporter
+        run: >-
+          python -m pytest -q
+          tests/test_langfuse_observability.py
+          tests/test_observability_runtime.py
+          tests/test_provider_observability.py
+          tests/test_observability_metrics.py
+
   frontend:
     runs-on: ubuntu-latest
     defaults:

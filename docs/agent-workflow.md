@@ -237,3 +237,121 @@ The runtime is bounded by workflow steps, agent turns, tool rounds, total tool
 calls, and Supervisor replans. Limits and checkpoints are persisted so a
 `WAITING_USER` or `WAITING_HUMAN` workflow can resume without skipping the
 same policy gates.
+
+## Optional Langfuse observability
+
+The runtime can mirror sanitized structural observations to Langfuse through
+the optional Python SDK (`langfuse==4.15.2`). Langfuse Cloud and a self-hosted
+instance use the same client; only credentials and the HTTP(S) base URL differ.
+Configure the external Langfuse instance with the official [Langfuse SDK
+documentation](https://langfuse.com/docs/observability/sdk/overview) and
+[self-hosting documentation](https://langfuse.com/self-hosting).
+
+Install the SDK only when the server or eval CLI will export observations:
+
+```bash
+python -m pip install -e '.[observability]'
+```
+
+The settings are server-side environment variables. The defaults keep export
+off and target Langfuse Cloud:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `HARBOR_AGENT_LANGFUSE_ENABLED` | `false` | Enable the optional sink and SDK initialization |
+| `LANGFUSE_PUBLIC_KEY` | unset | Langfuse public key |
+| `LANGFUSE_SECRET_KEY` | unset | Langfuse secret key |
+| `LANGFUSE_BASE_URL` | `https://cloud.langfuse.com` | Langfuse Cloud or self-hosted HTTP(S) endpoint |
+| `LANGFUSE_TRACING_ENVIRONMENT` | `development` | Langfuse environment label |
+| `LANGFUSE_RELEASE` | unset | Optional release label |
+| `LANGFUSE_SAMPLE_RATE` | `1` | Deterministic trace-level sampling rate from `0` to `1` |
+
+For a local self-hosted service use `http://localhost:3000` from a local API
+process. When the API runs in Docker Desktop and Langfuse runs on the host,
+use `http://host.docker.internal:3000`; a public deployment should use HTTPS.
+Create or copy the public and secret keys from the Langfuse project settings in
+Langfuse Cloud or in the self-hosted UI.
+The Compose file passes these values only to the API container. Set
+`HARBOR_AGENT_LANGFUSE_ENABLED=true` in the project `.env`, then run
+`docker compose up --build`; Compose passes the flag as
+`INSTALL_OBSERVABILITY` for the optional SDK build and as the API runtime
+setting. Langfuse keys are runtime environment values and are not copied into
+the image or exposed to the web application.
+
+### Lifecycle and identity
+
+FastAPI initializes the optional sink during application startup and calls its
+shutdown/flush path during application shutdown. The eval CLI initializes the
+same sink before running cases and flushes it in its `finally` path. Each
+normal workflow start and resume creates a new `execution_id` and `trace_id`;
+the stable `workflow_id` is used as the Langfuse session ID. The exported
+hierarchy is:
+
+```text
+workflow.run
+└── agent
+    ├── model.proposal (generation)
+    ├── tool
+    └── policy.check (guardrail)
+```
+
+Each Supervisor or Specialist turn has its own agent span. A model retry has
+its own generation, and a tool retry has its own tool span. Entering
+`WAITING_USER` or `WAITING_HUMAN` closes the current execution; human waiting
+time is excluded from execution latency. A resume starts another execution
+in the same session and records the typed human decision when applicable.
+
+The integration covers Runtime API workflow start/resume executions and the
+eval CLI. Generation observations carry the configured provider and model when
+an actual runtime proposal request is made. Replay providers are labelled
+`model_replay`, external providers `live_model`; a deterministic turn has no
+generation. Other standalone LLM endpoints are outside this runtime trace.
+
+The local SQLite runtime trace remains the audit record. Langfuse supplies an
+asynchronous, best-effort display; approvals, human review, checkpoints, and
+routing remain local runtime concerns. Telemetry delivery is best effort and
+not durably queued, so a process crash or exporter/remote failure can lose
+remote spans while local audit facts remain available.
+Missing credentials, unavailable SDK imports, or a failed exporter initialization
+disable remote export and emit a diagnostic. SDK export failures are isolated
+from workflow state transitions; local persistence errors remain runtime errors.
+
+### Export boundary
+
+Remote export begins when `HARBOR_AGENT_LANGFUSE_ENABLED=true`. Once enabled,
+the sink's default payload contains IDs, event types, agent/tool names, status,
+timing, model/provider labels, hashes, counts, and other allowlisted metadata.
+It exports structure summaries rather than student profiles, full text, raw
+prompts, raw tool arguments, or free-form human-review text. Local trace events
+may retain the audit fields needed by the runtime; the remote payload is
+filtered separately before it is sent.
+
+Runtime diagnostics are JSON records written to stderr and carry the
+`workflow_id`, `execution_id`, `trace_id`, and event identifiers where
+available. The deployment environment handles log rotation.
+
+### Eval capture and metrics
+
+`--capture-synthetic-content` is a separate opt-in for repository synthetic
+fixtures only. When enabled, model and tool content from those fixtures is
+sanitized for observations, including the local eval trace. Credential fields,
+email addresses and phone numbers are masked and long strings truncated.
+Remote export still requires the Langfuse enable switch. `--live-model`
+is the independent switch that calls the configured external provider. When
+Langfuse is enabled, each sampled execution trace produced by an eval case is
+associated with a `case_passed` BOOLEAN score. A resume case may produce
+multiple execution traces, and unsampled traces have no score. A passed case is
+an eval assertion and does not mean that the workflow reached `COMPLETED`.
+`case_pass_rate` counts each case once. `workflow_completion_rate` uses only
+`operation=workflow` cases and their final lifecycle status; injected safety
+probes are excluded. Langfuse trace scores are not a case-deduplicated aggregate.
+
+Eval aggregates report p50/p95 latency separately for workflow executions,
+LLM calls, and tool attempts that entered the handler; human-gate pauses are
+excluded from tool latency. Token and cost fields preserve known values
+when available and expose completeness flags instead of inferring missing
+usage. `known_cost_usd` sums costs calculable from known token usage and the
+repository's configured per-model token prices; `calculated_cost_usd` is
+populated only when every recorded LLM response has a known cost. A missing
+price or token count remains unknown. Langfuse may display
+its own price-table estimate, which is a UI estimate rather than a bill.

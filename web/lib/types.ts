@@ -231,9 +231,15 @@ export type RuntimeWorkflowListItem = {
 
 export type RuntimeTraceEventType =
   | "WORKFLOW_STARTED"
+  | "WORKFLOW_END"
   | "WORKFLOW_COMPLETED"
   | "SUPERVISOR_ROUTE"
   | "AGENT_STARTED"
+  | "AGENT_END"
+  | "LLM_REQUEST"
+  | "LLM_RESPONSE"
+  | "POLICY_CHECK"
+  | "HUMAN_RESOLUTION"
   | "AGENT_DECISION"
   | "TOOL_CALL"
   | "TOOL_RESULT"
@@ -251,6 +257,12 @@ export type RuntimeTraceEventType =
 export type RuntimeTraceEvent = {
   event_id: string;
   workflow_id: string;
+  execution_id: string | null;
+  trace_id: string | null;
+  span_id: string | null;
+  parent_span_id: string | null;
+  sequence: number | null;
+  metadata: Record<string, unknown>;
   parent_event_id: string | null;
   event_type: RuntimeTraceEventType;
   agent_name: string | null;
