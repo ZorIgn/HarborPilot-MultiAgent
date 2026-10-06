@@ -75,7 +75,7 @@ def test_human_conflict_resolution_is_typed_and_does_not_rewait() -> None:
     create_multi_agent_workflow(workflow_id, state.goal.value, state.model_dump(mode="json"))
     save_checkpoint(state)
 
-    response = TestClient(app).post(
+    response = TestClient(app, headers={"x-harbor-admin-token": "regression-admin-key"}).post(
         f"/api/agent/workflows/{workflow_id}/resume",
         json={
             "human_resolution": {

@@ -6,6 +6,9 @@ services:
       args:
         INSTALL_OBSERVABILITY: ${HARBOR_AGENT_LANGFUSE_ENABLED:-false}
     environment:
+      HARBOR_AGENT_DATA_DIR: /var/lib/harborpilot
+      HARBOR_AGENT_SEED_DIR: /app/data
+      HARBOR_AGENT_ADMIN_TOKEN: ${HARBOR_AGENT_ADMIN_TOKEN:?Set an administrator token}
       HARBOR_AGENT_LLM_MODE: ${HARBOR_AGENT_LLM_MODE:-mock}
       HARBOR_AGENT_OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       HARBOR_AGENT_OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4.1-mini}
@@ -17,8 +20,10 @@ services:
       LANGFUSE_TRACING_ENVIRONMENT: ${LANGFUSE_TRACING_ENVIRONMENT:-development}
       LANGFUSE_RELEASE: ${LANGFUSE_RELEASE:-}
       LANGFUSE_SAMPLE_RATE: ${LANGFUSE_SAMPLE_RATE:-1}
+    volumes:
+      - harborpilot_data:/var/lib/harborpilot
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
 
   web:
     build:
@@ -30,3 +35,6 @@ services:
     depends_on:
       - api
 
+
+volumes:
+  harborpilot_data:

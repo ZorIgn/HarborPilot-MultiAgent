@@ -32,6 +32,7 @@ from harbor_agent.runtime.state import (
     apply_state_patch,
 )
 from harbor_agent.services.agent_runtime import (
+    claim_workflow_resume,
     create_multi_agent_workflow,
     get_multi_agent_workflow,
     list_multi_agent_workflows,
@@ -162,6 +163,13 @@ class MultiAgentRuntime:
         *,
         reviewer_id: str | None = None,
         tracer: RuntimeTracer,
+    ) -> AgentState:
+        with claim_workflow_resume(workflow_id):
+            return self._resume_claimed(workflow_id, request, reviewer_id=reviewer_id, tracer=tracer)
+
+    def _resume_claimed(
+        self, workflow_id: str, request: WorkflowResumeRequest, *,
+        reviewer_id: str | None = None, tracer: RuntimeTracer,
     ) -> AgentState:
         state = load_checkpoint(workflow_id)
         if state is None:

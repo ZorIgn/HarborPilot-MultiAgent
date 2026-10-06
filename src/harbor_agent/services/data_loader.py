@@ -6,6 +6,9 @@ from pathlib import Path
 from typing import Any
 
 from harbor_agent.models import Program, SourceRegistry
+from harbor_agent.services.paths import DATA_DIR as DATA_DIR
+from harbor_agent.services.paths import ROOT as ROOT
+from harbor_agent.services.paths import seed_path
 from harbor_agent.services.program_store import DB_PATH as PROGRAM_DB_PATH
 from harbor_agent.services.program_store import (
     PROGRAM_JSON,
@@ -14,12 +17,9 @@ from harbor_agent.services.program_store import (
     program_catalog_revision,
 )
 
-ROOT = Path(__file__).resolve().parents[3]
-DATA_DIR = ROOT / "data"
-
 
 def load_json(name: str) -> Any:
-    with (DATA_DIR / name).open("r", encoding="utf-8") as handle:
+    with seed_path(name).open("r", encoding="utf-8") as handle:
         return json.load(handle)
 
 

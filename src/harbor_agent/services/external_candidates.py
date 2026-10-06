@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import json
-from functools import lru_cache
 from datetime import date
+from functools import lru_cache
 from typing import Any
 
 from harbor_agent.models import Program
-from harbor_agent.services.data_loader import DATA_DIR
+from harbor_agent.services.paths import seed_path
 
-
-QS_MASTER_IMPORT = DATA_DIR / "external_candidates" / "qs_master_applications_candidates.json"
+QS_MASTER_IMPORT = seed_path("external_candidates/qs_master_applications_candidates.json")
 
 
 @lru_cache(maxsize=1)

@@ -263,8 +263,6 @@ app.add_middleware(
 
 PROFILE_COOKIE_NAME = "harbor_profile_id"
 _PROFILE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{8,96}$")
-_ADMIN_SAFE_METHODS = {"GET", "HEAD"}
-_LOCAL_ADMIN_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
 
 @app.middleware("http")
@@ -273,7 +271,7 @@ async def admin_api_guard(request: Request, call_next):
         if not _admin_request_allowed(request):
             return JSONResponse(
                 status_code=403,
-                content={"detail": "Admin API 需要本机访问或管理员令牌。"},
+                content={"detail": "Admin API 需要管理员令牌。"},
             )
     return await call_next(request)
 
@@ -284,13 +282,6 @@ def _admin_request_allowed(request: Request) -> bool:
     if configured:
         return bool(supplied) and secrets.compare_digest(str(supplied), configured)
 
-    client_host = request.client.host if request.client else ""
-    if client_host == "testclient":
-        return True
-    if request.method in _ADMIN_SAFE_METHODS and client_host in _LOCAL_ADMIN_HOSTS:
-        return True
-    if settings.allow_insecure_local_admin and client_host in _LOCAL_ADMIN_HOSTS:
-        return True
     return False
 
 
@@ -1109,8 +1100,7 @@ def _admin_reviewer_id(request: Request) -> str:
         )
         digest = hashlib.sha256(str(supplied or "").encode("utf-8")).hexdigest()[:12]
         return f"admin_token:{digest}"
-    client_host = request.client.host if request.client else "unknown"
-    return "test_admin" if client_host == "testclient" else "local_admin"
+    raise HTTPException(status_code=403, detail="Authenticated administrator required")
 
 
 def _runtime_workflow_owner(workflow_id: str, request: Request) -> dict[str, Any]:
@@ -1120,7 +1110,7 @@ def _runtime_workflow_owner(workflow_id: str, request: Request) -> dict[str, Any
     if record is None:
         raise HTTPException(status_code=404, detail="未找到该 Agent 工作流。")
     profile_id = _verify_profile_cookie(request.cookies.get(PROFILE_COOKIE_NAME))
-    if record.get("owner_id") and record.get("owner_id") != profile_id and not _admin_request_allowed(request):
+    if (not record.get("owner_id") or record.get("owner_id") != profile_id) and not _admin_request_allowed(request):
         # Return 404 rather than leaking whether another student's workflow exists.
         raise HTTPException(status_code=404, detail="未找到该 Agent 工作流。")
     return record

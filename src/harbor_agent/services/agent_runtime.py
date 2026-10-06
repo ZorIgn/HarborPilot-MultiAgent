@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -9,7 +10,6 @@ from uuid import uuid4
 from harbor_agent.models import AgentStatus
 from harbor_agent.runtime.sanitizer import sanitize_runtime_payload
 from harbor_agent.services.data_loader import DATA_DIR
-
 
 DB_PATH = DATA_DIR / "agent_runtime.sqlite"
 
@@ -1057,3 +1057,31 @@ def _redact_runtime_payload(value: Any) -> Any:
     """Backward-compatible wrapper around the shared recursive sanitizer."""
 
     return sanitize_runtime_payload(value)
+
+
+@contextmanager
+def claim_workflow_resume(workflow_id: str):
+    """One resume across processes; retain crashed claims for explicit recovery.
+
+    Claims deliberately do not expire: a timeout cannot prove a worker stopped
+    issuing side effects. Operators may remove a crashed claim only after
+    stopping that worker. Normal completion and validation failures release it.
+    """
+    _ensure_multi_agent_schema()
+    token = str(uuid4())
+    with closing(_connect()) as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS workflow_resume_claims "
+                     "(workflow_id TEXT PRIMARY KEY, token TEXT NOT NULL, created_at TEXT NOT NULL)")
+        try:
+            conn.execute("INSERT INTO workflow_resume_claims VALUES (?, ?, ?)",
+                         (workflow_id, token, _now()))
+            conn.commit()
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("workflow resume is already in progress") from exc
+    try:
+        yield token
+    finally:
+        with closing(_connect()) as conn:
+            conn.execute("DELETE FROM workflow_resume_claims WHERE workflow_id = ? AND token = ?",
+                         (workflow_id, token))
+            conn.commit()

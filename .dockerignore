@@ -1,0 +1,12 @@
+**/.env
+**/.env.*
+!**/.env.example
+**/*.sqlite*
+**/.harborpilot_profile_secret
+**/.profile-secret-*
+data/snapshots/
+data/source_snapshots/
+data/*local*
+.git/
+web/node_modules/
+web/.next/

@@ -374,7 +374,7 @@ def test_persisted_review_publish_is_visible_to_student_catalog() -> None:
     )
     assert upsert_field_evidence_records([candidate]) == 1
 
-    client = TestClient(app)
+    client = TestClient(app, headers={"x-harbor-admin-token": "regression-admin-key"})
     queue_response = client.get(f"/api/admin/review-queue?program_id={program_id}&limit=10")
     assert queue_response.status_code == 200
     queue = queue_response.json()

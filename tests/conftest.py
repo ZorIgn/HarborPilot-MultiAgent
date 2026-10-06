@@ -53,3 +53,9 @@ def _isolate_repo_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
         tmp_path / "reviewed_field_evidence.local.json",
     )
     monkeypatch.setattr(source_snapshot, "SNAPSHOT_DIR", tmp_path / "source_snapshots")
+
+
+@pytest.fixture(autouse=True)
+def _explicit_test_admin(monkeypatch):
+    from harbor_agent.config import get_settings
+    monkeypatch.setattr(get_settings(), "admin_token", "regression-admin-key")

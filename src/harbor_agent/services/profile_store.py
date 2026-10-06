@@ -7,15 +7,16 @@ import json
 import os
 import secrets
 import sqlite3
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from harbor_agent.config import get_settings
 from harbor_agent.models import ApplicantProfileInput
+from harbor_agent.services.paths import DATA_DIR
 
-ROOT = Path(__file__).resolve().parents[3]
-DB_PATH = ROOT / "data" / "harborpilot.sqlite3"
+DB_PATH = DATA_DIR / "harborpilot.sqlite3"
 DEFAULT_PROFILE_ID = "local_student"
 PROTECTED_PREFIX = "hp1:"
 
@@ -277,10 +278,25 @@ def _secret_bytes(db_path: Path) -> bytes:
     if configured:
         return hashlib.sha256(configured.encode("utf-8")).digest()
     secret_path = db_path.parent / ".harborpilot_profile_secret"
-    if secret_path.exists():
-        return base64.urlsafe_b64decode(secret_path.read_text(encoding="utf-8").encode("ascii"))
-    secret = secrets.token_bytes(32)
-    secret_path.write_text(base64.urlsafe_b64encode(secret).decode("ascii"), encoding="utf-8")
+    secret_path.parent.mkdir(parents=True, exist_ok=True)
+    if not secret_path.exists():
+        # Publish only a fully written file. O_EXCL followed by write permits
+        # competing readers to see an empty or incomplete secret.
+        fd, temporary = tempfile.mkstemp(prefix=".profile-secret-", dir=secret_path.parent)
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(base64.urlsafe_b64encode(secrets.token_bytes(32)))
+                handle.flush()
+                os.fsync(handle.fileno())
+            try:
+                os.link(temporary, secret_path)
+            except FileExistsError:
+                pass
+        finally:
+            os.unlink(temporary)
+    secret = base64.urlsafe_b64decode(secret_path.read_bytes())
+    if len(secret) != 32:
+        raise ValueError("Invalid persisted profile secret; restore its backup")
     return secret
 
 

@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import json
 from functools import lru_cache
-from pathlib import Path
 from typing import Any
 
 from harbor_agent.services.data_loader import DATA_DIR
-
+from harbor_agent.services.paths import seed_path
 
 STRATEGY_PATH = DATA_DIR / "matching_strategy.json"
 
@@ -77,8 +76,9 @@ DEFAULT_STRATEGY: dict[str, Any] = {
 @lru_cache(maxsize=1)
 def load_matching_strategy() -> dict[str, Any]:
     if not STRATEGY_PATH.exists():
-        save_matching_strategy(DEFAULT_STRATEGY)
-        return DEFAULT_STRATEGY
+        seed = seed_path("matching_strategy.json")
+        initial = json.loads(seed.read_text(encoding="utf-8")) if seed.exists() else DEFAULT_STRATEGY
+        return save_matching_strategy(initial)
     with STRATEGY_PATH.open("r", encoding="utf-8") as handle:
         loaded = json.load(handle)
     return _normalize_strategy_bands(_deep_merge(DEFAULT_STRATEGY, _normalize_strategy_bands(loaded)))

@@ -14,13 +14,12 @@ from harbor_agent.models import (
     Program,
     ProgramFieldEvidence,
 )
+from harbor_agent.services.paths import DATA_DIR, seed_path
 
-ROOT = Path(__file__).resolve().parents[3]
-DATA_DIR = ROOT / "data"
 DB_PATH = DATA_DIR / "harborpilot.sqlite3"
-PROGRAM_JSON = DATA_DIR / "programs_2027_fall.json"
-PROGRAM_URL_OVERRIDES = DATA_DIR / "program_url_overrides.json"
-INSTITUTION_APPLICATION_PORTALS = DATA_DIR / "institution_application_portals.json"
+PROGRAM_JSON = seed_path("programs_2027_fall.json")
+PROGRAM_URL_OVERRIDES = seed_path("program_url_overrides.json")
+INSTITUTION_APPLICATION_PORTALS = seed_path("institution_application_portals.json")
 
 
 def _clear_data_loader_caches_after_write() -> None:

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import re
+import hashlib
 import json
-from types import SimpleNamespace
+import re
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 from starlette.datastructures import Headers
@@ -111,7 +112,7 @@ def test_program_catalog_returns_full_library_by_default() -> None:
 
 
 def test_llm_config_defaults_to_mock_and_requires_key_for_openai() -> None:
-    client = TestClient(app)
+    client = TestClient(app, headers={"x-harbor-admin-token": "regression-admin-key"})
 
     config = client.get("/api/admin/llm-config")
     assert config.status_code == 200
@@ -301,7 +302,7 @@ def test_questionnaire_schema_and_stage_endpoints() -> None:
 
 
 def test_admin_scenario_audit_endpoint_exposes_multiagent_self_audit() -> None:
-    client = TestClient(app)
+    client = TestClient(app, headers={"x-harbor-admin-token": "regression-admin-key"})
 
     response = client.get("/api/admin/scenario-audit")
 
@@ -579,7 +580,7 @@ def test_legacy_refresh_endpoints_cannot_bypass_explicit_real_acquisition_mode()
 
 
 def test_runtime_source_refresh_requires_explicit_real_mode_and_scope() -> None:
-    client = TestClient(app)
+    client = TestClient(app, headers={"x-harbor-admin-token": "regression-admin-key"})
 
     mock_mode = client.post(
         "/api/agent/workflows",
@@ -608,7 +609,7 @@ def test_runtime_source_refresh_requires_explicit_real_mode_and_scope() -> None:
 
 
 def test_crawl_queue_separates_official_and_community_jobs() -> None:
-    client = TestClient(app)
+    client = TestClient(app, headers={"x-harbor-admin-token": "regression-admin-key"})
     program_id = "hku-master-of-science-in-computer-science-2027"
 
     response = client.post(
@@ -645,7 +646,7 @@ def test_crawl_queue_separates_official_and_community_jobs() -> None:
 
 
 def test_admin_catalog_auto_update_dry_run_discovers_reviewable_candidates() -> None:
-    client = TestClient(app)
+    client = TestClient(app, headers={"x-harbor-admin-token": "regression-admin-key"})
 
     response = client.post(
         "/api/admin/catalog-auto-update",
@@ -674,7 +675,7 @@ def test_admin_catalog_auto_update_dry_run_discovers_reviewable_candidates() -> 
     assert all(item["publishable_after_review"] is False for item in conflicted)
 
 def test_admin_catalog_auto_update_skips_programs_that_already_have_detail_pages() -> None:
-    client = TestClient(app)
+    client = TestClient(app, headers={"x-harbor-admin-token": "regression-admin-key"})
 
     response = client.post(
         "/api/admin/catalog-auto-update",
@@ -699,7 +700,7 @@ def test_admin_catalog_auto_update_skips_programs_that_already_have_detail_pages
     assert "404" in stale["reason"]
 
 def test_review_queue_blocks_legacy_candidates_without_page_binding() -> None:
-    client = TestClient(app)
+    client = TestClient(app, headers={"x-harbor-admin-token": "regression-admin-key"})
     program_id = "hku-master-of-science-in-computer-science-2027"
 
     queue_response = client.get(f"/api/admin/review-queue?program_id={program_id}&limit=20")
@@ -724,7 +725,7 @@ def test_review_queue_blocks_legacy_candidates_without_page_binding() -> None:
     rejected = reject_response.json()
     assert rejected["ok"] is True
     assert rejected["item"]["status"] == "REJECTED"
-    assert rejected["item"]["reviewer_id"] == "test_admin"
+    assert rejected["item"]["reviewer_id"] == "admin_token:" + hashlib.sha256(b"regression-admin-key").hexdigest()[:12]
     assert rejected["item"]["reviewer_id"] != "qa_reviewer"
     assert rejected["published_record"] is None
 
@@ -748,7 +749,7 @@ def test_review_queue_blocks_legacy_candidates_without_page_binding() -> None:
 
 
 def test_admin_review_queue_bulk_preview_does_not_bypass_binding_gate() -> None:
-    client = TestClient(app)
+    client = TestClient(app, headers={"x-harbor-admin-token": "regression-admin-key"})
     program_id = "hku-master-of-science-in-computer-science-2027"
 
     queue_response = client.get(f"/api/admin/review-queue?program_id={program_id}&limit=20")
@@ -823,7 +824,7 @@ def test_qs_master_applications_import_is_available_and_review_gated() -> None:
 
 
 def test_admin_catalog_refresh_plan_queues_source_update_chain() -> None:
-    client = TestClient(app)
+    client = TestClient(app, headers={"x-harbor-admin-token": "regression-admin-key"})
 
     response = client.post(
         "/api/admin/agent-queue/catalog-refresh-plan",
@@ -854,7 +855,7 @@ def test_admin_catalog_refresh_plan_queues_source_update_chain() -> None:
     assert any(item["event_type"] == "CATALOG_REFRESH_PLAN_QUEUED" for item in events.json()["items"])
 
 def test_agent_queue_records_attempts_and_retry() -> None:
-    client = TestClient(app)
+    client = TestClient(app, headers={"x-harbor-admin-token": "regression-admin-key"})
 
     created = client.post(
         "/api/admin/agent-queue",
@@ -905,7 +906,7 @@ def test_agent_run_rollback_marks_later_steps_and_enqueues_retry() -> None:
     from harbor_agent.models import AgentStatus
     from harbor_agent.services.agent_runtime import record_agent_step, start_agent_run
 
-    client = TestClient(app)
+    client = TestClient(app, headers={"x-harbor-admin-token": "regression-admin-key"})
     workflow_id = "wf_pytest_rollback_" + uuid4().hex[:8]
     start_agent_run(workflow_id, "pytest_rollback")
     base = datetime.now(UTC)
@@ -979,7 +980,7 @@ def test_admin_api_requires_configured_token() -> None:
     finally:
         app_module.settings.admin_token = previous_token
 
-def test_admin_mutation_requires_token_or_explicit_insecure_local_mode() -> None:
+def test_admin_requires_token_even_in_insecure_local_mode() -> None:
     import harbor_agent.app as app_module
 
     previous_token = app_module.settings.admin_token
@@ -989,11 +990,11 @@ def test_admin_mutation_requires_token_or_explicit_insecure_local_mode() -> None
         app_module.settings.allow_insecure_local_admin = False
         local_post = SimpleNamespace(method="POST", headers=Headers({}), client=SimpleNamespace(host="127.0.0.1"))
         local_get = SimpleNamespace(method="GET", headers=Headers({}), client=SimpleNamespace(host="127.0.0.1"))
-        assert app_module._admin_request_allowed(local_get) is True
+        assert app_module._admin_request_allowed(local_get) is False
         assert app_module._admin_request_allowed(local_post) is False
 
         app_module.settings.allow_insecure_local_admin = True
-        assert app_module._admin_request_allowed(local_post) is True
+        assert app_module._admin_request_allowed(local_post) is False
     finally:
         app_module.settings.admin_token = previous_token
         app_module.settings.allow_insecure_local_admin = previous_allow
